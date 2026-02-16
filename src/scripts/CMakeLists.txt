@@ -43,6 +43,7 @@ set (SCRIPTS_SRCS
     custom/gmisland.cpp
     custom/npc_escort.cpp
     custom/npc_j_eevee.cpp
+	custom/npc_autotrainer.cpp
     eastern_kingdoms/alterac_mountains/alterac_mountains.cpp
     eastern_kingdoms/arathi_highlands/arathi_highlands.cpp
     eastern_kingdoms/blasted_lands/blasted_lands.cpp
@@ -319,8 +320,7 @@ include_directories(
   ${CMAKE_SOURCE_DIR}/src/game/Objects
   ${CMAKE_SOURCE_DIR}/src/game/OutdoorPvP
   ${CMAKE_SOURCE_DIR}/src/game/PlayerBots
-  ${CMAKE_SOURCE_DIR}/src/game/Server
-  ${CMAKE_SOURCE_DIR}/src/game/Server/Protocol
+  ${CMAKE_SOURCE_DIR}/src/game/Protocol
   ${CMAKE_SOURCE_DIR}/src/game/Spells
   ${CMAKE_SOURCE_DIR}/src/game/Threat
   ${CMAKE_SOURCE_DIR}/src/game/Transports
