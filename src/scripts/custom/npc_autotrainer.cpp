@@ -1,7 +1,9 @@
 #include "scriptPCH.h"
 #include "ObjectMgr.h"
+#include "World.h"
 #include <vector>
 #include <string>
+#include <algorithm>
 
 enum
 {
@@ -22,6 +24,14 @@ static std::vector<AutoTrainerSource> gClassSources[12];
 
 static bool gWeaponSourcesResolved = false;
 static std::vector<AutoTrainerSource> gWeaponSources;
+
+// ------------------------------------------------------------
+// Patch-Field Anpassung (JE NACH vMaNGOS BRANCH)
+// ------------------------------------------------------------
+// In deiner SpellEntry heisst das Feld evtl. anders.
+// Beispiele: patch / spellPatch / requiredPatch / introducedInPatch / etc.
+// Wenn Compile-Error: NUR diese Zeile anpassen.
+#define SPELL_PATCH_FIELD patch
 
 static bool StrContainsI(std::string const& haystack, char const* needle)
 {
@@ -80,10 +90,10 @@ static void MaxOutWeaponDefenseAndRiding(Player* pPlayer)
 
     // Weapon Skills (SkillLine IDs Classic)
     SetSkillToMaxIfKnown(pPlayer, 43,  maxV); // Swords
-    SetSkillToMaxIfKnown(pPlayer, 44,  maxV); // Axes (1H)
+    SetSkillToMaxIfKnown(pPlayer, 44,  maxV); // Axes
     SetSkillToMaxIfKnown(pPlayer, 45,  maxV); // Bows
     SetSkillToMaxIfKnown(pPlayer, 46,  maxV); // Guns
-    SetSkillToMaxIfKnown(pPlayer, 54,  maxV); // Maces (1H)
+    SetSkillToMaxIfKnown(pPlayer, 54,  maxV); // Maces
     SetSkillToMaxIfKnown(pPlayer, 55,  maxV); // Two-Handed Swords
     SetSkillToMaxIfKnown(pPlayer, 136, maxV); // Staves
     SetSkillToMaxIfKnown(pPlayer, 160, maxV); // Two-Handed Maces
@@ -99,7 +109,7 @@ static void MaxOutWeaponDefenseAndRiding(Player* pPlayer)
     // Defense
     SetSkillToMaxIfKnown(pPlayer, 95, maxV);
 
-    // Riding
+    // Riding (762)
     SetSkillToMaxIfKnown(pPlayer, 762, maxV);
 }
 
@@ -290,97 +300,98 @@ static TrainerSpellData const* GetTrainerSpells_EntryFirst_FallbackTemplate(Auto
     return nullptr;
 }
 
-// ---------------------------
-// Special/Quest/Book gating
-// ---------------------------
+// ------------------------------------------------------------
+// Level + Patch Gate fuer DIRECT Learn (Quest/Book/Special)
+// ------------------------------------------------------------
 
-static uint32 GetServerContentPhase()
+static uint32 GetMinLevelOverrideForSpecialSpell(uint32 spellId)
 {
-    // Zweck: Content-Phase / Patch-Phase für dein Realm festlegen.
-    // Beispiel:
-    // 1 = Start (MC/Ony), 2 = Dire Maul, 3 = BWL, 4 = ZG, 5 = AQ, 6 = Naxx
-    //
-    // Wenn du später willst, kann man das an eine World-Config hängen.
-    static const uint32 kServerContentPhase = 6;
-    return kServerContentPhase;
-}
-
-static void GetSpecialSpellGates(uint32 spellId, uint32& outMinLevel, uint32& outMinPhase)
-{
-    // Default: immer erlaubt ab Level 1, Phase 1
-    outMinLevel = 1;
-    outMinPhase = 1;
-
+    // Zweck: Nur dort overriden, wo DBC-SpellLevel nicht passt (Mount/Pet/Quest etc.)
     switch (spellId)
     {
         // Warlock Pets / Mounts
-        case 688:   outMinLevel = 1;  outMinPhase = 1; break;  // Summon Imp
-        case 697:   outMinLevel = 10; outMinPhase = 1; break;  // Summon Voidwalker
-        case 712:   outMinLevel = 20; outMinPhase = 1; break;  // Summon Succubus
-        case 691:   outMinLevel = 30; outMinPhase = 1; break;  // Summon Felhunter
-        case 1122:  outMinLevel = 50; outMinPhase = 1; break;  // Inferno (konservativ)
-        case 5784:  outMinLevel = 40; outMinPhase = 1; break;  // Summon Felsteed
-        case 23161: outMinLevel = 60; outMinPhase = 1; break;  // Summon Dreadsteed
+        case 688:   return 1;   // Summon Imp
+        case 697:   return 10;  // Summon Voidwalker
+        case 712:   return 20;  // Summon Succubus
+        case 691:   return 30;  // Summon Felhunter
+        case 1122:  return 50;  // Inferno
+        case 5784:  return 40;  // Summon Felsteed
+        case 23161: return 60;  // Summon Dreadsteed
 
         // Paladin Mounts / Redemption
-        case 7328:  outMinLevel = 12; outMinPhase = 1; break;  // Redemption R1 (konservativ)
-        case 13819: outMinLevel = 40; outMinPhase = 1; break;  // Summon Warhorse
-        case 23214: outMinLevel = 60; outMinPhase = 1; break;  // Summon Charger
+        case 7328:  return 12;  // Redemption R1
+        case 13819: return 40;  // Summon Warhorse
+        case 23214: return 60;  // Summon Charger
 
         // Warrior Stances
-        case 71:    outMinLevel = 10; outMinPhase = 1; break;  // Defensive Stance
-        case 2458:  outMinLevel = 30; outMinPhase = 1; break;  // Berserker Stance
+        case 71:    return 10;  // Defensive Stance
+        case 2458:  return 30;  // Berserker Stance
 
         // Hunter Core
-        case 1515:  outMinLevel = 10; outMinPhase = 1; break;  // Tame Beast
-        case 5149:  outMinLevel = 10; outMinPhase = 1; break;  // Beast Training
-        case 2641:  outMinLevel = 10; outMinPhase = 1; break;  // Dismiss Pet
-        case 883:   outMinLevel = 10; outMinPhase = 1; break;  // Call Pet
-        case 982:   outMinLevel = 10; outMinPhase = 1; break;  // Revive Pet
-        case 6991:  outMinLevel = 10; outMinPhase = 1; break;  // Feed Pet
-
-        // Beispiel: AQ-Book Spell (DEIN Beispiel)
-        // Wenn du willst: hier alles rein, was erst ab AQ/Naxx verfügbar sein soll.
-        case 25289: outMinLevel = 60; outMinPhase = 5; break;  // (AQ Book) - Beispiel Gate
+        case 1515:  return 10;  // Tame Beast
+        case 5149:  return 10;  // Beast Training
+        case 2641:  return 10;  // Dismiss Pet
+        case 883:   return 10;  // Call Pet
+        case 982:   return 10;  // Revive Pet
+        case 6991:  return 10;  // Feed Pet
 
         default:
-            break;
+            return 0; // kein Override
     }
 }
 
-static bool IsSpecialSpellAllowedNow(Player* pPlayer, uint32 spellId)
+static uint32 GetMinLevelFromSpellEntry(SpellEntry const* proto)
 {
-    if (!pPlayer || !spellId)
+    if (!proto)
+        return 1;
+
+    // In Classic DBC ist "spellLevel" normalerweise das Learn-Level.
+    // Falls bei dir anders: hier anpassen.
+    uint32 lvl = (uint32)proto->spellLevel;
+    if (lvl < 1)
+        lvl = 1;
+
+    return lvl;
+}
+
+static bool IsSpellAllowedByPatch(SpellEntry const* proto)
+{
+    if (!proto)
         return false;
 
-    uint32 minLvl = 1;
-    uint32 minPhase = 1;
-    GetSpecialSpellGates(spellId, minLvl, minPhase);
+    // vMaNGOS: World::GetWoWPatch() liefert 0..10 (siehe dein Screenshot)
+    uint32 currentPatch = (uint32)sWorld.GetWoWPatch();
 
-    if (pPlayer->GetLevel() < minLvl)
-        return false;
+    // SpellEntry hat bei dir ein Patch-Feld (siehe Screenshot-Aussage).
+    // Wenn Compile-Error: oben SPELL_PATCH_FIELD anpassen.
+    uint32 spellPatch = (uint32)proto->SPELL_PATCH_FIELD;
 
-    if (GetServerContentPhase() < minPhase)
-        return false;
-
-    return true;
+    // Wenn ein SpellPatch bei dir "0" heisst und du das als "immer ok" willst:
+    // return (spellPatch == 0) ? true : (spellPatch <= currentPatch);
+    return (spellPatch <= currentPatch);
 }
 
 static bool LearnDirectSpellIfMissing(Player* pPlayer, uint32 spellId)
 {
-    // Zweck: Quest-/Spezial-Spell direkt als End-Spell lernen (kein Teach-Container-Murks)
+    // Zweck: Quest-/Spezial-/Book-Spell direkt als End-Spell lernen, aber mit Level+Patch Gate
     if (!pPlayer || !spellId)
         return false;
 
     if (pPlayer->HasSpell(spellId))
         return false;
 
-    // Level + Phase Gate für Special/Quest/Book
-    if (!IsSpecialSpellAllowedNow(pPlayer, spellId))
-        return false;
-
     SpellEntry const* proto = sSpellMgr.GetSpellEntry(spellId);
     if (!proto)
+        return false;
+
+    if (!IsSpellAllowedByPatch(proto))
+        return false;
+
+    uint32 minLvlFromDBC = GetMinLevelFromSpellEntry(proto);
+    uint32 minLvlOverride = GetMinLevelOverrideForSpecialSpell(spellId);
+    uint32 minLvl = std::max(minLvlFromDBC, minLvlOverride);
+
+    if (pPlayer->GetLevel() < minLvl)
         return false;
 
     pPlayer->LearnSpell(spellId, false);
@@ -424,11 +435,11 @@ static uint32 LearnQuestSpecialSpellsForClass(Player* pPlayer)
             break;
 
         case CLASS_WARRIOR:
-            if (LearnQuestSpellIfAllowed(pPlayer, 2457))  ++learned;
-            if (LearnQuestSpellIfAllowed(pPlayer, 71))    ++learned;
+            if (LearnQuestSpellIfAllowed(pPlayer, 2457))  ++learned; // Battle Stance
+            if (LearnQuestSpellIfAllowed(pPlayer, 71))    ++learned; // Defensive Stance
             if (LearnQuestSpellIfAllowed(pPlayer, 7386))  ++learned;
             if (LearnQuestSpellIfAllowed(pPlayer, 355))   ++learned;
-            if (LearnQuestSpellIfAllowed(pPlayer, 2458))  ++learned;
+            if (LearnQuestSpellIfAllowed(pPlayer, 2458))  ++learned; // Berserker Stance
             if (LearnQuestSpellIfAllowed(pPlayer, 20252)) ++learned;
             break;
 
@@ -443,10 +454,10 @@ static uint32 LearnQuestSpecialSpellsForClass(Player* pPlayer)
             break;
 
         case CLASS_MAGE:
-            if (LearnQuestSpellIfAllowed(pPlayer, 28272)) ++learned; // Book
-            if (LearnQuestSpellIfAllowed(pPlayer, 28271)) ++learned; // Book
-            if (LearnQuestSpellIfAllowed(pPlayer, 28270)) ++learned; // Book
-            if (LearnQuestSpellIfAllowed(pPlayer, 23028)) ++learned; // Book
+            if (LearnQuestSpellIfAllowed(pPlayer, 28272)) ++learned;
+            if (LearnQuestSpellIfAllowed(pPlayer, 28271)) ++learned;
+            if (LearnQuestSpellIfAllowed(pPlayer, 28270)) ++learned;
+            if (LearnQuestSpellIfAllowed(pPlayer, 23028)) ++learned;
             break;
 
         case CLASS_SHAMAN:
@@ -491,6 +502,10 @@ static uint32 LearnQuestSpecialSpellsForClass(Player* pPlayer)
     return learned;
 }
 
+// ------------------------------------------------------------
+// Trainer "Teach" Cast (CRASH FIX)
+// ------------------------------------------------------------
+
 static bool CastTrainerTeachSpell(Player* pPlayer, Creature* pCreatureCaster, TrainerSpell const* trainerSpell)
 {
     if (!pPlayer || !trainerSpell)
@@ -507,7 +522,6 @@ static bool CastTrainerTeachSpell(Player* pPlayer, Creature* pCreatureCaster, Tr
     const bool kTriggered = true;
 
     Unit* caster = pCreatureCaster ? (Unit*)pCreatureCaster : (Unit*)pPlayer;
-
     Spell* spell = new Spell(caster, proto, kTriggered);
 
     SpellCastTargets targets;
@@ -515,7 +529,8 @@ static bool CastTrainerTeachSpell(Player* pPlayer, Creature* pCreatureCaster, Tr
 
     SpellCastResult cast_result = spell->prepare(std::move(targets));
 
-    // Bei OK NICHT löschen -> Spell-System übernimmt Cleanup
+    // WICHTIG:
+    // Bei OK NICHT löschen -> Spell wird vom Spell-System weitergeführt und später aufgeräumt
     // Nur bei Fehler direkt löschen
     if (cast_result != SPELL_CAST_OK)
     {
@@ -567,7 +582,7 @@ static uint32 LearnAllAvailableInLoop(Player* pPlayer, Creature* pCreatureCaster
     {
         uint32 learnedThisPass = 0;
 
-        // Quest/Special/Book gated
+        // Quest-/Spezial-/Book-Spells (mit Level+Patch Gate)
         learnedThisPass += LearnQuestSpecialSpellsForClass(pPlayer);
 
         if (cls > 0 && cls < 12)
