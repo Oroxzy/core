@@ -26,11 +26,12 @@ static bool gWeaponSourcesResolved = false;
 static std::vector<AutoTrainerSource> gWeaponSources;
 
 // ------------------------------------------------------------
-// Patch-Field Anpassung (JE NACH vMaNGOS BRANCH)
+// PATCH-FIELD Anpassung (JE NACH vMaNGOS BRANCH)
 // ------------------------------------------------------------
-// In deiner SpellEntry heisst das Feld evtl. anders.
-// Beispiele: patch / spellPatch / requiredPatch / introducedInPatch / etc.
-// Wenn Compile-Error: NUR diese Zeile anpassen.
+// In deinem SpellEntry heisst das Feld evtl. NICHT "patch".
+// -> Öffne: core/src/game/Spells/SpellEntry.h
+// -> suche nach "patch" und nimm den Member-Namen.
+// Beispiel: patch / spellPatch / requiredPatch / introducedInPatch / etc.
 #define SPELL_PATCH_FIELD patch
 
 static bool StrContainsI(std::string const& haystack, char const* needle)
@@ -310,30 +311,30 @@ static uint32 GetMinLevelOverrideForSpecialSpell(uint32 spellId)
     switch (spellId)
     {
         // Warlock Pets / Mounts
-        case 688:   return 1;   // Summon Imp
-        case 697:   return 10;  // Summon Voidwalker
-        case 712:   return 20;  // Summon Succubus
-        case 691:   return 30;  // Summon Felhunter
-        case 1122:  return 50;  // Inferno
-        case 5784:  return 40;  // Summon Felsteed
-        case 23161: return 60;  // Summon Dreadsteed
+        case 688:   return 1;
+        case 697:   return 10;
+        case 712:   return 20;
+        case 691:   return 30;
+        case 1122:  return 50;
+        case 5784:  return 40;
+        case 23161: return 60;
 
         // Paladin Mounts / Redemption
-        case 7328:  return 12;  // Redemption R1
-        case 13819: return 40;  // Summon Warhorse
-        case 23214: return 60;  // Summon Charger
+        case 7328:  return 12;
+        case 13819: return 40;
+        case 23214: return 60;
 
         // Warrior Stances
-        case 71:    return 10;  // Defensive Stance
-        case 2458:  return 30;  // Berserker Stance
+        case 71:    return 10;
+        case 2458:  return 30;
 
         // Hunter Core
-        case 1515:  return 10;  // Tame Beast
-        case 5149:  return 10;  // Beast Training
-        case 2641:  return 10;  // Dismiss Pet
-        case 883:   return 10;  // Call Pet
-        case 982:   return 10;  // Revive Pet
-        case 6991:  return 10;  // Feed Pet
+        case 1515:  return 10;
+        case 5149:  return 10;
+        case 2641:  return 10;
+        case 883:   return 10;
+        case 982:   return 10;
+        case 6991:  return 10;
 
         default:
             return 0; // kein Override
@@ -345,8 +346,6 @@ static uint32 GetMinLevelFromSpellEntry(SpellEntry const* proto)
     if (!proto)
         return 1;
 
-    // In Classic DBC ist "spellLevel" normalerweise das Learn-Level.
-    // Falls bei dir anders: hier anpassen.
     uint32 lvl = (uint32)proto->spellLevel;
     if (lvl < 1)
         lvl = 1;
@@ -354,20 +353,23 @@ static uint32 GetMinLevelFromSpellEntry(SpellEntry const* proto)
     return lvl;
 }
 
+static uint32 GetCurrentWoWPatch()
+{
+    // In deinem Core ist GetWoWPatch() offenbar eine FREIE Funktion (siehe World::GetPatchName()).
+    // Darum NICHT: sWorld.GetWoWPatch()
+    return (uint32)GetWoWPatch();
+}
+
 static bool IsSpellAllowedByPatch(SpellEntry const* proto)
 {
     if (!proto)
         return false;
 
-    // vMaNGOS: World::GetWoWPatch() liefert 0..10 (siehe dein Screenshot)
-    uint32 currentPatch = (uint32)sWorld.GetWoWPatch();
+    uint32 currentPatch = GetCurrentWoWPatch();
 
-    // SpellEntry hat bei dir ein Patch-Feld (siehe Screenshot-Aussage).
-    // Wenn Compile-Error: oben SPELL_PATCH_FIELD anpassen.
+    // Wenn Compile-Error: proto->SPELL_PATCH_FIELD existiert nicht -> Macro oben anpassen!
     uint32 spellPatch = (uint32)proto->SPELL_PATCH_FIELD;
 
-    // Wenn ein SpellPatch bei dir "0" heisst und du das als "immer ok" willst:
-    // return (spellPatch == 0) ? true : (spellPatch <= currentPatch);
     return (spellPatch <= currentPatch);
 }
 
@@ -387,9 +389,9 @@ static bool LearnDirectSpellIfMissing(Player* pPlayer, uint32 spellId)
     if (!IsSpellAllowedByPatch(proto))
         return false;
 
-    uint32 minLvlFromDBC = GetMinLevelFromSpellEntry(proto);
-    uint32 minLvlOverride = GetMinLevelOverrideForSpecialSpell(spellId);
-    uint32 minLvl = std::max(minLvlFromDBC, minLvlOverride);
+    uint32 minLvlFromDBC   = GetMinLevelFromSpellEntry(proto);
+    uint32 minLvlOverride  = GetMinLevelOverrideForSpecialSpell(spellId);
+    uint32 minLvl          = std::max(minLvlFromDBC, minLvlOverride);
 
     if (pPlayer->GetLevel() < minLvl)
         return false;
@@ -435,11 +437,11 @@ static uint32 LearnQuestSpecialSpellsForClass(Player* pPlayer)
             break;
 
         case CLASS_WARRIOR:
-            if (LearnQuestSpellIfAllowed(pPlayer, 2457))  ++learned; // Battle Stance
-            if (LearnQuestSpellIfAllowed(pPlayer, 71))    ++learned; // Defensive Stance
+            if (LearnQuestSpellIfAllowed(pPlayer, 2457))  ++learned;
+            if (LearnQuestSpellIfAllowed(pPlayer, 71))    ++learned;
             if (LearnQuestSpellIfAllowed(pPlayer, 7386))  ++learned;
             if (LearnQuestSpellIfAllowed(pPlayer, 355))   ++learned;
-            if (LearnQuestSpellIfAllowed(pPlayer, 2458))  ++learned; // Berserker Stance
+            if (LearnQuestSpellIfAllowed(pPlayer, 2458))  ++learned;
             if (LearnQuestSpellIfAllowed(pPlayer, 20252)) ++learned;
             break;
 
@@ -529,9 +531,7 @@ static bool CastTrainerTeachSpell(Player* pPlayer, Creature* pCreatureCaster, Tr
 
     SpellCastResult cast_result = spell->prepare(std::move(targets));
 
-    // WICHTIG:
-    // Bei OK NICHT löschen -> Spell wird vom Spell-System weitergeführt und später aufgeräumt
-    // Nur bei Fehler direkt löschen
+    // Bei OK NICHT löschen -> Spell-System übernimmt Ownership/Lifecycle
     if (cast_result != SPELL_CAST_OK)
     {
         delete spell;
