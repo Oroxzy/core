@@ -28,7 +28,6 @@ static std::vector<AutoTrainerSource> gWeaponSources;
 
 static uint32 GetMaxPlayerLevel_Cached()
 {
-    // Classic Cap (falls du spaeter dynamisch willst: World-Config holen)
     return 60;
 }
 
@@ -85,11 +84,9 @@ static void SetSkillToMaxIfKnown(Player* pPlayer, uint32 skillId, uint16 maxValu
     if (!pPlayer || !skillId)
         return;
 
-    // nur wenn Skill existiert/aktiv ist
     if (pPlayer->GetSkillValue(skillId) <= 0)
         return;
 
-    // dein Core: SetSkill(id, value, max)
     pPlayer->SetSkill(skillId, maxValue, maxValue);
 }
 
@@ -100,28 +97,24 @@ static void MaxOutWeaponDefenseAndRiding(Player* pPlayer)
 
     uint16 maxV = GetMaxSkillForPlayerLevel(pPlayer);
 
-    // Weapon Skills (SkillLine IDs Classic)
-    SetSkillToMaxIfKnown(pPlayer, 43,  maxV); // Swords
-    SetSkillToMaxIfKnown(pPlayer, 44,  maxV); // Axes
-    SetSkillToMaxIfKnown(pPlayer, 45,  maxV); // Bows
-    SetSkillToMaxIfKnown(pPlayer, 46,  maxV); // Guns
-    SetSkillToMaxIfKnown(pPlayer, 54,  maxV); // Maces
-    SetSkillToMaxIfKnown(pPlayer, 55,  maxV); // Two-Handed Swords
-    SetSkillToMaxIfKnown(pPlayer, 136, maxV); // Staves
-    SetSkillToMaxIfKnown(pPlayer, 160, maxV); // Two-Handed Maces
-    SetSkillToMaxIfKnown(pPlayer, 162, maxV); // Unarmed
-    SetSkillToMaxIfKnown(pPlayer, 173, maxV); // Daggers
-    SetSkillToMaxIfKnown(pPlayer, 176, maxV); // Thrown
-    SetSkillToMaxIfKnown(pPlayer, 226, maxV); // Crossbows
-    SetSkillToMaxIfKnown(pPlayer, 228, maxV); // Wands
-    SetSkillToMaxIfKnown(pPlayer, 229, maxV); // Polearms
-    SetSkillToMaxIfKnown(pPlayer, 172, maxV); // Two-Handed Axes
-    SetSkillToMaxIfKnown(pPlayer, 473, maxV); // Fist Weapons
+    SetSkillToMaxIfKnown(pPlayer, 43,  maxV);
+    SetSkillToMaxIfKnown(pPlayer, 44,  maxV);
+    SetSkillToMaxIfKnown(pPlayer, 45,  maxV);
+    SetSkillToMaxIfKnown(pPlayer, 46,  maxV);
+    SetSkillToMaxIfKnown(pPlayer, 54,  maxV);
+    SetSkillToMaxIfKnown(pPlayer, 55,  maxV);
+    SetSkillToMaxIfKnown(pPlayer, 136, maxV);
+    SetSkillToMaxIfKnown(pPlayer, 160, maxV);
+    SetSkillToMaxIfKnown(pPlayer, 162, maxV);
+    SetSkillToMaxIfKnown(pPlayer, 173, maxV);
+    SetSkillToMaxIfKnown(pPlayer, 176, maxV);
+    SetSkillToMaxIfKnown(pPlayer, 226, maxV);
+    SetSkillToMaxIfKnown(pPlayer, 228, maxV);
+    SetSkillToMaxIfKnown(pPlayer, 229, maxV);
+    SetSkillToMaxIfKnown(pPlayer, 172, maxV);
+    SetSkillToMaxIfKnown(pPlayer, 473, maxV);
 
-    // Defense
-    SetSkillToMaxIfKnown(pPlayer, 95, maxV);
-
-    // Riding (762) – auch auf Level*5 capped (ab 60 = 300)
+    SetSkillToMaxIfKnown(pPlayer, 95,  maxV);
     SetSkillToMaxIfKnown(pPlayer, 762, maxV);
 }
 
@@ -249,7 +242,6 @@ static void ResolveTrainerSourcesForClass(uint8 playerClass)
 
 static void ResolveWeaponTrainerSources()
 {
-    // Zweck: ALLE Weapon Masters sammeln (einmalig) - OHNE DB
     if (gWeaponSourcesResolved)
         return;
 
@@ -307,6 +299,8 @@ static void ResolveWeaponTrainerSources()
         AutoTrainerSource src;
         src.trainerEntry = entry;
         src.trainerId    = tid;
+        src.isPetTrainer = false;
+
         gWeaponSources.push_back(src);
 
         if (tid)
@@ -318,7 +312,6 @@ static void ResolveWeaponTrainerSources()
 
 static TrainerSpellData const* GetTrainerSpells_EntryFirst_FallbackTemplate(AutoTrainerSource const& src)
 {
-    // Zweck: TrainerSpellData holen (Entry zuerst, Template als Fallback)
     if (src.trainerEntry)
     {
         TrainerSpellData const* byEntry = sObjectMgr.GetNpcTrainerSpells(src.trainerEntry);
@@ -384,10 +377,7 @@ static bool IsPureLearnContainerSpell(uint32 spellId)
             hasOtherEffect = true;
     }
 
-    if (hasLearnEffect && !hasOtherEffect)
-        return true;
-
-    return false;
+    return (hasLearnEffect && !hasOtherEffect);
 }
 
 static uint32 LearnHigherRanksFromSpellChains(Player* pPlayer)
@@ -634,9 +624,9 @@ static uint32 LearnQuestSpecialSpellsForClass(Player* pPlayer)
     return learned;
 }
 
-static bool CastTrainerTeachSpell(Player* pPlayer, Creature* pCreatureCaster, TrainerSpell const* trainerSpell)
+static bool CastTrainerTeachSpellToUnit(Player* pPlayer, Creature* pCreatureCaster, TrainerSpell const* trainerSpell, Unit* target)
 {
-    if (!pPlayer || !trainerSpell)
+    if (!pPlayer || !trainerSpell || !target)
         return false;
 
     SpellEntry const* proto = sSpellMgr.GetSpellEntry(trainerSpell->spell);
@@ -654,7 +644,7 @@ static bool CastTrainerTeachSpell(Player* pPlayer, Creature* pCreatureCaster, Tr
     Spell* spell = new Spell(caster, proto, kTriggered);
 
     SpellCastTargets targets;
-    targets.setUnitTarget(pPlayer);
+    targets.setUnitTarget(target);
 
     SpellCastResult cast_result = spell->prepare(std::move(targets));
 
@@ -667,9 +657,9 @@ static bool CastTrainerTeachSpell(Player* pPlayer, Creature* pCreatureCaster, Tr
     return true;
 }
 
-static uint32 LearnFromTrainerSpellData_OnePass(Player* pPlayer, Creature* pCreatureCaster, TrainerSpellData const* pData)
+static uint32 LearnFromTrainerSpellData_OnePass(Player* pPlayer, Creature* pCreatureCaster, TrainerSpellData const* pData, Unit* target)
 {
-    if (!pPlayer || !pData)
+    if (!pPlayer || !pData || !target)
         return 0;
 
     uint32 learnedCount = 0;
@@ -682,7 +672,7 @@ static uint32 LearnFromTrainerSpellData_OnePass(Player* pPlayer, Creature* pCrea
         if (state != TRAINER_SPELL_GREEN)
             continue;
 
-        if (CastTrainerTeachSpell(pPlayer, pCreatureCaster, tSpell))
+        if (CastTrainerTeachSpellToUnit(pPlayer, pCreatureCaster, tSpell, target))
             ++learnedCount;
     }
 
@@ -715,9 +705,24 @@ static uint32 LearnAllAvailableInLoop(Player* pPlayer, Creature* pCreatureCaster
         {
             for (size_t i = 0; i < gClassSources[cls].size(); ++i)
             {
-                TrainerSpellData const* classSpells = GetTrainerSpells_EntryFirst_FallbackTemplate(gClassSources[cls][i]);
-                if (classSpells)
-                    learnedThisPass += LearnFromTrainerSpellData_OnePass(pPlayer, pCreatureCaster, classSpells);
+                AutoTrainerSource const& src = gClassSources[cls][i];
+
+                TrainerSpellData const* classSpells = GetTrainerSpells_EntryFirst_FallbackTemplate(src);
+                if (!classSpells)
+                    continue;
+
+                Unit* target = (Unit*)pPlayer;
+
+                if (src.isPetTrainer)
+                {
+                    Pet* pet = pPlayer->GetPet();
+                    if (!pet)
+                        continue;
+
+                    target = (Unit*)pet;
+                }
+
+                learnedThisPass += LearnFromTrainerSpellData_OnePass(pPlayer, pCreatureCaster, classSpells, target);
             }
         }
 
@@ -725,7 +730,7 @@ static uint32 LearnAllAvailableInLoop(Player* pPlayer, Creature* pCreatureCaster
         {
             TrainerSpellData const* weaponSpells = GetTrainerSpells_EntryFirst_FallbackTemplate(gWeaponSources[i]);
             if (weaponSpells)
-                learnedThisPass += LearnFromTrainerSpellData_OnePass(pPlayer, pCreatureCaster, weaponSpells);
+                learnedThisPass += LearnFromTrainerSpellData_OnePass(pPlayer, pCreatureCaster, weaponSpells, (Unit*)pPlayer);
         }
 
         learnedThisPass += LearnHigherRanksFromSpellChains(pPlayer);
@@ -753,12 +758,9 @@ static uint32 LevelToAndLearn(Player* pPlayer, Creature* pCreatureCaster, uint32
 
     uint32 cur = pPlayer->GetLevel();
 
-    // Level nur hochsetzen (kein Downlevel)
     if (targetLevel > cur)
     {
         pPlayer->GiveLevel(targetLevel);
-
-        // XP auf 0 (sauber fuer “Train/Loop”)
         pPlayer->SetUInt32Value(PLAYER_XP, 0);
     }
 
@@ -775,8 +777,7 @@ static uint32 LevelPlusTenAndLearn(Player* pPlayer, Creature* pCreatureCaster)
     if (!pPlayer)
         return 0;
 
-    uint32 target = pPlayer->GetLevel() + 10;
-    return LevelToAndLearn(pPlayer, pCreatureCaster, target);
+    return LevelToAndLearn(pPlayer, pCreatureCaster, pPlayer->GetLevel() + 10);
 }
 
 static uint32 LevelToNextTenAndLearn(Player* pPlayer, Creature* pCreatureCaster)
@@ -799,11 +800,10 @@ bool GossipHello_npc_autotrainer(Player* pPlayer, Creature* pCreature)
 
     pPlayer->PlayerTalkClass->ClearMenus();
 
-    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Alles lernen (aktuelles Level)",         GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEARN_CURRENT);
-    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "+10 Level und alles lernen",              GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_PLUS_10);
-    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Bis naechstes 10er-Level und alles lernen", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_NEXT_TEN);
-
-    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT,    "Abbrechen",                               GOSSIP_SENDER_MAIN, GOSSIP_ACTION_CANCEL);
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Alles lernen (aktuelles Level)",             GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEARN_CURRENT);
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "+10 Level und alles lernen",                 GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_PLUS_10);
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Bis naechstes 10er-Level und alles lernen",  GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_NEXT_TEN);
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT,    "Abbrechen",                                  GOSSIP_SENDER_MAIN, GOSSIP_ACTION_CANCEL);
 
     pPlayer->SEND_GOSSIP_MENU(DEFAULT_GOSSIP_MESSAGE, pCreature->GetObjectGuid());
     return true;
