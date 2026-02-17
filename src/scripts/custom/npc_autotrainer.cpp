@@ -15,9 +15,8 @@ struct AutoTrainerSource
 {
     uint32 trainerId;
     uint32 trainerEntry;
-    bool   isPetTrainer;
 
-    AutoTrainerSource() : trainerId(0), trainerEntry(0), isPetTrainer(false) {}
+    AutoTrainerSource() : trainerId(0), trainerEntry(0) {}
 };
 
 static bool gClassSourcesResolved[12] = { false };
@@ -120,6 +119,11 @@ static void MaxOutWeaponDefenseAndRiding(Player* pPlayer)
 
 static void ResolveTrainerSourcesForClass(uint8 playerClass)
 {
+    // Zweck: "normale" Klassenlehrer sammeln (einmalig pro Klasse) - OHNE DB
+    // WICHTIG:
+    // - Pet Trainer NICHT hier reinnehmen: deren "grün" ist pet-/familie-/level-abhängig und macht Autotraining inkonsistent.
+    // - Demon Trainer ebenfalls NICHT: bei dir laufen Demon-Abilities über Grimoires (Items/Teach-Spells), nicht über TrainerSpellData.
+
     if (playerClass >= 12)
         return;
 
@@ -143,27 +147,19 @@ static void ResolveTrainerSourcesForClass(uint8 playerClass)
         if ((cInfo->npc_flags & UNIT_NPC_FLAG_TRAINER) == 0)
             continue;
 
-        const bool isPetTrainer   = StrContainsI(cInfo->subname, "Pet Trainer");
-        const bool isDemonTrainer = StrContainsI(cInfo->subname, "Demon Trainer");
+        // Pet/Demon Trainer explizit skippen
+        if (StrContainsI(cInfo->subname, "Pet Trainer"))
+            continue;
 
-        // Normal: nur "normale" Trainer
-        // Ausnahme: Pet Trainer (Hunter) und Demon Trainer (Warlock) duerfen auch andere trainer_type/class haben
-        if (!isPetTrainer && !isDemonTrainer)
-        {
-            if (cInfo->trainer_type != 0)
-                continue;
+        if (StrContainsI(cInfo->subname, "Demon Trainer"))
+            continue;
 
-            if (cInfo->trainer_class != uint32(playerClass))
-                continue;
-        }
-        else
-        {
-            if (isPetTrainer && playerClass != CLASS_HUNTER)
-                continue;
+        // nur "normale" Trainer
+        if (cInfo->trainer_type != 0)
+            continue;
 
-            if (isDemonTrainer && playerClass != CLASS_WARLOCK)
-                continue;
-        }
+        if (cInfo->trainer_class != uint32(playerClass))
+            continue;
 
         bool ok = false;
 
@@ -174,11 +170,11 @@ static void ResolveTrainerSourcesForClass(uint8 playerClass)
                 break;
 
             case CLASS_HUNTER:
-                ok = StrContainsI(cInfo->subname, "Hunter Trainer") || isPetTrainer;
+                ok = StrContainsI(cInfo->subname, "Hunter Trainer");
                 break;
 
             case CLASS_WARLOCK:
-                ok = StrContainsI(cInfo->subname, "Warlock Trainer") || isDemonTrainer;
+                ok = StrContainsI(cInfo->subname, "Warlock Trainer");
                 break;
 
             case CLASS_WARRIOR: ok = StrContainsI(cInfo->subname, "Warrior Trainer"); break;
@@ -187,6 +183,7 @@ static void ResolveTrainerSourcesForClass(uint8 playerClass)
             case CLASS_PRIEST:  ok = StrContainsI(cInfo->subname, "Priest Trainer");  break;
             case CLASS_SHAMAN:  ok = StrContainsI(cInfo->subname, "Shaman Trainer");  break;
             case CLASS_DRUID:   ok = StrContainsI(cInfo->subname, "Druid Trainer");   break;
+
             default:
                 ok = StrContainsI(cInfo->subname, "Trainer");
                 break;
@@ -229,8 +226,6 @@ static void ResolveTrainerSourcesForClass(uint8 playerClass)
         AutoTrainerSource src;
         src.trainerEntry = entry;
         src.trainerId    = tid;
-        src.isPetTrainer = (isPetTrainer || isDemonTrainer);
-
         gClassSources[playerClass].push_back(src);
 
         if (tid)
@@ -299,8 +294,6 @@ static void ResolveWeaponTrainerSources()
         AutoTrainerSource src;
         src.trainerEntry = entry;
         src.trainerId    = tid;
-        src.isPetTrainer = false;
-
         gWeaponSources.push_back(src);
 
         if (tid)
@@ -545,7 +538,7 @@ static uint32 LearnQuestSpecialSpellsForClass(Player* pPlayer)
             if (LearnQuestSpellIfAllowed(pPlayer, 2641))  ++learned;
             if (LearnQuestSpellIfAllowed(pPlayer, 883))   ++learned;
             if (LearnQuestSpellIfAllowed(pPlayer, 1515))  ++learned;
-            if (LearnQuestSpellIfAllowed(pPlayer, 5149))  ++learned;
+            if (LearnQuestSpellIfAllowed(pPlayer, 5149))  ++learned; // Beast Training (Spieler)
             if (LearnQuestSpellIfAllowed(pPlayer, 6991))  ++learned;
             if (LearnQuestSpellIfAllowed(pPlayer, 982))   ++learned;
             if (LearnQuestSpellIfAllowed(pPlayer, 19801)) ++learned;
@@ -624,13 +617,20 @@ static uint32 LearnQuestSpecialSpellsForClass(Player* pPlayer)
     return learned;
 }
 
-static bool CastTrainerTeachSpellToUnit(Player* pPlayer, Creature* pCreatureCaster, TrainerSpell const* trainerSpell, Unit* target)
+static bool CastTriggeredSpellOnPlayer(Player* pPlayer, Creature* pCreatureCaster, uint32 spellId)
 {
-    if (!pPlayer || !trainerSpell || !target)
+    // Zweck: Teach-/Item-Spell sauber "ausführen" (auch wenn es ein reiner Learn-Container ist)
+    if (!pPlayer || !spellId)
         return false;
 
-    SpellEntry const* proto = sSpellMgr.GetSpellEntry(trainerSpell->spell);
+    SpellEntry const* proto = sSpellMgr.GetSpellEntry(spellId);
     if (!proto)
+        return false;
+
+    if (!pPlayer->IsSpellFitByClassAndRace(spellId))
+        return false;
+
+    if (proto->spellLevel > 0 && pPlayer->GetLevel() < uint32(proto->spellLevel))
         return false;
 
     pPlayer->InterruptSpellsWithChannelFlags(AURA_INTERRUPT_INTERACTING_CANCELS);
@@ -638,13 +638,12 @@ static bool CastTrainerTeachSpellToUnit(Player* pPlayer, Creature* pCreatureCast
     pPlayer->RemoveSpellsCausingAura(SPELL_AURA_MOUNTED);
 
     const bool kTriggered = true;
-
     Unit* caster = pCreatureCaster ? (Unit*)pCreatureCaster : (Unit*)pPlayer;
 
     Spell* spell = new Spell(caster, proto, kTriggered);
 
     SpellCastTargets targets;
-    targets.setUnitTarget(target);
+    targets.setUnitTarget(pPlayer);
 
     SpellCastResult cast_result = spell->prepare(std::move(targets));
 
@@ -657,9 +656,79 @@ static bool CastTrainerTeachSpellToUnit(Player* pPlayer, Creature* pCreatureCast
     return true;
 }
 
-static uint32 LearnFromTrainerSpellData_OnePass(Player* pPlayer, Creature* pCreatureCaster, TrainerSpellData const* pData, Unit* target)
+static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* pCreatureCaster)
 {
-    if (!pPlayer || !pData || !target)
+    // Zweck: Warlock-Grimoire Teach-Spells (Vendor/Items) automatisch "anwenden"
+    if (!pPlayer)
+        return 0;
+
+    uint8 cls = pPlayer->GetByteValue(UNIT_FIELD_BYTES_0, 1);
+    if (cls != CLASS_WARLOCK)
+        return 0;
+
+    static const uint32 kGrimoireTeachSpells[] =
+    {
+        20270,
+        20312,20313,20314,20315,20316,20317,20318,20319,20320,20321,20322,20323,20324,
+        20326,20327,20329,
+        20377,20378,20379,20380,20381,20382,20383,20384,20385,20386,20387,20388,20389,20390,
+        20391,20392,20393,20394,20395,20396,20397,20398,20399,20400,20401,20402,20403,20404,
+        20405,20406,20407,20408,
+        20426,20427,20428,20429,20430,20431,20432,20433,20434,20435
+    };
+
+    uint32 learned = 0;
+
+    for (size_t i = 0; i < (sizeof(kGrimoireTeachSpells) / sizeof(kGrimoireTeachSpells[0])); ++i)
+    {
+        uint32 sid = kGrimoireTeachSpells[i];
+
+        // Falls der Spell beim Player bereits als "known" markiert ist, skippen (spart Casts)
+        if (pPlayer->HasSpell(sid))
+            continue;
+
+        if (CastTriggeredSpellOnPlayer(pPlayer, pCreatureCaster, sid))
+            ++learned;
+    }
+
+    return learned;
+}
+
+static bool CastTrainerTeachSpell(Player* pPlayer, Creature* pCreatureCaster, TrainerSpell const* trainerSpell)
+{
+    if (!pPlayer || !trainerSpell)
+        return false;
+
+    SpellEntry const* proto = sSpellMgr.GetSpellEntry(trainerSpell->spell);
+    if (!proto)
+        return false;
+
+    pPlayer->InterruptSpellsWithChannelFlags(AURA_INTERRUPT_INTERACTING_CANCELS);
+    pPlayer->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_INTERACTING_CANCELS);
+    pPlayer->RemoveSpellsCausingAura(SPELL_AURA_MOUNTED);
+
+    const bool kTriggered = true;
+    Unit* caster = pCreatureCaster ? (Unit*)pCreatureCaster : (Unit*)pPlayer;
+
+    Spell* spell = new Spell(caster, proto, kTriggered);
+
+    SpellCastTargets targets;
+    targets.setUnitTarget(pPlayer);
+
+    SpellCastResult cast_result = spell->prepare(std::move(targets));
+
+    if (cast_result != SPELL_CAST_OK)
+    {
+        delete spell;
+        return false;
+    }
+
+    return true;
+}
+
+static uint32 LearnFromTrainerSpellData_OnePass(Player* pPlayer, Creature* pCreatureCaster, TrainerSpellData const* pData)
+{
+    if (!pPlayer || !pData)
         return 0;
 
     uint32 learnedCount = 0;
@@ -672,7 +741,7 @@ static uint32 LearnFromTrainerSpellData_OnePass(Player* pPlayer, Creature* pCrea
         if (state != TRAINER_SPELL_GREEN)
             continue;
 
-        if (CastTrainerTeachSpellToUnit(pPlayer, pCreatureCaster, tSpell, target))
+        if (CastTrainerTeachSpell(pPlayer, pCreatureCaster, tSpell))
             ++learnedCount;
     }
 
@@ -692,7 +761,6 @@ static uint32 LearnAllAvailableInLoop(Player* pPlayer, Creature* pCreatureCaster
     ResolveWeaponTrainerSources();
 
     const uint32 kMaxPasses = 50;
-
     uint32 totalLearned = 0;
 
     for (uint32 pass = 0; pass < kMaxPasses; ++pass)
@@ -701,28 +769,16 @@ static uint32 LearnAllAvailableInLoop(Player* pPlayer, Creature* pCreatureCaster
 
         learnedThisPass += LearnQuestSpecialSpellsForClass(pPlayer);
 
+        // Warlock Grimoires (Teach-Spells) pro Pass prüfen (nach Level-Up kann Neues verfügbar sein)
+        learnedThisPass += LearnWarlockGrimoireSpells(pPlayer, pCreatureCaster);
+
         if (cls > 0 && cls < 12)
         {
             for (size_t i = 0; i < gClassSources[cls].size(); ++i)
             {
-                AutoTrainerSource const& src = gClassSources[cls][i];
-
-                TrainerSpellData const* classSpells = GetTrainerSpells_EntryFirst_FallbackTemplate(src);
-                if (!classSpells)
-                    continue;
-
-                Unit* target = (Unit*)pPlayer;
-
-                if (src.isPetTrainer)
-                {
-                    Pet* pet = pPlayer->GetPet();
-                    if (!pet)
-                        continue;
-
-                    target = (Unit*)pet;
-                }
-
-                learnedThisPass += LearnFromTrainerSpellData_OnePass(pPlayer, pCreatureCaster, classSpells, target);
+                TrainerSpellData const* classSpells = GetTrainerSpells_EntryFirst_FallbackTemplate(gClassSources[cls][i]);
+                if (classSpells)
+                    learnedThisPass += LearnFromTrainerSpellData_OnePass(pPlayer, pCreatureCaster, classSpells);
             }
         }
 
@@ -730,7 +786,7 @@ static uint32 LearnAllAvailableInLoop(Player* pPlayer, Creature* pCreatureCaster
         {
             TrainerSpellData const* weaponSpells = GetTrainerSpells_EntryFirst_FallbackTemplate(gWeaponSources[i]);
             if (weaponSpells)
-                learnedThisPass += LearnFromTrainerSpellData_OnePass(pPlayer, pCreatureCaster, weaponSpells, (Unit*)pPlayer);
+                learnedThisPass += LearnFromTrainerSpellData_OnePass(pPlayer, pCreatureCaster, weaponSpells);
         }
 
         learnedThisPass += LearnHigherRanksFromSpellChains(pPlayer);
@@ -800,10 +856,10 @@ bool GossipHello_npc_autotrainer(Player* pPlayer, Creature* pCreature)
 
     pPlayer->PlayerTalkClass->ClearMenus();
 
-    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Alles lernen (aktuelles Level)",             GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEARN_CURRENT);
-    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "+10 Level und alles lernen",                 GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_PLUS_10);
-    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Bis naechstes 10er-Level und alles lernen",  GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_NEXT_TEN);
-    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT,    "Abbrechen",                                  GOSSIP_SENDER_MAIN, GOSSIP_ACTION_CANCEL);
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Alles lernen (aktuelles Level)",            GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEARN_CURRENT);
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "+10 Level und alles lernen",                GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_PLUS_10);
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Bis naechstes 10er-Level und alles lernen", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_NEXT_TEN);
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT,    "Abbrechen",                                 GOSSIP_SENDER_MAIN, GOSSIP_ACTION_CANCEL);
 
     pPlayer->SEND_GOSSIP_MENU(DEFAULT_GOSSIP_MESSAGE, pCreature->GetObjectGuid());
     return true;
