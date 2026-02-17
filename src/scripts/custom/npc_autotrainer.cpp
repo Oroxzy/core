@@ -397,6 +397,30 @@ static bool IsPureLearnContainerSpell(uint32 spellId)
     return (hasLearnEffect && !hasOtherEffect);
 }
 
+static uint32 ExtractLearnedSpellFromPureContainer(uint32 teachSpellId)
+{
+    // Zweck: Bei reinen Learn-Container-Spells (Grimoires) den "eigentlich zu lernenden" Spell ermitteln
+    SpellEntry const* proto = sSpellMgr.GetSpellEntry(teachSpellId);
+    if (!proto)
+        return 0;
+
+    if (!IsPureLearnContainerSpell(teachSpellId))
+        return 0;
+
+    for (uint8 i = 0; i < 3; ++i)
+    {
+        if (proto->Effect[i] == SPELL_EFFECT_LEARN_SPELL)
+        {
+            // MaNGOS/vMaNGOS: der gelernte Spell steht hier
+            uint32 learnedId = uint32(proto->EffectTriggerSpell[i]);
+            if (learnedId)
+                return learnedId;
+        }
+    }
+
+    return 0;
+}
+
 static uint32 LearnHigherRanksFromSpellChains(Player* pPlayer)
 {
     // Zweck: Hoehere Ranks aus Spell Chains lernen
@@ -665,14 +689,14 @@ static bool CastTrainerTeachSpellToUnit(Player* pPlayer, Creature* pCreatureCast
     pPlayer->RemoveSpellsCausingAura(SPELL_AURA_MOUNTED);
 
     const bool kTriggered = true;
-    Unit* caster = pCreatureCaster ? (Unit*)pCreatureCaster : (Unit*)pPlayer;
+	Unit* caster = (Unit*)pPlayer;
 
     Spell* spell = new Spell(caster, proto, kTriggered);
 
-    SpellCastTargets targets;
-    targets.setUnitTarget(target);
-
-    SpellCastResult cast_result = spell->prepare(std::move(targets));
+	SpellCastTargets targets;
+	targets.setUnitTarget(target);
+	
+	SpellCastResult cast_result = spell->prepare(std::move(targets));
 
     if (cast_result != SPELL_CAST_OK)
     {
@@ -730,12 +754,60 @@ static bool CastTriggeredSpellOnPlayer(Player* pPlayer, Creature* pCreatureCaste
     pPlayer->RemoveSpellsCausingAura(SPELL_AURA_MOUNTED);
 
     const bool kTriggered = true;
-    Unit* caster = pCreatureCaster ? (Unit*)pCreatureCaster : (Unit*)pPlayer;
+	Unit* caster = (Unit*)pPlayer;
+
+    Spell* spell = new Spell(caster, proto, kTriggered);
+
+	SpellCastTargets targets;
+	targets.setUnitTarget(pPlayer);
+	
+	SpellCastResult cast_result = spell->prepare(std::move(targets));
+
+    if (cast_result != SPELL_CAST_OK)
+    {
+        delete spell;
+        return false;
+    }
+
+    return true;
+}
+
+static bool CastTriggeredSpellToUnit(Player* pPlayer, Creature* /*pCreatureCaster*/, uint32 spellId, Unit* target)
+{
+    // Zweck: Teach-/Item-Spell (Grimoire) triggered auf Ziel (Pet) casten
+    // Fix: Caster IMMER Player (NPC kann despawnen => Use-after-free Crash)
+    // Fix: Target explizit setzen (Pet)
+
+    if (!pPlayer || !spellId || !target)
+        return false;
+
+    if (!pPlayer->IsInWorld())
+        return false;
+
+    if (!target->IsInWorld())
+        return false;
+	
+    if (!pPlayer->IsAlive())
+        return false;
+
+    SpellEntry const* proto = sSpellMgr.GetSpellEntry(spellId);
+    if (!proto)
+        return false;
+
+    if (proto->spellLevel > 0 && pPlayer->GetLevel() < uint32(proto->spellLevel))
+        return false;
+
+    pPlayer->InterruptSpellsWithChannelFlags(AURA_INTERRUPT_INTERACTING_CANCELS);
+    pPlayer->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_INTERACTING_CANCELS);
+    pPlayer->RemoveSpellsCausingAura(SPELL_AURA_MOUNTED);
+
+    const bool kTriggered = true;
+    Unit* caster = (Unit*)pPlayer;
 
     Spell* spell = new Spell(caster, proto, kTriggered);
 
     SpellCastTargets targets;
-    targets.setUnitTarget(pPlayer);
+    targets.setUnitTarget(target);
 
     SpellCastResult cast_result = spell->prepare(std::move(targets));
 
@@ -748,18 +820,19 @@ static bool CastTriggeredSpellOnPlayer(Player* pPlayer, Creature* pCreatureCaste
     return true;
 }
 
-static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* pCreatureCaster)
+static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureCaster*/)
 {
-    // Zweck: Warlock-Grimoires hardcoded lassen, aber NICHT mehr casten (Crash nur bei Warlock)
-    // Fix: Teach-Spell ist oft ein reiner Learn-Container -> wir extrahieren den echten Spell und lernen direkt.
-
-    (void)pCreatureCaster;
+    // Zweck: Warlock-Grimoires wie Item-use anwenden und pro Daemon persistieren.
+    // Fix: Pet nach Lernen in DB speichern, bevor naechstes Pet beschworen wird.
 
     if (!pPlayer)
         return 0;
 
     uint8 cls = pPlayer->GetByteValue(UNIT_FIELD_BYTES_0, 1);
     if (cls != CLASS_WARLOCK)
+        return 0;
+
+    if (!pPlayer->IsInWorld() || !pPlayer->IsAlive())
         return 0;
 
     static const uint32 kGrimoireTeachSpells[] =
@@ -773,36 +846,87 @@ static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* pCreatureCas
         20426,20427,20428,20429,20430,20431,20432,20433,20434,20435
     };
 
+    static const uint32 kSummonSpells[] =
+    {
+        688,  // Imp
+        697,  // Voidwalker
+        712,  // Succubus
+        691   // Felhunter
+    };
+
+    uint32 originalSummonSpell = 0;
+    {
+        Pet* curPet = pPlayer->GetPet();
+        if (curPet)
+            originalSummonSpell = curPet->GetUInt32Value(UNIT_CREATED_BY_SPELL);
+    }
+
     uint32 learned = 0;
 
-    for (size_t i = 0; i < (sizeof(kGrimoireTeachSpells) / sizeof(kGrimoireTeachSpells[0])); ++i)
+    for (size_t s = 0; s < (sizeof(kSummonSpells) / sizeof(kSummonSpells[0])); ++s)
     {
-        uint32 teachId = kGrimoireTeachSpells[i];
+        uint32 summonId = kSummonSpells[s];
 
-        // Teach-Spell ist oft nicht als "known" relevant, deshalb NICHT nur HasSpell(teachId) als Gate benutzen.
-        uint32 learnedId = ExtractLearnedSpellFromPureContainer(teachId);
-
-        // Falls es ausnahmsweise kein "pure container" ist, lassen wir es bewusst weg (stabil).
-        // Wenn du willst, kann man hier optional EINZELN fallback-casten (aber genau das crasht dir).
-        if (!learnedId)
+        if (!pPlayer->HasSpell(summonId))
             continue;
 
-        if (pPlayer->HasSpell(learnedId))
+        SpellEntry const* summonProto = sSpellMgr.GetSpellEntry(summonId);
+        if (!summonProto)
             continue;
 
-        if (!pPlayer->IsSpellFitByClassAndRace(learnedId))
+        if (summonProto->spellLevel > 0 && pPlayer->GetLevel() < uint32(summonProto->spellLevel))
             continue;
 
-        SpellEntry const* proto = sSpellMgr.GetSpellEntry(learnedId);
-        if (!proto)
+        // Wenn schon ein Pet aktiv ist: speichern + dismissen, sonst geht beim Umsummonen oft nix sauber in DB
+        {
+            Pet* oldPet = pPlayer->GetPet();
+            if (oldPet)
+            {
+                oldPet->SavePetToDB(PET_SAVE_AS_CURRENT);
+                pPlayer->RemovePet(oldPet, PET_SAVE_AS_CURRENT, true);
+            }
+        }
+
+        // Pet beschwoeren (triggered)
+        pPlayer->CastSpell(pPlayer, summonId, true);
+
+        Pet* pet = pPlayer->GetPet();
+        if (!pet)
             continue;
 
-        if (proto->spellLevel > 0 && pPlayer->GetLevel() < uint32(proto->spellLevel))
+        if (!pet->IsInWorld())
             continue;
 
-        pPlayer->LearnSpell(learnedId, false);
-        ++learned;
+        if (pet->GetUInt32Value(UNIT_CREATED_BY_SPELL) != summonId)
+            continue;
+
+        // Grimoires casten
+        for (size_t i = 0; i < (sizeof(kGrimoireTeachSpells) / sizeof(kGrimoireTeachSpells[0])); ++i)
+        {
+            uint32 teachId = kGrimoireTeachSpells[i];
+
+            uint32 learnedId = ExtractLearnedSpellFromPureContainer(teachId);
+            if (learnedId && pet->HasSpell(learnedId))
+                continue;
+
+            pPlayer->CastSpell(pet, teachId, true);
+
+            // Zaehlen nur wenn Pet danach wirklich hat
+            if (learnedId && pet->HasSpell(learnedId))
+                ++learned;
+        }
+
+        // <<< DAS IST DER WICHTIGE TEIL >>>
+        // Pet nach den Casts speichern, sonst ist beim naechsten Summon alles wieder weg
+        pet->SavePetToDB(PET_SAVE_AS_CURRENT);
+
+        // Optional: direkt dismissen, damit DB garantiert committed ist bevor naechstes kommt
+        pPlayer->RemovePet(pet, PET_SAVE_AS_CURRENT, true);
     }
+
+    // Originalpet wiederherstellen
+    if (originalSummonSpell && pPlayer->HasSpell(originalSummonSpell))
+        pPlayer->CastSpell(pPlayer, originalSummonSpell, true);
 
     return learned;
 }
@@ -823,14 +947,14 @@ static uint32 LearnAllAvailableInLoop(Player* pPlayer, Creature* pCreatureCaster
     const uint32 kMaxPasses = 50;
     uint32 totalLearned = 0;
 
+	// Warlock Grimoires nur einmal pro "All learn" (sonst 50x Summons)
+	totalLearned += LearnWarlockGrimoireSpells(pPlayer, pCreatureCaster);
+		
     for (uint32 pass = 0; pass < kMaxPasses; ++pass)
     {
         uint32 learnedThisPass = 0;
 
         learnedThisPass += LearnQuestSpecialSpellsForClass(pPlayer);
-
-        // Warlock Grimoires pro Pass (nach Level-Up kann Neues kommen)
-        learnedThisPass += LearnWarlockGrimoireSpells(pPlayer, pCreatureCaster);
 
         if (cls > 0 && cls < 12)
         {
