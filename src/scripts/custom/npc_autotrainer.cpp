@@ -750,7 +750,11 @@ static bool CastTriggeredSpellOnPlayer(Player* pPlayer, Creature* pCreatureCaste
 
 static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* pCreatureCaster)
 {
-    // Zweck: Warlock Grimoires hardcoded wie anhin (Teach-Spells casten)
+    // Zweck: Warlock-Grimoires hardcoded lassen, aber NICHT mehr casten (Crash nur bei Warlock)
+    // Fix: Teach-Spell ist oft ein reiner Learn-Container -> wir extrahieren den echten Spell und lernen direkt.
+
+    (void)pCreatureCaster;
+
     if (!pPlayer)
         return 0;
 
@@ -773,14 +777,31 @@ static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* pCreatureCas
 
     for (size_t i = 0; i < (sizeof(kGrimoireTeachSpells) / sizeof(kGrimoireTeachSpells[0])); ++i)
     {
-        uint32 sid = kGrimoireTeachSpells[i];
+        uint32 teachId = kGrimoireTeachSpells[i];
 
-        // Wenn Teach-Spell schon als known markiert ist, skippen (spart Casts)
-        if (pPlayer->HasSpell(sid))
+        // Teach-Spell ist oft nicht als "known" relevant, deshalb NICHT nur HasSpell(teachId) als Gate benutzen.
+        uint32 learnedId = ExtractLearnedSpellFromPureContainer(teachId);
+
+        // Falls es ausnahmsweise kein "pure container" ist, lassen wir es bewusst weg (stabil).
+        // Wenn du willst, kann man hier optional EINZELN fallback-casten (aber genau das crasht dir).
+        if (!learnedId)
             continue;
 
-        if (CastTriggeredSpellOnPlayer(pPlayer, pCreatureCaster, sid))
-            ++learned;
+        if (pPlayer->HasSpell(learnedId))
+            continue;
+
+        if (!pPlayer->IsSpellFitByClassAndRace(learnedId))
+            continue;
+
+        SpellEntry const* proto = sSpellMgr.GetSpellEntry(learnedId);
+        if (!proto)
+            continue;
+
+        if (proto->spellLevel > 0 && pPlayer->GetLevel() < uint32(proto->spellLevel))
+            continue;
+
+        pPlayer->LearnSpell(learnedId, false);
+        ++learned;
     }
 
     return learned;
