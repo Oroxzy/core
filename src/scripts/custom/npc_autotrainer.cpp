@@ -822,8 +822,11 @@ static bool CastTriggeredSpellToUnit(Player* pPlayer, Creature* /*pCreatureCaste
 
 static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureCaster*/)
 {
-    // Zweck: Warlock-Grimoires wie Item-use anwenden und pro Daemon persistieren.
-    // Fix: Pet nach Lernen in DB speichern, bevor naechstes Pet beschworen wird.
+    // Zweck: Warlock-Grimoires robust anwenden:
+    // - Pet wird beschworen (Imp/Voidwalker/Succubus/Felhunter)
+    // - Aus jedem Grimoire-Teach-Spell wird der echte Pet-Spell extrahiert
+    // - Pet lernt den Spell DIREKT (nicht ueber triggered cast)
+    // Vorteil: funktioniert auch wenn triggered-cast TeachSpells je nach Core nicht sauber "lernen".
 
     if (!pPlayer)
         return 0;
@@ -832,9 +835,7 @@ static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureC
     if (cls != CLASS_WARLOCK)
         return 0;
 
-    if (!pPlayer->IsInWorld() || !pPlayer->IsAlive())
-        return 0;
-
+    // Teach-Spells (Grimoires / Learn-Container)
     static const uint32 kGrimoireTeachSpells[] =
     {
         20270,
@@ -846,14 +847,16 @@ static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureC
         20426,20427,20428,20429,20430,20431,20432,20433,20434,20435
     };
 
+    // Summon-Spells fuer Warlock-Pets (Classic)
     static const uint32 kSummonSpells[] =
     {
-        688,  // Imp
-        697,  // Voidwalker
-        712,  // Succubus
-        691   // Felhunter
+        688,  // Summon Imp
+        697,  // Summon Voidwalker
+        712,  // Summon Succubus
+        691   // Summon Felhunter
     };
 
+    // Ursprungs-Pet merken (damit wir am Schluss wieder herstellen koennen)
     uint32 originalSummonSpell = 0;
     {
         Pet* curPet = pPlayer->GetPet();
@@ -867,6 +870,7 @@ static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureC
     {
         uint32 summonId = kSummonSpells[s];
 
+        // Nur Pets "durchprobieren", die der Warlock wirklich kennt
         if (!pPlayer->HasSpell(summonId))
             continue;
 
@@ -876,16 +880,6 @@ static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureC
 
         if (summonProto->spellLevel > 0 && pPlayer->GetLevel() < uint32(summonProto->spellLevel))
             continue;
-
-        // Wenn schon ein Pet aktiv ist: speichern + dismissen, sonst geht beim Umsummonen oft nix sauber in DB
-        {
-            Pet* oldPet = pPlayer->GetPet();
-            if (oldPet)
-            {
-                oldPet->SavePetToDB(PET_SAVE_AS_CURRENT);
-                pPlayer->RemovePet(oldPet, PET_SAVE_AS_CURRENT, true);
-            }
-        }
 
         // Pet beschwoeren (triggered)
         pPlayer->CastSpell(pPlayer, summonId, true);
@@ -897,34 +891,37 @@ static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureC
         if (!pet->IsInWorld())
             continue;
 
+        // Sicherstellen, dass das gerade beschworene Pet wirklich zu diesem Summon gehoert
         if (pet->GetUInt32Value(UNIT_CREATED_BY_SPELL) != summonId)
             continue;
 
-        // Grimoires casten
+        // Alle Grimoires durchgehen und Pet-Spells direkt lernen
         for (size_t i = 0; i < (sizeof(kGrimoireTeachSpells) / sizeof(kGrimoireTeachSpells[0])); ++i)
         {
             uint32 teachId = kGrimoireTeachSpells[i];
 
             uint32 learnedId = ExtractLearnedSpellFromPureContainer(teachId);
-            if (learnedId && pet->HasSpell(learnedId))
+            if (!learnedId)
                 continue;
 
-            pPlayer->CastSpell(pet, teachId, true);
+            if (pet->HasSpell(learnedId))
+                continue;
 
-            // Zaehlen nur wenn Pet danach wirklich hat
-            if (learnedId && pet->HasSpell(learnedId))
-                ++learned;
+            SpellEntry const* learnedProto = sSpellMgr.GetSpellEntry(learnedId);
+            if (!learnedProto)
+                continue;
+
+            // Optional: Level-Check am Pet-Spell (sicher ist sicher)
+            if (learnedProto->spellLevel > 0 && pPlayer->GetLevel() < uint32(learnedProto->spellLevel))
+                continue;
+
+            // DIREKT lernen (robust, kein Cast-Race/Async Problem)
+            pet->LearnSpell(learnedId);
+            ++learned;
         }
-
-        // <<< DAS IST DER WICHTIGE TEIL >>>
-        // Pet nach den Casts speichern, sonst ist beim naechsten Summon alles wieder weg
-        pet->SavePetToDB(PET_SAVE_AS_CURRENT);
-
-        // Optional: direkt dismissen, damit DB garantiert committed ist bevor naechstes kommt
-        pPlayer->RemovePet(pet, PET_SAVE_AS_CURRENT, true);
     }
 
-    // Originalpet wiederherstellen
+    // Urspruengliches Pet wiederherstellen (wenn eines aktiv war)
     if (originalSummonSpell && pPlayer->HasSpell(originalSummonSpell))
         pPlayer->CastSpell(pPlayer, originalSummonSpell, true);
 
