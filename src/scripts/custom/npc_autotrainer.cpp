@@ -397,30 +397,6 @@ static bool IsPureLearnContainerSpell(uint32 spellId)
     return (hasLearnEffect && !hasOtherEffect);
 }
 
-static uint32 ExtractLearnedSpellFromPureContainer(uint32 teachSpellId)
-{
-    // Zweck: Bei reinen Learn-Container-Spells (Grimoires) den "eigentlich zu lernenden" Spell ermitteln
-    SpellEntry const* proto = sSpellMgr.GetSpellEntry(teachSpellId);
-    if (!proto)
-        return 0;
-
-    if (!IsPureLearnContainerSpell(teachSpellId))
-        return 0;
-
-    for (uint8 i = 0; i < 3; ++i)
-    {
-        if (proto->Effect[i] == SPELL_EFFECT_LEARN_SPELL)
-        {
-            // MaNGOS/vMaNGOS: der gelernte Spell steht hier
-            uint32 learnedId = uint32(proto->EffectTriggerSpell[i]);
-            if (learnedId)
-                return learnedId;
-        }
-    }
-
-    return 0;
-}
-
 static uint32 LearnHigherRanksFromSpellChains(Player* pPlayer)
 {
     // Zweck: Hoehere Ranks aus Spell Chains lernen
