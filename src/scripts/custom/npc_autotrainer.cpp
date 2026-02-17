@@ -1,22 +1,23 @@
 #include "scriptPCH.h"
 #include "ObjectMgr.h"
-#include "World.h"
 #include <vector>
 #include <string>
-#include <algorithm>
 
 enum
 {
-    GOSSIP_ACTION_LEARN_ALL = GOSSIP_ACTION_INFO_DEF + 1,
-    GOSSIP_ACTION_CANCEL    = GOSSIP_ACTION_INFO_DEF + 2
+    GOSSIP_ACTION_LEARN_CURRENT     = GOSSIP_ACTION_INFO_DEF + 1,
+    GOSSIP_ACTION_LEVEL_PLUS_10     = GOSSIP_ACTION_INFO_DEF + 2,
+    GOSSIP_ACTION_LEVEL_NEXT_TEN    = GOSSIP_ACTION_INFO_DEF + 3,
+    GOSSIP_ACTION_CANCEL            = GOSSIP_ACTION_INFO_DEF + 4
 };
 
 struct AutoTrainerSource
 {
     uint32 trainerId;
     uint32 trainerEntry;
+    bool   isPetTrainer;
 
-    AutoTrainerSource() : trainerId(0), trainerEntry(0) {}
+    AutoTrainerSource() : trainerId(0), trainerEntry(0), isPetTrainer(false) {}
 };
 
 static bool gClassSourcesResolved[12] = { false };
@@ -25,13 +26,27 @@ static std::vector<AutoTrainerSource> gClassSources[12];
 static bool gWeaponSourcesResolved = false;
 static std::vector<AutoTrainerSource> gWeaponSources;
 
-// ------------------------------------------------------------
-// Patch-Field Anpassung (JE NACH vMaNGOS BRANCH)
-// ------------------------------------------------------------
-// In deiner SpellEntry heisst das Feld evtl. anders.
-// Beispiele: patch / spellPatch / requiredPatch / introducedInPatch / etc.
-// Wenn Compile-Error: NUR diese Zeile anpassen.
-#define SPELL_PATCH_FIELD patch
+static uint32 GetMaxPlayerLevel_Cached()
+{
+    // Classic Cap (falls du spaeter dynamisch willst: World-Config holen)
+    return 60;
+}
+
+static uint16 GetMaxSkillForPlayerLevel(Player* pPlayer)
+{
+    if (!pPlayer)
+        return 1;
+
+    uint32 lvl = pPlayer->GetLevel();
+    if (lvl < 1)
+        lvl = 1;
+
+    uint32 v = lvl * 5;
+    if (v > 300)
+        v = 300;
+
+    return uint16(v);
+}
 
 static bool StrContainsI(std::string const& haystack, char const* needle)
 {
@@ -54,20 +69,15 @@ static bool StrContainsI(std::string const& haystack, char const* needle)
     return (h.find(n) != std::string::npos);
 }
 
-static uint16 GetMaxSkillForPlayerLevel(Player* pPlayer)
+static bool StrContainsI(char const* haystack, char const* needle)
 {
-    if (!pPlayer)
-        return 1;
+    if (!needle || !*needle)
+        return true;
 
-    uint32 lvl = pPlayer->GetLevel();
-    if (lvl < 1)
-        lvl = 1;
+    if (!haystack || !*haystack)
+        return false;
 
-    uint32 v = lvl * 5;
-    if (v > 300)
-        v = 300;
-
-    return uint16(v);
+    return StrContainsI(std::string(haystack), needle);
 }
 
 static void SetSkillToMaxIfKnown(Player* pPlayer, uint32 skillId, uint16 maxValue)
@@ -75,9 +85,11 @@ static void SetSkillToMaxIfKnown(Player* pPlayer, uint32 skillId, uint16 maxValu
     if (!pPlayer || !skillId)
         return;
 
+    // nur wenn Skill existiert/aktiv ist
     if (pPlayer->GetSkillValue(skillId) <= 0)
         return;
 
+    // dein Core: SetSkill(id, value, max)
     pPlayer->SetSkill(skillId, maxValue, maxValue);
 }
 
@@ -109,7 +121,7 @@ static void MaxOutWeaponDefenseAndRiding(Player* pPlayer)
     // Defense
     SetSkillToMaxIfKnown(pPlayer, 95, maxV);
 
-    // Riding (762)
+    // Riding (762) – auch auf Level*5 capped (ab 60 = 300)
     SetSkillToMaxIfKnown(pPlayer, 762, maxV);
 }
 
@@ -138,11 +150,27 @@ static void ResolveTrainerSourcesForClass(uint8 playerClass)
         if ((cInfo->npc_flags & UNIT_NPC_FLAG_TRAINER) == 0)
             continue;
 
-        if (cInfo->trainer_type != 0)
-            continue;
+        const bool isPetTrainer   = StrContainsI(cInfo->subname, "Pet Trainer");
+        const bool isDemonTrainer = StrContainsI(cInfo->subname, "Demon Trainer");
 
-        if (cInfo->trainer_class != uint32(playerClass))
-            continue;
+        // Normal: nur "normale" Trainer
+        // Ausnahme: Pet Trainer (Hunter) und Demon Trainer (Warlock) duerfen auch andere trainer_type/class haben
+        if (!isPetTrainer && !isDemonTrainer)
+        {
+            if (cInfo->trainer_type != 0)
+                continue;
+
+            if (cInfo->trainer_class != uint32(playerClass))
+                continue;
+        }
+        else
+        {
+            if (isPetTrainer && playerClass != CLASS_HUNTER)
+                continue;
+
+            if (isDemonTrainer && playerClass != CLASS_WARLOCK)
+                continue;
+        }
 
         bool ok = false;
 
@@ -153,11 +181,11 @@ static void ResolveTrainerSourcesForClass(uint8 playerClass)
                 break;
 
             case CLASS_HUNTER:
-                ok = StrContainsI(cInfo->subname, "Hunter Trainer") || StrContainsI(cInfo->subname, "Pet Trainer");
+                ok = StrContainsI(cInfo->subname, "Hunter Trainer") || isPetTrainer;
                 break;
 
             case CLASS_WARLOCK:
-                ok = StrContainsI(cInfo->subname, "Warlock Trainer") || StrContainsI(cInfo->subname, "Demon Trainer");
+                ok = StrContainsI(cInfo->subname, "Warlock Trainer") || isDemonTrainer;
                 break;
 
             case CLASS_WARRIOR: ok = StrContainsI(cInfo->subname, "Warrior Trainer"); break;
@@ -208,6 +236,8 @@ static void ResolveTrainerSourcesForClass(uint8 playerClass)
         AutoTrainerSource src;
         src.trainerEntry = entry;
         src.trainerId    = tid;
+        src.isPetTrainer = (isPetTrainer || isDemonTrainer);
+
         gClassSources[playerClass].push_back(src);
 
         if (tid)
@@ -219,6 +249,7 @@ static void ResolveTrainerSourcesForClass(uint8 playerClass)
 
 static void ResolveWeaponTrainerSources()
 {
+    // Zweck: ALLE Weapon Masters sammeln (einmalig) - OHNE DB
     if (gWeaponSourcesResolved)
         return;
 
@@ -287,6 +318,7 @@ static void ResolveWeaponTrainerSources()
 
 static TrainerSpellData const* GetTrainerSpells_EntryFirst_FallbackTemplate(AutoTrainerSource const& src)
 {
+    // Zweck: TrainerSpellData holen (Entry zuerst, Template als Fallback)
     if (src.trainerEntry)
     {
         TrainerSpellData const* byEntry = sObjectMgr.GetNpcTrainerSpells(src.trainerEntry);
@@ -300,98 +332,198 @@ static TrainerSpellData const* GetTrainerSpells_EntryFirst_FallbackTemplate(Auto
     return nullptr;
 }
 
-// ------------------------------------------------------------
-// Level + Patch Gate fuer DIRECT Learn (Quest/Book/Special)
-// ------------------------------------------------------------
+static bool gSpellChainNextBuilt = false;
+static std::vector<uint32> gNextInChain;
 
-static uint32 GetMinLevelOverrideForSpecialSpell(uint32 spellId)
+static void BuildSpellChainNextCache()
 {
-    // Zweck: Nur dort overriden, wo DBC-SpellLevel nicht passt (Mount/Pet/Quest etc.)
-    switch (spellId)
+    if (gSpellChainNextBuilt)
+        return;
+
+    gSpellChainNextBuilt = true;
+
+    uint32 maxId = sSpellMgr.GetMaxSpellId();
+    gNextInChain.clear();
+    gNextInChain.resize(maxId + 1, 0);
+
+    for (uint32 id = 1; id <= maxId; ++id)
     {
-        // Warlock Pets / Mounts
-        case 688:   return 1;   // Summon Imp
-        case 697:   return 10;  // Summon Voidwalker
-        case 712:   return 20;  // Summon Succubus
-        case 691:   return 30;  // Summon Felhunter
-        case 1122:  return 50;  // Inferno
-        case 5784:  return 40;  // Summon Felsteed
-        case 23161: return 60;  // Summon Dreadsteed
-
-        // Paladin Mounts / Redemption
-        case 7328:  return 12;  // Redemption R1
-        case 13819: return 40;  // Summon Warhorse
-        case 23214: return 60;  // Summon Charger
-
-        // Warrior Stances
-        case 71:    return 10;  // Defensive Stance
-        case 2458:  return 30;  // Berserker Stance
-
-        // Hunter Core
-        case 1515:  return 10;  // Tame Beast
-        case 5149:  return 10;  // Beast Training
-        case 2641:  return 10;  // Dismiss Pet
-        case 883:   return 10;  // Call Pet
-        case 982:   return 10;  // Revive Pet
-        case 6991:  return 10;  // Feed Pet
-
-        default:
-            return 0; // kein Override
+        uint32 prev = sSpellMgr.GetPrevSpellInChain(id);
+        if (prev > 0 && prev <= maxId)
+            gNextInChain[prev] = id;
     }
 }
 
-static uint32 GetMinLevelFromSpellEntry(SpellEntry const* proto)
+static uint32 GetNextSpellInChain_Cached(uint32 spellId)
 {
-    if (!proto)
-        return 1;
+    if (!spellId)
+        return 0;
 
-    // In Classic DBC ist "spellLevel" normalerweise das Learn-Level.
-    // Falls bei dir anders: hier anpassen.
-    uint32 lvl = (uint32)proto->spellLevel;
-    if (lvl < 1)
-        lvl = 1;
+    BuildSpellChainNextCache();
 
-    return lvl;
+    if (spellId >= gNextInChain.size())
+        return 0;
+
+    return gNextInChain[spellId];
 }
 
-static bool IsSpellAllowedByPatch(SpellEntry const* proto)
+static bool IsPureLearnContainerSpell(uint32 spellId)
 {
+    SpellEntry const* proto = sSpellMgr.GetSpellEntry(spellId);
     if (!proto)
         return false;
 
-    // vMaNGOS: World::GetWoWPatch() liefert 0..10 (siehe dein Screenshot)
-    uint32 currentPatch = (uint32)sWorld.GetWoWPatch();
+    bool hasLearnEffect = false;
+    bool hasOtherEffect = false;
 
-    // SpellEntry hat bei dir ein Patch-Feld (siehe Screenshot-Aussage).
-    // Wenn Compile-Error: oben SPELL_PATCH_FIELD anpassen.
-    uint32 spellPatch = (uint32)proto->SPELL_PATCH_FIELD;
+    for (uint8 i = 0; i < 3; ++i)
+    {
+        if (proto->Effect[i] == SPELL_EFFECT_LEARN_SPELL)
+            hasLearnEffect = true;
+        else if (proto->Effect[i] != 0)
+            hasOtherEffect = true;
+    }
 
-    // Wenn ein SpellPatch bei dir "0" heisst und du das als "immer ok" willst:
-    // return (spellPatch == 0) ? true : (spellPatch <= currentPatch);
-    return (spellPatch <= currentPatch);
+    if (hasLearnEffect && !hasOtherEffect)
+        return true;
+
+    return false;
+}
+
+static uint32 LearnHigherRanksFromSpellChains(Player* pPlayer)
+{
+    if (!pPlayer)
+        return 0;
+
+    uint32 learned = 0;
+    uint32 maxId = sSpellMgr.GetMaxSpellId();
+    if (maxId < 2)
+        return 0;
+
+    for (uint32 knownId = 1; knownId <= maxId; ++knownId)
+    {
+        if (!pPlayer->HasSpell(knownId))
+            continue;
+
+        uint32 nextId = GetNextSpellInChain_Cached(knownId);
+        while (nextId && !pPlayer->HasSpell(nextId))
+        {
+            if (!pPlayer->IsSpellFitByClassAndRace(nextId))
+                break;
+
+            SpellEntry const* nextProto = sSpellMgr.GetSpellEntry(nextId);
+            if (!nextProto)
+                break;
+
+            if (nextProto->spellLevel > 0 && pPlayer->GetLevel() < uint32(nextProto->spellLevel))
+                break;
+
+            if ((nextProto->Attributes & SPELL_ATTR_PASSIVE) != 0)
+                break;
+
+            if (IsPureLearnContainerSpell(nextId))
+                break;
+
+            pPlayer->LearnSpell(nextId, false);
+            ++learned;
+
+            knownId = nextId;
+            nextId = GetNextSpellInChain_Cached(nextId);
+        }
+    }
+
+    return learned;
+}
+
+static uint32 GetMinLevelForSpecialSpell(uint32 spellId)
+{
+    switch (spellId)
+    {
+        case 688:   return 1;
+        case 697:   return 10;
+        case 712:   return 20;
+        case 691:   return 30;
+        case 1122:  return 50;
+        case 5784:  return 40;
+        case 23161: return 60;
+        case 18540: return 60;
+
+        case 7328:  return 12;
+        case 13819: return 40;
+        case 23214: return 60;
+        case 19752: return 20;
+
+        case 71:    return 10;
+        case 2458:  return 30;
+
+        case 5487:  return 10;
+        case 1066:  return 16;
+        case 5215:  return 20;
+        case 768:   return 20;
+        case 783:   return 30;
+        case 40120: return 40;
+        case 33943: return 60;
+
+        case 1515:  return 10;
+        case 5149:  return 10;
+        case 2641:  return 10;
+        case 883:   return 10;
+        case 982:   return 10;
+        case 6991:  return 10;
+        case 19883: return 30;
+
+        case 8071:  return 4;
+        case 3599:  return 4;
+        case 5394:  return 20;
+        case 2484:  return 12;
+        case 3738:  return 6;
+
+        case 6346:  return 20;
+        case 9035:  return 1;
+        case 18137: return 20;
+
+        case 3561:  return 20;
+        case 3562:  return 20;
+        case 3563:  return 20;
+        case 3565:  return 20;
+        case 3566:  return 20;
+        case 3567:  return 20;
+        case 10059: return 40;
+        case 11416: return 40;
+        case 11417: return 40;
+        case 11418: return 40;
+        case 11419: return 40;
+        case 11420: return 40;
+
+        case 1784:  return 1;
+        case 1804:  return 1;
+        case 51724: return 1;
+
+        default:
+            return 1;
+    }
 }
 
 static bool LearnDirectSpellIfMissing(Player* pPlayer, uint32 spellId)
 {
-    // Zweck: Quest-/Spezial-/Book-Spell direkt als End-Spell lernen, aber mit Level+Patch Gate
     if (!pPlayer || !spellId)
         return false;
 
     if (pPlayer->HasSpell(spellId))
         return false;
 
+    if (IsPureLearnContainerSpell(spellId))
+        return false;
+
     SpellEntry const* proto = sSpellMgr.GetSpellEntry(spellId);
     if (!proto)
         return false;
 
-    if (!IsSpellAllowedByPatch(proto))
+    uint32 minLvl = GetMinLevelForSpecialSpell(spellId);
+    if (pPlayer->GetLevel() < minLvl)
         return false;
 
-    uint32 minLvlFromDBC = GetMinLevelFromSpellEntry(proto);
-    uint32 minLvlOverride = GetMinLevelOverrideForSpecialSpell(spellId);
-    uint32 minLvl = std::max(minLvlFromDBC, minLvlOverride);
-
-    if (pPlayer->GetLevel() < minLvl)
+    if (proto->spellLevel > 0 && pPlayer->GetLevel() < uint32(proto->spellLevel))
         return false;
 
     pPlayer->LearnSpell(spellId, false);
@@ -426,20 +558,20 @@ static uint32 LearnQuestSpecialSpellsForClass(Player* pPlayer)
             if (LearnQuestSpellIfAllowed(pPlayer, 5149))  ++learned;
             if (LearnQuestSpellIfAllowed(pPlayer, 6991))  ++learned;
             if (LearnQuestSpellIfAllowed(pPlayer, 982))   ++learned;
-            if (LearnQuestSpellIfAllowed(pPlayer, 19801)) ++learned; // Book/Quest
+            if (LearnQuestSpellIfAllowed(pPlayer, 19801)) ++learned;
             break;
 
         case CLASS_ROGUE:
             if (LearnQuestSpellIfAllowed(pPlayer, 2842))  ++learned;
-            if (LearnQuestSpellIfAllowed(pPlayer, 25347)) ++learned; // Book
+            if (LearnQuestSpellIfAllowed(pPlayer, 25347)) ++learned;
             break;
 
         case CLASS_WARRIOR:
-            if (LearnQuestSpellIfAllowed(pPlayer, 2457))  ++learned; // Battle Stance
-            if (LearnQuestSpellIfAllowed(pPlayer, 71))    ++learned; // Defensive Stance
+            if (LearnQuestSpellIfAllowed(pPlayer, 2457))  ++learned;
+            if (LearnQuestSpellIfAllowed(pPlayer, 71))    ++learned;
             if (LearnQuestSpellIfAllowed(pPlayer, 7386))  ++learned;
             if (LearnQuestSpellIfAllowed(pPlayer, 355))   ++learned;
-            if (LearnQuestSpellIfAllowed(pPlayer, 2458))  ++learned; // Berserker Stance
+            if (LearnQuestSpellIfAllowed(pPlayer, 2458))  ++learned;
             if (LearnQuestSpellIfAllowed(pPlayer, 20252)) ++learned;
             break;
 
@@ -476,8 +608,8 @@ static uint32 LearnQuestSpecialSpellsForClass(Player* pPlayer)
             if (LearnQuestSpellIfAllowed(pPlayer, 6346))  ++learned;
             if (LearnQuestSpellIfAllowed(pPlayer, 13896)) ++learned;
             if (LearnQuestSpellIfAllowed(pPlayer, 13908)) ++learned;
-            if (LearnQuestSpellIfAllowed(pPlayer, 27683)) ++learned; // Book
-            if (LearnQuestSpellIfAllowed(pPlayer, 21564)) ++learned; // Book
+            if (LearnQuestSpellIfAllowed(pPlayer, 27683)) ++learned;
+            if (LearnQuestSpellIfAllowed(pPlayer, 21564)) ++learned;
             break;
 
         case CLASS_DRUID:
@@ -502,10 +634,6 @@ static uint32 LearnQuestSpecialSpellsForClass(Player* pPlayer)
     return learned;
 }
 
-// ------------------------------------------------------------
-// Trainer "Teach" Cast (CRASH FIX)
-// ------------------------------------------------------------
-
 static bool CastTrainerTeachSpell(Player* pPlayer, Creature* pCreatureCaster, TrainerSpell const* trainerSpell)
 {
     if (!pPlayer || !trainerSpell)
@@ -522,6 +650,7 @@ static bool CastTrainerTeachSpell(Player* pPlayer, Creature* pCreatureCaster, Tr
     const bool kTriggered = true;
 
     Unit* caster = pCreatureCaster ? (Unit*)pCreatureCaster : (Unit*)pPlayer;
+
     Spell* spell = new Spell(caster, proto, kTriggered);
 
     SpellCastTargets targets;
@@ -529,9 +658,6 @@ static bool CastTrainerTeachSpell(Player* pPlayer, Creature* pCreatureCaster, Tr
 
     SpellCastResult cast_result = spell->prepare(std::move(targets));
 
-    // WICHTIG:
-    // Bei OK NICHT löschen -> Spell wird vom Spell-System weitergeführt und später aufgeräumt
-    // Nur bei Fehler direkt löschen
     if (cast_result != SPELL_CAST_OK)
     {
         delete spell;
@@ -576,13 +702,13 @@ static uint32 LearnAllAvailableInLoop(Player* pPlayer, Creature* pCreatureCaster
     ResolveWeaponTrainerSources();
 
     const uint32 kMaxPasses = 50;
+
     uint32 totalLearned = 0;
 
     for (uint32 pass = 0; pass < kMaxPasses; ++pass)
     {
         uint32 learnedThisPass = 0;
 
-        // Quest-/Spezial-/Book-Spells (mit Level+Patch Gate)
         learnedThisPass += LearnQuestSpecialSpellsForClass(pPlayer);
 
         if (cls > 0 && cls < 12)
@@ -602,6 +728,8 @@ static uint32 LearnAllAvailableInLoop(Player* pPlayer, Creature* pCreatureCaster
                 learnedThisPass += LearnFromTrainerSpellData_OnePass(pPlayer, pCreatureCaster, weaponSpells);
         }
 
+        learnedThisPass += LearnHigherRanksFromSpellChains(pPlayer);
+
         totalLearned += learnedThisPass;
 
         if (learnedThisPass == 0)
@@ -612,6 +740,58 @@ static uint32 LearnAllAvailableInLoop(Player* pPlayer, Creature* pCreatureCaster
     return totalLearned;
 }
 
+static uint32 LevelToAndLearn(Player* pPlayer, Creature* pCreatureCaster, uint32 targetLevel)
+{
+    if (!pPlayer)
+        return 0;
+
+    uint32 maxLvl = GetMaxPlayerLevel_Cached();
+    if (targetLevel < 1)
+        targetLevel = 1;
+    if (targetLevel > maxLvl)
+        targetLevel = maxLvl;
+
+    uint32 cur = pPlayer->GetLevel();
+
+    // Level nur hochsetzen (kein Downlevel)
+    if (targetLevel > cur)
+    {
+        pPlayer->GiveLevel(targetLevel);
+
+        // XP auf 0 (sauber fuer “Train/Loop”)
+        pPlayer->SetUInt32Value(PLAYER_XP, 0);
+    }
+
+    return LearnAllAvailableInLoop(pPlayer, pCreatureCaster);
+}
+
+static uint32 LearnCurrentLevel(Player* pPlayer, Creature* pCreatureCaster)
+{
+    return LearnAllAvailableInLoop(pPlayer, pCreatureCaster);
+}
+
+static uint32 LevelPlusTenAndLearn(Player* pPlayer, Creature* pCreatureCaster)
+{
+    if (!pPlayer)
+        return 0;
+
+    uint32 target = pPlayer->GetLevel() + 10;
+    return LevelToAndLearn(pPlayer, pCreatureCaster, target);
+}
+
+static uint32 LevelToNextTenAndLearn(Player* pPlayer, Creature* pCreatureCaster)
+{
+    if (!pPlayer)
+        return 0;
+
+    uint32 lvl = pPlayer->GetLevel();
+    uint32 nextTen = ((lvl + 9) / 10) * 10;
+    if (nextTen <= lvl)
+        nextTen = lvl + 10;
+
+    return LevelToAndLearn(pPlayer, pCreatureCaster, nextTen);
+}
+
 bool GossipHello_npc_autotrainer(Player* pPlayer, Creature* pCreature)
 {
     if (!pPlayer || !pCreature)
@@ -619,8 +799,11 @@ bool GossipHello_npc_autotrainer(Player* pPlayer, Creature* pCreature)
 
     pPlayer->PlayerTalkClass->ClearMenus();
 
-    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Alles lernen (gratis)", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEARN_ALL);
-    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT,    "Abbrechen",            GOSSIP_SENDER_MAIN, GOSSIP_ACTION_CANCEL);
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Alles lernen (aktuelles Level)",         GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEARN_CURRENT);
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "+10 Level und alles lernen",              GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_PLUS_10);
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Bis naechstes 10er-Level und alles lernen", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_NEXT_TEN);
+
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT,    "Abbrechen",                               GOSSIP_SENDER_MAIN, GOSSIP_ACTION_CANCEL);
 
     pPlayer->SEND_GOSSIP_MENU(DEFAULT_GOSSIP_MESSAGE, pCreature->GetObjectGuid());
     return true;
@@ -642,10 +825,26 @@ bool GossipSelect_npc_autotrainer(Player* pPlayer, Creature* pCreature, uint32 s
         return true;
     }
 
-    if (action != GOSSIP_ACTION_LEARN_ALL)
-        return true;
+    uint32 learned = 0;
 
-    uint32 learned = LearnAllAvailableInLoop(pPlayer, pCreature);
+    switch (action)
+    {
+        case GOSSIP_ACTION_LEARN_CURRENT:
+            learned = LearnCurrentLevel(pPlayer, pCreature);
+            break;
+
+        case GOSSIP_ACTION_LEVEL_PLUS_10:
+            learned = LevelPlusTenAndLearn(pPlayer, pCreature);
+            break;
+
+        case GOSSIP_ACTION_LEVEL_NEXT_TEN:
+            learned = LevelToNextTenAndLearn(pPlayer, pCreature);
+            break;
+
+        default:
+            pPlayer->CLOSE_GOSSIP_MENU();
+            return true;
+    }
 
     if (learned == 0)
         pPlayer->GetSession()->SendNotification("Im Moment gibt es nichts Neues zu lernen.");
