@@ -822,11 +822,12 @@ static bool CastTriggeredSpellToUnit(Player* pPlayer, Creature* /*pCreatureCaste
 
 static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureCaster*/)
 {
-    // Zweck: Warlock-Grimoires robust anwenden:
-    // - Pet wird beschworen (Imp/Voidwalker/Succubus/Felhunter)
-    // - Aus jedem Grimoire-Teach-Spell wird der echte Pet-Spell extrahiert
-    // - Pet lernt den Spell DIREKT (nicht ueber triggered cast)
-    // Vorteil: funktioniert auch wenn triggered-cast TeachSpells je nach Core nicht sauber "lernen".
+    // Zweck: Warlock-Grimoires HARD-CODED korrekt anwenden:
+    // - Pet wird je nach vorhandenem Summon-Spell beschworen (Imp/Voidwalker/Succubus/Felhunter)
+    // - NUR die zu diesem Pet gehoerenden Learned-Spells werden gelernt (gemäss CSV)
+    // - Lernen erfolgt DIREKT via pet->LearnSpell()
+    //
+    // Fix: verhindert, dass jedes Pet jeden Spell lernt (Felhunter/Imp/etc strikt getrennt)
 
     if (!pPlayer)
         return 0;
@@ -835,25 +836,98 @@ static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureC
     if (cls != CLASS_WARLOCK)
         return 0;
 
-    // Teach-Spells (Grimoires / Learn-Container)
-    static const uint32 kGrimoireTeachSpells[] =
+    // Summon-Spells fuer Warlock-Pets (Classic)
+    static const uint32 kSummonImp       = 688;
+    static const uint32 kSummonVoidwalker= 697;
+    static const uint32 kSummonSuccubus  = 712;
+    static const uint32 kSummonFelhunter = 691;
+
+    struct GrimoirePetSpell
     {
-        20270,
-        20312,20313,20314,20315,20316,20317,20318,20319,20320,20321,20322,20323,20324,
-        20326,20327,20329,
-        20377,20378,20379,20380,20381,20382,20383,20384,20385,20386,20387,20388,20389,20390,
-        20391,20392,20393,20394,20395,20396,20397,20398,20399,20400,20401,20402,20403,20404,
-        20405,20406,20407,20408,
-        20426,20427,20428,20429,20430,20431,20432,20433,20434,20435
+        uint32 summonSpell;   // welches Pet (ueber UNIT_CREATED_BY_SPELL)
+        uint32 teachSpell;    // Grimoire-Teach-Spell (nur fuer Doku/Debug)
+        uint32 learnedSpell;  // echter Pet-Spell der gelernt werden soll
     };
 
-    // Summon-Spells fuer Warlock-Pets (Classic)
-    static const uint32 kSummonSpells[] =
+    // HARD-CODE Mapping gemäss deinem CSV (TeachSpell -> LearnedSpell), strikt pro Pet
+    static const GrimoirePetSpell kMap[] =
     {
-        688,  // Summon Imp
-        697,  // Summon Voidwalker
-        712,  // Summon Succubus
-        691   // Summon Felhunter
+        // ---------------- IMP ----------------
+        { kSummonImp, 20270,  7799  }, // Firebolt (Rank 2)
+        { kSummonImp, 20312,  7800  }, // Firebolt (Rank 3)
+        { kSummonImp, 20313,  7801  }, // Firebolt (Rank 4)
+        { kSummonImp, 20314,  7802  }, // Firebolt (Rank 5)
+        { kSummonImp, 20315,  11762 }, // Firebolt (Rank 6)
+        { kSummonImp, 20316,  11763 }, // Firebolt (Rank 7)
+        { kSummonImp, 20329,  4511  }, // Phase Shift
+
+        { kSummonImp, 20397,  6307  }, // Blood Pact (Rank 1)
+        { kSummonImp, 20318,  7804  }, // Blood Pact (Rank 2)
+        { kSummonImp, 20319,  7805  }, // Blood Pact (Rank 3)
+        { kSummonImp, 20320,  11766 }, // Blood Pact (Rank 4)
+        { kSummonImp, 20321,  11767 }, // Blood Pact (Rank 5)
+
+        { kSummonImp, 20322,  2947  }, // Fire Shield (Rank 1)
+        { kSummonImp, 20323,  8316  }, // Fire Shield (Rank 2)
+        { kSummonImp, 20324,  8317  }, // Fire Shield (Rank 3)
+        { kSummonImp, 20326,  11770 }, // Fire Shield (Rank 4)
+        { kSummonImp, 20327,  11771 }, // Fire Shield (Rank 5)
+
+        // ---------------- VOIDWALKER ----------------
+        { kSummonVoidwalker, 20317,  7809  }, // Torment (Rank 2)
+        { kSummonVoidwalker, 20377,  7810  }, // Torment (Rank 3)
+        { kSummonVoidwalker, 20378,  7811  }, // Torment (Rank 4)
+        { kSummonVoidwalker, 20379,  11774 }, // Torment (Rank 5)
+        { kSummonVoidwalker, 20380,  11775 }, // Torment (Rank 6)
+
+        { kSummonVoidwalker, 20381,  7812  }, // Sacrifice (Rank 1)
+        { kSummonVoidwalker, 20382,  19438 }, // Sacrifice (Rank 2)
+        { kSummonVoidwalker, 20383,  19440 }, // Sacrifice (Rank 3)
+        { kSummonVoidwalker, 20384,  19441 }, // Sacrifice (Rank 4)
+        { kSummonVoidwalker, 20385,  19442 }, // Sacrifice (Rank 5)
+        { kSummonVoidwalker, 20386,  19443 }, // Sacrifice (Rank 6)
+
+        { kSummonVoidwalker, 20387,  17767 }, // Consume Shadows (Rank 1)
+        { kSummonVoidwalker, 20388,  17850 }, // Consume Shadows (Rank 2)
+        { kSummonVoidwalker, 20389,  17851 }, // Consume Shadows (Rank 3)
+        { kSummonVoidwalker, 20390,  17852 }, // Consume Shadows (Rank 4)
+        { kSummonVoidwalker, 20391,  17853 }, // Consume Shadows (Rank 5)
+        { kSummonVoidwalker, 20392,  17854 }, // Consume Shadows (Rank 6)
+
+        { kSummonVoidwalker, 20393,  17735 }, // Suffering (Rank 1)
+        { kSummonVoidwalker, 20394,  17750 }, // Suffering (Rank 2)
+        { kSummonVoidwalker, 20395,  17751 }, // Suffering (Rank 3)
+        { kSummonVoidwalker, 20396,  17752 }, // Suffering (Rank 4)
+
+        // ---------------- SUCCUBUS ----------------
+        { kSummonSuccubus, 20398,  7815  }, // Lash of Pain (Rank 2)
+        { kSummonSuccubus, 20399,  7816  }, // Lash of Pain (Rank 3)
+        { kSummonSuccubus, 20400,  11778 }, // Lash of Pain (Rank 4)
+        { kSummonSuccubus, 20401,  11779 }, // Lash of Pain (Rank 5)
+        { kSummonSuccubus, 20402,  11780 }, // Lash of Pain (Rank 6)
+
+        { kSummonSuccubus, 20403,  6360  }, // Soothing Kiss (Rank 1)
+        { kSummonSuccubus, 20404,  7813  }, // Soothing Kiss (Rank 2)
+        { kSummonSuccubus, 20405,  11784 }, // Soothing Kiss (Rank 3)
+        { kSummonSuccubus, 20406,  11785 }, // Soothing Kiss (Rank 4)
+
+        { kSummonSuccubus, 20407,  6358  }, // Seduction
+        { kSummonSuccubus, 20408,  7870  }, // Lesser Invisibility
+
+        // ---------------- FELHUNTER ----------------
+        { kSummonFelhunter, 20426,  19731 }, // Devour Magic (Rank 2)
+        { kSummonFelhunter, 20427,  19734 }, // Devour Magic (Rank 3)
+        { kSummonFelhunter, 20428,  19736 }, // Devour Magic (Rank 4)
+
+        { kSummonFelhunter, 20429,  19478 }, // Tainted Blood (Rank 1)
+        { kSummonFelhunter, 20430,  19655 }, // Tainted Blood (Rank 2)
+        { kSummonFelhunter, 20431,  19656 }, // Tainted Blood (Rank 3)
+        { kSummonFelhunter, 20432,  19660 }, // Tainted Blood (Rank 4)
+
+        { kSummonFelhunter, 20433,  19244 }, // Spell Lock (Rank 1)
+        { kSummonFelhunter, 20434,  19647 }, // Spell Lock (Rank 2)
+
+        { kSummonFelhunter, 20435,  19480 }  // Paranoia
     };
 
     // Ursprungs-Pet merken (damit wir am Schluss wieder herstellen koennen)
@@ -863,6 +937,14 @@ static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureC
         if (curPet)
             originalSummonSpell = curPet->GetUInt32Value(UNIT_CREATED_BY_SPELL);
     }
+
+    static const uint32 kSummonSpells[] =
+    {
+        kSummonImp,
+        kSummonVoidwalker,
+        kSummonSuccubus,
+        kSummonFelhunter
+    };
 
     uint32 learned = 0;
 
@@ -895,12 +977,13 @@ static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureC
         if (pet->GetUInt32Value(UNIT_CREATED_BY_SPELL) != summonId)
             continue;
 
-        // Alle Grimoires durchgehen und Pet-Spells direkt lernen
-        for (size_t i = 0; i < (sizeof(kGrimoireTeachSpells) / sizeof(kGrimoireTeachSpells[0])); ++i)
+        // NUR die zu diesem Pet gehoerenden Spells lernen
+        for (size_t i = 0; i < (sizeof(kMap) / sizeof(kMap[0])); ++i)
         {
-            uint32 teachId = kGrimoireTeachSpells[i];
+            if (kMap[i].summonSpell != summonId)
+                continue;
 
-            uint32 learnedId = ExtractLearnedSpellFromPureContainer(teachId);
+            uint32 learnedId = kMap[i].learnedSpell;
             if (!learnedId)
                 continue;
 
@@ -911,11 +994,10 @@ static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureC
             if (!learnedProto)
                 continue;
 
-            // Optional: Level-Check am Pet-Spell (sicher ist sicher)
+            // Level-Check am Pet-Spell
             if (learnedProto->spellLevel > 0 && pPlayer->GetLevel() < uint32(learnedProto->spellLevel))
                 continue;
 
-            // DIREKT lernen (robust, kein Cast-Race/Async Problem)
             pet->LearnSpell(learnedId);
             ++learned;
         }
