@@ -1,6 +1,7 @@
--- =========================================
--- Heal Dummy (Entry 60002)
--- =========================================
+-- ============================================================
+-- Heal Dummy (60002) - Patchwerk Style / exakt Display+Flags
+-- ScriptName: npc_heal_dummy
+-- ============================================================
 DELETE FROM `creature_template` WHERE `entry`=60002 AND `patch`=0;
 
 INSERT INTO `creature_template`
@@ -24,34 +25,35 @@ INSERT INTO `creature_template`
  `static_flags1`, `static_flags2`, `flags_extra`, `script_name`)
 VALUES
 (60002, 0,
- 'Heal Dummy', 'Training Dummy',
+ 'Raider''s Training Dummy', '"Patchwerk"',
  63, 63,
  914, 0, 0,
  16174, 0, 0, 0,
  1, 0, 0, 0,
  1, 0, 0, 0, 1,
  0,
- 1, 1.14286,
- 20, 5, 0,
- 6, 0, 0, 1,
- 0, 5000, 1, 1,
- 0.14, 0, 0,
- 2000, 2000,
- 0, 0, 0, 0, 0, 0,
+ 1.5, 1.5,
+ 0, 0, 0,
+ 6, 0, 3, 0,
+ 0, 5000, 0, 1,
+ 0, 1.0, 0,
+ 1500, 1700,
+ 15, 15, 15, 15, 15, 0,
  0, 0, 0, 0,
  0, 0, 0, 0, 0,
  0, 0, 0, 0,
  0, 0, 0, '',
- '', 0, 3, 0, 0,
+ '', 0, 1, 0, 0,
  0, 0, 0,
  3167436667, 0, 0,
- 0, 0, 0,
+ 263172, 0, 0,
  'npc_heal_dummy');
 
 
--- =========================================
--- Damage Dummy (Entry 60003)
--- =========================================
+-- ============================================================
+-- Boss Dummy (60003) - Patchwerk Style / exakt Display+Flags
+-- ScriptName: npc_boss_dummy (Gossip!)
+-- ============================================================
 DELETE FROM `creature_template` WHERE `entry`=60003 AND `patch`=0;
 
 INSERT INTO `creature_template`
@@ -75,26 +77,26 @@ INSERT INTO `creature_template`
  `static_flags1`, `static_flags2`, `flags_extra`, `script_name`)
 VALUES
 (60003, 0,
- 'Damage Dummy', 'Training Dummy',
+ 'Raider''s Training Dummy', '"Patchwerk" (Boss)',
  63, 63,
  914, 0, 0,
  16174, 0, 0, 0,
  1, 0, 0, 0,
  1, 0, 0, 0, 1,
  0,
- 1, 1.14286,
- 20, 5, 0,
- 6, 0, 0, 1,
- 0, 5000, 1, 1,
- 0.14, 0, 0,
- 2000, 2000,
- 0, 0, 0, 0, 0, 0,
+ 1.5, 1.5,
+ 0, 0, 0,
+ 6, 0, 3, 0,
+ 0, 5000, 0, 1,
+ 0, 1.0, 0,
+ 1500, 1700,
+ 15, 15, 15, 15, 15, 0,
  0, 0, 0, 0,
  0, 0, 0, 0, 0,
  0, 0, 0, 0,
  0, 0, 0, '',
- '', 0, 3, 0, 0,
+ '', 0, 1, 0, 0,
  0, 0, 0,
  3167436667, 0, 0,
- 0, 0, 0,
- 'npc_damage_dummy');
+ 263172, 0, 0,
+ 'npc_boss_dummy');
