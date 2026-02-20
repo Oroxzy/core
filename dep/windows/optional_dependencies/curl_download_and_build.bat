@@ -33,7 +33,7 @@ if %count% equ 1 (
     echo Selected: !available_aliases[0]!
     set VS_VARS_ALL_PATH="!available_paths[0]!"
 ) else if %count% gtr 1 (
-    set /p choice="Enter the number of the Visual Studio version to use: "
+    set /a choice=count-1
     if defined available_paths[%choice%] (
         echo Selected: !available_aliases[%choice%]!
         set VS_VARS_ALL_PATH="!available_paths[%choice%]!"
@@ -43,12 +43,11 @@ if %count% equ 1 (
 ) else (
     color 4
     echo No valid Visual Studio installations found.
-    pause
     exit /b 1
 )
 
 :: Setup env vars
-call %VS_VARS_ALL_PATH% x64 || (color 4 & echo Error detected & pause & exit /b)
+call %VS_VARS_ALL_PATH% x64 || (color 4 & echo Error detected & exit /b)
 
 @echo on
 
@@ -58,25 +57,23 @@ if not exist lib (mkdir lib)
 if not exist include (mkdir include)
 
 if not exist "curl-build" (
-    call git clone --branch curl-8_10_1 --depth 1 https://github.com/curl/curl.git curl-build || (color 4 & echo Error detected & pause & exit /b)
+    call git clone --branch curl-8_10_1 --depth 1 https://github.com/curl/curl.git curl-build || (color 4 & echo Error detected & exit /b)
 )
 
 cd curl-build
-call buildconf.bat || (color 4 & echo Error detected & pause & exit /b)
+call buildconf.bat || (color 4 & echo Error detected & exit /b)
 cd winbuild
-call nmake /f Makefile.vc mode=dll MACHINE=x64 || (color 4 & echo Error detected & pause & exit /b)
+call nmake /f Makefile.vc mode=dll MACHINE=x64 || (color 4 & echo Error detected & exit /b)
 
 cd ..\..
-xcopy /y "curl-build\builds\libcurl-vc-x64-release-dll-ipv6-sspi-schannel\bin\libcurl.dll" "lib\" || (color 4 & echo Error detected & pause & exit /b)
-xcopy /y "curl-build\builds\libcurl-vc-x64-release-dll-ipv6-sspi-schannel\lib\libcurl.lib" "lib\" || (color 4 & echo Error detected & pause & exit /b)
-xcopy /e /i /y "curl-build\builds\libcurl-vc-x64-release-dll-ipv6-sspi-schannel\include" "include" || (color 4 & echo Error detected & pause & exit /b)
+xcopy /y "curl-build\builds\libcurl-vc-x64-release-dll-ipv6-sspi-schannel\bin\libcurl.dll" "lib\" || (color 4 & echo Error detected & exit /b)
+xcopy /y "curl-build\builds\libcurl-vc-x64-release-dll-ipv6-sspi-schannel\lib\libcurl.lib" "lib\" || (color 4 & echo Error detected & exit /b)
+xcopy /e /i /y "curl-build\builds\libcurl-vc-x64-release-dll-ipv6-sspi-schannel\include" "include" || (color 4 & echo Error detected & exit /b)
 
 color 2
 echo.
 echo.
 echo ================================
 echo Done :)
-echo Press enter to delete the temporary build folder
-pause
-
 rmdir /s /q curl-build
+

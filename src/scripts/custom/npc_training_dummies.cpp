@@ -5,6 +5,7 @@
 #include <vector>
 #include <algorithm>
 #include <sstream>
+#include <ctime>
 
 enum
 {
@@ -34,12 +35,15 @@ namespace TrainingDummy
     static const uint32 kHealDummyMinHp       = 1;
 
     static const uint32 kDamageDummyMinHp     = 1;
-    
+
     static const uint32 kSoundCountdownTick = 116;
     static const uint32 kSoundCountdownGo   = 8232; // <- setz hier deine Wunsch-SoundId
 
-    // 10s ohne Aktivitaet: nur Dummy/Boss Threat/Combat leeren (Player bleibt unberuehrt)
-    static const uint32 kExitCombatAfterMs    = 10000;
+    // DU wolltest 12 Sekunden:
+    static const uint32 kKickPlayerAfterIdleMs = 12000;
+
+    // Rote Combat-Aura (wie dein alter Dummy). Falls deine SpellId anders ist: hier aendern.
+    static const uint32 kCombatAuraSpellId = 31309;
 
     enum Events
     {
@@ -128,29 +132,23 @@ namespace TrainingDummy
         me->AddThreat(attackerOrHealer, 1.0f);
     }
 
-    // 10s Exit-Combat Puffer wie im alten Script
-    static void HandleExitCombat(Creature* me, std::map<ObjectGuid, uint32>& lastActivityMs, uint32 nowElapsedMs)
+    static void SetCombatAura(Creature* me, bool active)
     {
         if (!me)
             return;
 
-        if (lastActivityMs.empty())
+        if (kCombatAuraSpellId == 0)
             return;
 
-        Map* map = me->GetMap();
-        for (auto it = lastActivityMs.begin(); it != lastActivityMs.end(); )
+        if (active)
         {
-            const uint32 lastMs = it->second;
-
-            if (nowElapsedMs >= lastMs && (nowElapsedMs - lastMs) >= kExitCombatAfterMs)
-            {
-                // WICHTIG: NICHT den Player global aus Combat werfen!
-                // Wir markieren nur diesen Player als "inaktiv" fuer DIESEN Dummy.
-                it = lastActivityMs.erase(it);
-                continue;
-            }
-
-            ++it;
+            if (!me->HasAura(kCombatAuraSpellId))
+                me->CastSpell(me, kCombatAuraSpellId, true);
+        }
+        else
+        {
+            if (me->HasAura(kCombatAuraSpellId))
+                me->RemoveAurasDueToSpell(kCombatAuraSpellId);
         }
     }
 
@@ -178,7 +176,8 @@ namespace TrainingDummy
 struct npc_damage_dummyAI : public ScriptedAI
 {
     npc_damage_dummyAI(Creature* c) : ScriptedAI(c),
-        mActive(false), mElapsedMs(0), mIdleMs(0), mHomeOri(0.0f)
+        mActive(false), mElapsedMs(0), mIdleMs(0), mHomeOri(0.0f),
+        mKickSweepMs(0)
     {
         Reset();
     }
@@ -191,19 +190,22 @@ struct npc_damage_dummyAI : public ScriptedAI
 
     float  mHomeOri;
 
-    std::map<ObjectGuid, uint64> mDamageByPlayer;
-    std::map<ObjectGuid, uint32> mLastActivityMs; // Exit-Combat Puffer (10s)
+    uint32 mKickSweepMs;
+
+    std::map<ObjectGuid, uint64>  mDamageByPlayer;
+    std::map<ObjectGuid, time_t>  mLastActivityTs; // letzte Aktivitaet als epoch-seconds
 
     void Reset() override
     {
         mEvents.Reset();
 
-        mActive    = false;
-        mElapsedMs = 0;
-        mIdleMs    = 0;
+        mActive      = false;
+        mElapsedMs   = 0;
+        mIdleMs      = 0;
+        mKickSweepMs = 0;
 
         mDamageByPlayer.clear();
-        mLastActivityMs.clear();
+        mLastActivityTs.clear();
 
         if (me)
         {
@@ -216,7 +218,11 @@ struct npc_damage_dummyAI : public ScriptedAI
             // Reset darf Combat/Threat aufraeumen
             me->CombatStop(true);
             me->DeleteThreatList();
+            me->AttackStop();
+            me->SetTargetGuid(ObjectGuid());
+            me->ClearInCombat();
 
+            TrainingDummy::SetCombatAura(me, false);
             TrainingDummy::FreezeInPlace(me, mHomeOri);
         }
     }
@@ -229,6 +235,8 @@ struct npc_damage_dummyAI : public ScriptedAI
         mActive    = true;
         mElapsedMs = 0;
         mIdleMs    = 0;
+
+        TrainingDummy::SetCombatAura(me, true);
 
         if (TrainingDummy::kAnnounceEveryMs > 0)
             mEvents.ScheduleEvent(TrainingDummy::EVENT_REPORT_TICK, TrainingDummy::kAnnounceEveryMs);
@@ -282,7 +290,6 @@ struct npc_damage_dummyAI : public ScriptedAI
 
     void DamageTaken(Unit* doneBy, uint32& damage) override
     {
-        // Immer stehen bleiben / nicht drehen
         TrainingDummy::FreezeInPlace(me, mHomeOri);
 
         // Nie sterben
@@ -304,58 +311,93 @@ struct npc_damage_dummyAI : public ScriptedAI
 
         StartIfNeeded();
 
-        // Combat stabil halten + Exit-Combat Zeitstempel setzen
         TrainingDummy::EnsureCombat(me, doneBy);
-        mLastActivityMs[owner->GetObjectGuid()] = mElapsedMs;
+
+        // Aktivitaet aktualisieren (epoch)
+        mLastActivityTs[owner->GetObjectGuid()] = std::time(nullptr);
 
         mIdleMs = 0;
         mDamageByPlayer[owner->GetObjectGuid()] += uint64(damage);
     }
 
+    void KickInactivePlayers()
+    {
+        if (!me)
+            return;
+
+        if (mLastActivityTs.empty())
+            return;
+
+        const time_t now = std::time(nullptr);
+
+        for (auto it = mLastActivityTs.begin(); it != mLastActivityTs.end(); )
+        {
+            Unit* u = me->GetMap() ? me->GetMap()->GetUnit(it->first) : nullptr;
+
+            if (!u || !u->IsInWorld())
+            {
+                it = mLastActivityTs.erase(it);
+                continue;
+            }
+
+            if ((now - it->second) * 1000 >= TrainingDummy::kKickPlayerAfterIdleMs)
+            {
+                if (u->IsPlayer())
+                {
+                    Player* p = u->ToPlayer();
+
+                    // WIE IM ALTEN SCRIPT: sonst bleibt Player haengen
+                    p->CombatStopWithPets(true);
+                    p->CombatStop(true);
+
+                    // Dummy-seitig Attacker/Threat sauber entfernen
+                    me->_removeAttacker(u);
+                }
+
+                it = mLastActivityTs.erase(it);
+                continue;
+            }
+
+            ++it;
+        }
+
+        // Wenn keiner mehr dran ist: Dummy wirklich raus aus Combat
+        if (mLastActivityTs.empty())
+        {
+            me->DeleteThreatList();
+            me->AttackStop();
+            me->SetTargetGuid(ObjectGuid());
+            me->ClearInCombat();
+
+            TrainingDummy::SetCombatAura(me, false);
+        }
+    }
+
     void UpdateAI(uint32 diff) override
     {
         TrainingDummy::FreezeInPlace(me, mHomeOri);
-    
-        // WICHTIG: Exit-Combat Puffer muss IMMER laufen, auch wenn (noch) nicht aktiv
+
+        // Zeit laeuft immer
         mElapsedMs += diff;
-        TrainingDummy::HandleExitCombat(me, mLastActivityMs, mElapsedMs);
-    
+
+        // Sweep alle 1s
+        if (mKickSweepMs <= diff)
+        {
+            KickInactivePlayers();
+            mKickSweepMs = 1000;
+        }
+        else
+            mKickSweepMs -= diff;
+
         if (!mActive)
             return;
-    
-        mIdleMs += diff;
-            
-        // NACH 10s ohne Aktivitaet: nur diesen Dummy aus Combat/Threat leeren
-		if (mIdleMs >= TrainingDummy::kExitCombatAfterMs)
-		{
-			// nur Dummy “leeren”, ohne Player global zu beeinflussen
-			me->DeleteThreatList();
-			me->AttackStop();
-			me->SetTargetGuid(ObjectGuid());
-		
-			// ganz wichtig: Combat-Status am Dummy selbst löschen (ohne Gegner anzufassen)
-			me->ClearInCombat();
-		
-			// damit es nicht jede Update-Schleife erneut feuert
-			mIdleMs = 0;
-		}
-        
-        mEvents.Update(diff);
 
-        while (uint32 ev = mEvents.ExecuteEvent())
-        {
-            if (ev == TrainingDummy::EVENT_REPORT_TICK)
-            {
-                if (TrainingDummy::kAnnounceEveryMs > 0)
-                    mEvents.ScheduleEvent(TrainingDummy::EVENT_REPORT_TICK, TrainingDummy::kAnnounceEveryMs);
-            }
-        }
-    
+        mIdleMs += diff;
+
         // Reset nur wenn Fight "echt" laeuft (Puffer)
         if (mIdleMs >= TrainingDummy::kResetAfterIdleMs && mElapsedMs >= TrainingDummy::kMinFightMs)
             FinishAndReset();
     }
-
 };
 
 static CreatureAI* GetAI_npc_damage_dummy(Creature* pCreature)
@@ -369,7 +411,8 @@ static CreatureAI* GetAI_npc_damage_dummy(Creature* pCreature)
 struct npc_heal_dummyAI : public ScriptedAI
 {
     npc_heal_dummyAI(Creature* c) : ScriptedAI(c),
-        mActive(false), mElapsedMs(0), mIdleMs(0), mHomeOri(0.0f)
+        mActive(false), mElapsedMs(0), mIdleMs(0), mHomeOri(0.0f),
+        mKickSweepMs(0)
     {
         Reset();
     }
@@ -382,8 +425,10 @@ struct npc_heal_dummyAI : public ScriptedAI
 
     float  mHomeOri;
 
-    std::map<ObjectGuid, uint64> mHealByPlayer;
-    std::map<ObjectGuid, uint32> mLastActivityMs; // Exit-Combat Puffer (10s)
+    uint32 mKickSweepMs;
+
+    std::map<ObjectGuid, uint64>  mHealByPlayer;
+    std::map<ObjectGuid, time_t>  mLastActivityTs;
 
     void ClampToTargetHP()
     {
@@ -406,12 +451,13 @@ struct npc_heal_dummyAI : public ScriptedAI
     {
         mEvents.Reset();
 
-        mActive    = false;
-        mElapsedMs = 0;
-        mIdleMs    = 0;
+        mActive      = false;
+        mElapsedMs   = 0;
+        mIdleMs      = 0;
+        mKickSweepMs = 0;
 
         mHealByPlayer.clear();
-        mLastActivityMs.clear();
+        mLastActivityTs.clear();
 
         if (me)
         {
@@ -420,9 +466,13 @@ struct npc_heal_dummyAI : public ScriptedAI
             me->SetReactState(REACT_PASSIVE);
             SetCombatMovement(false);
 
-            // Reset darf Combat/Threat aufraeumen
             me->CombatStop(true);
             me->DeleteThreatList();
+            me->AttackStop();
+            me->SetTargetGuid(ObjectGuid());
+            me->ClearInCombat();
+
+            TrainingDummy::SetCombatAura(me, false);
 
             ClampToTargetHP();
             mEvents.ScheduleEvent(TrainingDummy::EVENT_HEALDUMMY_CLAMPHP, TrainingDummy::kHealDummyTickMs);
@@ -439,6 +489,8 @@ struct npc_heal_dummyAI : public ScriptedAI
         mActive    = true;
         mElapsedMs = 0;
         mIdleMs    = 0;
+
+        TrainingDummy::SetCombatAura(me, true);
     }
 
     void FinishAndReset()
@@ -501,9 +553,9 @@ struct npc_heal_dummyAI : public ScriptedAI
 
         StartIfNeeded();
 
-        // Combat stabil halten + Exit-Combat Zeitstempel setzen
         TrainingDummy::EnsureCombat(me, healer);
-        mLastActivityMs[owner->GetObjectGuid()] = mElapsedMs;
+
+        mLastActivityTs[owner->GetObjectGuid()] = std::time(nullptr);
 
         mIdleMs = 0;
         mHealByPlayer[owner->GetObjectGuid()] += uint64(heal);
@@ -523,10 +575,57 @@ struct npc_heal_dummyAI : public ScriptedAI
             damage = me->GetHealth() - TrainingDummy::kHealDummyMinHp;
     }
 
+    void KickInactivePlayers()
+    {
+        if (!me)
+            return;
+
+        if (mLastActivityTs.empty())
+            return;
+
+        const time_t now = std::time(nullptr);
+
+        for (auto it = mLastActivityTs.begin(); it != mLastActivityTs.end(); )
+        {
+            Unit* u = me->GetMap() ? me->GetMap()->GetUnit(it->first) : nullptr;
+
+            if (!u || !u->IsInWorld())
+            {
+                it = mLastActivityTs.erase(it);
+                continue;
+            }
+
+            if ((now - it->second) * 1000 >= TrainingDummy::kKickPlayerAfterIdleMs)
+            {
+                if (u->IsPlayer())
+                {
+                    Player* p = u->ToPlayer();
+                    p->CombatStopWithPets(true);
+                    p->CombatStop(true);
+                    me->_removeAttacker(u);
+                }
+
+                it = mLastActivityTs.erase(it);
+                continue;
+            }
+
+            ++it;
+        }
+
+        if (mLastActivityTs.empty())
+        {
+            me->DeleteThreatList();
+            me->AttackStop();
+            me->SetTargetGuid(ObjectGuid());
+            me->ClearInCombat();
+            TrainingDummy::SetCombatAura(me, false);
+        }
+    }
+
     void UpdateAI(uint32 diff) override
     {
         TrainingDummy::FreezeInPlace(me, mHomeOri);
-    
+
         mEvents.Update(diff);
         while (uint32 ev = mEvents.ExecuteEvent())
         {
@@ -536,27 +635,25 @@ struct npc_heal_dummyAI : public ScriptedAI
                 mEvents.ScheduleEvent(TrainingDummy::EVENT_HEALDUMMY_CLAMPHP, TrainingDummy::kHealDummyTickMs);
             }
         }
-    
-        // WICHTIG: Exit-Combat Puffer muss IMMER laufen
+
         mElapsedMs += diff;
-        TrainingDummy::HandleExitCombat(me, mLastActivityMs, mElapsedMs);
-    
+
+        if (mKickSweepMs <= diff)
+        {
+            KickInactivePlayers();
+            mKickSweepMs = 1000;
+        }
+        else
+            mKickSweepMs -= diff;
+
         if (!mActive)
             return;
-    
+
         mIdleMs += diff;
-        
-        // NACH 10s ohne Aktivitaet: nur diesen Dummy aus Combat/Threat leeren
-        if (mIdleMs >= TrainingDummy::kExitCombatAfterMs)
-        {
-            me->CombatStop(true);
-            me->DeleteThreatList();
-        }
-        
+
         if (mIdleMs >= TrainingDummy::kResetAfterIdleMs && mElapsedMs >= TrainingDummy::kMinFightMs)
             FinishAndReset();
     }
-
 };
 
 static CreatureAI* GetAI_npc_heal_dummy(Creature* pCreature)
@@ -571,7 +668,8 @@ struct npc_boss_dummyAI : public ScriptedAI
 {
     npc_boss_dummyAI(Creature* c) : ScriptedAI(c),
         mCountingDown(false), mActive(false), mCountdownLeft(0),
-        mElapsedMs(0), mIdleMs(0), mHomeOri(0.0f), mNpcFlagsOriginal(1)
+        mElapsedMs(0), mIdleMs(0), mHomeOri(0.0f), mNpcFlagsOriginal(1),
+        mKickSweepMs(0)
     {
         Reset();
     }
@@ -588,8 +686,10 @@ struct npc_boss_dummyAI : public ScriptedAI
 
     uint32 mNpcFlagsOriginal;
 
-    std::map<ObjectGuid, uint64> mDamageByPlayer;
-    std::map<ObjectGuid, uint32> mLastActivityMs; // Exit-Combat Puffer (10s)
+    uint32 mKickSweepMs;
+
+    std::map<ObjectGuid, uint64>  mDamageByPlayer;
+    std::map<ObjectGuid, time_t>  mLastActivityTs;
 
     void Reset() override
     {
@@ -601,35 +701,36 @@ struct npc_boss_dummyAI : public ScriptedAI
 
         mElapsedMs     = 0;
         mIdleMs        = 0;
+        mKickSweepMs   = 0;
 
         mDamageByPlayer.clear();
-        mLastActivityMs.clear();
+        mLastActivityTs.clear();
 
         if (!me)
             return;
 
         mHomeOri = me->GetOrientation();
 
-        // NPCFlags merken (soll bei dir 1 sein)
         mNpcFlagsOriginal = me->GetUInt32Value(UNIT_NPC_FLAGS);
 
         me->SetHealth(me->GetMaxHealth());
 
-        // Vor Start: nicht angreifbar, aber anklickbar fuer Gossip
         me->SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE_2);
         me->RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_ATTACKABLE_1);
         me->RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE);
 
-        // Gossip wieder aktiv
         TrainingDummy::RestoreGossip(me, mNpcFlagsOriginal);
 
         me->SetReactState(REACT_PASSIVE);
         SetCombatMovement(false);
 
-        // Reset darf Combat/Threat aufraeumen
         me->CombatStop(true);
         me->DeleteThreatList();
+        me->AttackStop();
+        me->SetTargetGuid(ObjectGuid());
+        me->ClearInCombat();
 
+        TrainingDummy::SetCombatAura(me, false);
         TrainingDummy::FreezeInPlace(me, mHomeOri);
     }
 
@@ -643,7 +744,6 @@ struct npc_boss_dummyAI : public ScriptedAI
         mCountingDown  = true;
         mCountdownLeft = (seconds > 0 ? seconds : 1);
 
-        // Beim Pull: Gossip weg (npcflag live auf 0)
         TrainingDummy::RemoveGossip(me);
 
         {
@@ -667,16 +767,16 @@ struct npc_boss_dummyAI : public ScriptedAI
         mElapsedMs = 0;
         mIdleMs    = 0;
 
-        // Jetzt wirklich angreifbar
         me->RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE_2);
         me->RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_ATTACKABLE_1);
         me->RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE);
 
-        // aber: nicht laufen / nicht drehen
         me->SetReactState(REACT_PASSIVE);
         SetCombatMovement(false);
 
         TrainingDummy::FreezeInPlace(me, mHomeOri);
+
+        TrainingDummy::SetCombatAura(me, true);
 
         me->PlayDirectSound(TrainingDummy::kSoundCountdownGo, 0);
         me->MonsterTextEmote("Boss Dummy: GO!", nullptr);
@@ -730,7 +830,7 @@ struct npc_boss_dummyAI : public ScriptedAI
 
         if (me)
             TrainingDummy::RestoreGossip(me, mNpcFlagsOriginal);
-    
+
         Reset();
     }
 
@@ -738,14 +838,12 @@ struct npc_boss_dummyAI : public ScriptedAI
     {
         TrainingDummy::FreezeInPlace(me, mHomeOri);
 
-        // Vor GO: komplett blocken
         if (!mActive)
         {
             damage = 0;
             return;
         }
 
-        // Nie sterben lassen
         if (me->GetHealth() <= TrainingDummy::kDamageDummyMinHp)
         {
             damage = 0;
@@ -762,12 +860,58 @@ struct npc_boss_dummyAI : public ScriptedAI
         if (!owner)
             return;
 
-        // Combat stabil halten + Exit-Combat Zeitstempel setzen
         TrainingDummy::EnsureCombat(me, doneBy);
-        mLastActivityMs[owner->GetObjectGuid()] = mElapsedMs;
+        mLastActivityTs[owner->GetObjectGuid()] = std::time(nullptr);
 
         mIdleMs = 0;
         mDamageByPlayer[owner->GetObjectGuid()] += uint64(damage);
+    }
+
+    void KickInactivePlayers()
+    {
+        if (!me)
+            return;
+
+        if (mLastActivityTs.empty())
+            return;
+
+        const time_t now = std::time(nullptr);
+
+        for (auto it = mLastActivityTs.begin(); it != mLastActivityTs.end(); )
+        {
+            Unit* u = me->GetMap() ? me->GetMap()->GetUnit(it->first) : nullptr;
+
+            if (!u || !u->IsInWorld())
+            {
+                it = mLastActivityTs.erase(it);
+                continue;
+            }
+
+            if ((now - it->second) * 1000 >= TrainingDummy::kKickPlayerAfterIdleMs)
+            {
+                if (u->IsPlayer())
+                {
+                    Player* p = u->ToPlayer();
+                    p->CombatStopWithPets(true);
+                    p->CombatStop(true);
+                    me->_removeAttacker(u);
+                }
+
+                it = mLastActivityTs.erase(it);
+                continue;
+            }
+
+            ++it;
+        }
+
+        if (mLastActivityTs.empty())
+        {
+            me->DeleteThreatList();
+            me->AttackStop();
+            me->SetTargetGuid(ObjectGuid());
+            me->ClearInCombat();
+            TrainingDummy::SetCombatAura(me, false);
+        }
     }
 
     void UpdateAI(uint32 diff) override
@@ -785,14 +929,14 @@ struct npc_boss_dummyAI : public ScriptedAI
                 if (mCountdownLeft > 1)
                 {
                     --mCountdownLeft;
-                
+
                     me->PlayDirectSound(TrainingDummy::kSoundCountdownTick, 0);
-                
+
                     std::ostringstream ss;
                     ss << "Boss Dummy: Pull in " << mCountdownLeft << " Sekunden.";
                     std::string msg = ss.str();
                     me->MonsterTextEmote(msg.c_str(), nullptr);
-                
+
                     mEvents.ScheduleEvent(TrainingDummy::EVENT_BOSS_COUNTDOWN_TICK, 1000);
                 }
                 else
@@ -808,15 +952,13 @@ struct npc_boss_dummyAI : public ScriptedAI
         mElapsedMs += diff;
         mIdleMs    += diff;
 
-        // Exit-Combat Puffer (10s ohne Aktivitaet)
-        TrainingDummy::HandleExitCombat(me, mLastActivityMs, mElapsedMs);
-
-        // NACH 10s ohne Aktivitaet: nur Boss-Dummy aus Combat/Threat leeren
-        if (mIdleMs >= TrainingDummy::kExitCombatAfterMs)
+        if (mKickSweepMs <= diff)
         {
-            me->CombatStop(true);
-            me->DeleteThreatList();
+            KickInactivePlayers();
+            mKickSweepMs = 1000;
         }
+        else
+            mKickSweepMs -= diff;
 
         if (mIdleMs >= TrainingDummy::kResetAfterIdleMs && mElapsedMs >= TrainingDummy::kMinFightMs)
             FinishAndReset();
