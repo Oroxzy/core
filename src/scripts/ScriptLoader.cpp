@@ -16,6 +16,7 @@ void AddSC_zero_scripts();
 void AddSC_ubrs_trash();
 void AddSC_npc_autotrainer();
 void AddSC_npc_training_dummies();
+void AddSC_TemplateNPC();
 
 //void AddSC_gmisland();
 //void AddSC_boss_arena_hardog(); // EVENT de TORKIN
@@ -267,6 +268,7 @@ void AddScripts()
     AddSC_ubrs_trash();
     AddSC_npc_autotrainer();
     AddSC_npc_training_dummies();
+	AddSC_TemplateNPC();
     //AddSC_gmisland();
 
     //AddSC_gmisland();
