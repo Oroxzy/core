@@ -5,7 +5,7 @@
 #ifndef TEMPLATE_NPC_ENABLE_PETS
     // Falls dein Branch Pet/Player APIs anders benennt, setze das vorerst auf 0,
     // damit Gear/Talents/Cache sauber bauen. Danach passen wir Pet-Teil gezielt an.
-    #define TEMPLATE_NPC_ENABLE_PETS 0
+    #define TEMPLATE_NPC_ENABLE_PETS 1
 #endif
 
 static inline uint8 TemplateNpc_GetPlayerClassId(Player* player)
@@ -3717,35 +3717,32 @@ void PlayerLearnAllHunterPetSpellsDB(Player* player)
 
 void SaveHunterPetSpellsToDB(Player* player)
 {
+    if (!player)
+        return;
+
     if (TemplateNpc_GetPlayerClassId(player) != CLASS_HUNTER)
         return;
 
-    if (Pet* pet = player->GetPet())
-    {
-        if (TemplateNpc_GetPlayerClassId(player) != CLASS_HUNTER)
-            return;
-
-        if (!pet)
-            return;
-
-        if (!pet->IsControlled())
-            return;
-    }
-
     Pet* pet = player->GetPet();
+    if (!pet)
+        return;
+
+    if (!pet->IsControlled())
+        return;
+
+    if (pet->GetPetType() != HUNTER_PET)
+        return;
 
     uint32 petentry = pet->GetEntry();
 
-    CreatureInfo const *cInfo = sObjectMgr.GetCreatureTemplate(petentry);
-
-    if (!cInfo) return;
-
-    std::string petname = cInfo->name;
-
     static SqlStatementID delSpell;
     static SqlStatementID insSpell;
-    SqlStatement stmtdel = CharacterDatabase.CreateStatement(delSpell, "DELETE FROM template_pet_spell WHERE name = ? AND spell = ?");
-    SqlStatement stmtins = CharacterDatabase.CreateStatement(insSpell, "INSERT INTO template_pet_spell (name,spell) VALUES (?, ?)");
+
+    SqlStatement stmtdel = CharacterDatabase.CreateStatement(delSpell,
+        "DELETE FROM template_pet_spell WHERE entry = ? AND spell = ?");
+
+    SqlStatement stmtins = CharacterDatabase.CreateStatement(insSpell,
+        "INSERT INTO template_pet_spell (entry, spell, active) VALUES (?, ?, ?)");
 
     for (PetSpellMap::iterator itr = pet->m_petSpells.begin(), next = pet->m_petSpells.begin(); itr != pet->m_petSpells.end(); itr = next)
     {
@@ -3758,72 +3755,90 @@ void SaveHunterPetSpellsToDB(Player* player)
         if (itr->second.state == PETSPELL_REMOVED)
             continue;
 
-        stmtdel.PExecute(petname.c_str(), itr->first);
-        stmtins.PExecute(petname.c_str(), itr->first);
+        stmtdel.addUInt32(petentry);
+        stmtdel.addUInt32(itr->first);
+        stmtdel.Execute();
+
+        stmtins.addUInt32(petentry);
+        stmtins.addUInt32(itr->first);
+        stmtins.addUInt8(uint8(1));
+        stmtins.Execute();
     }
 }
 
-void ExportHunterPetToDB(Player* player)
+
+static void ExportHunterPetToDB(Player* player)
 {
-    if (Pet* pet = player->GetPet())
-    {
-        if (TemplateNpc_GetPlayerClassId(player) != CLASS_HUNTER)
-            return;
+    if (!player)
+        return;
 
-        if (!pet)
-            return;
+    if (TemplateNpc_GetPlayerClassId(player) != CLASS_HUNTER)
+        return;
 
-        if (!pet->IsControlled())
-            return;
+    Pet* pet = player->GetPet();
+    if (!pet)
+        return;
 
-        if (pet->GetPetType() != HUNTER_PET)
-            return;
-    }
+    if (!pet->IsControlled())
+        return;
 
-    static SqlStatementID insPet;
-    static SqlStatementID delPet;
-    SqlStatement PetsDEL = CharacterDatabase.CreateStatement(delPet, "DELETE FROM template_pets WHERE name = ? and entry = ?");
-    SqlStatement PetsINS = CharacterDatabase.CreateStatement(insPet, "INSERT INTO template_pets (name, entry, PetFamily, AttackSpeed) VALUES (?, ?, ?, ?)");
+    if (pet->GetPetType() != HUNTER_PET)
+        return;
 
-    uint32 petentry = player->GetPet()->GetEntry();
+    uint32 petentry = pet->GetEntry();
 
-    CreatureInfo const *cInfo = sObjectMgr.GetCreatureTemplate(petentry);
-
-    if (!cInfo) return;
+    CreatureInfo const* cInfo = sObjectMgr.GetCreatureTemplate(petentry);
+    if (!cInfo)
+        return;
 
     std::string petname = cInfo->name;
     uint32 petfamily = cInfo->pet_family;
     uint32 attackspeed = cInfo->base_attack_time;
-    PetsDEL.PExecute(petname.c_str(), petentry);
-    PetsINS.PExecute(petname.c_str(), petentry, petfamily, attackspeed);
+
+    static SqlStatementID insPet;
+    static SqlStatementID delPet;
+
+    SqlStatement stmtDel = CharacterDatabase.CreateStatement(delPet,
+        "DELETE FROM template_pets WHERE name = ? AND entry = ?");
+
+    stmtDel.addString(petname);
+    stmtDel.addUInt32(petentry);
+    stmtDel.Execute();
+
+    SqlStatement stmtIns = CharacterDatabase.CreateStatement(insPet,
+        "INSERT INTO template_pets (name, entry, PetFamily, AttackSpeed) VALUES (?, ?, ?, ?)");
+
+    stmtIns.addString(petname);
+    stmtIns.addUInt32(petentry);
+    stmtIns.addUInt32(petfamily);
+    stmtIns.addUInt32(attackspeed);
+    stmtIns.Execute();
 }
+
 
 void LearnPetSpellsFromDB(Player* player)
 {
-    if (Pet* pet = player->GetPet())
-    {
-        if (TemplateNpc_GetPlayerClassId(player) != CLASS_HUNTER)
-            return;
+    if (!player)
+        return;
 
-        if (!pet)
-            return;
+    if (TemplateNpc_GetPlayerClassId(player) != CLASS_HUNTER)
+        return;
 
-        if (!pet->IsControlled())
-            return;
+    Pet* pet = player->GetPet();
+    if (!pet)
+        return;
 
-        if (pet->GetPetType() != HUNTER_PET)
-            return;
-    }
+    if (!pet->IsControlled())
+        return;
 
-    uint32 petentry = player->GetPet()->GetEntry();
+    if (pet->GetPetType() != HUNTER_PET)
+        return;
 
-    CreatureInfo const *cInfo = sObjectMgr.GetCreatureTemplate(petentry);
+    uint32 petentry = pet->GetEntry();
 
-    if (!cInfo) return;
-
-    std::string petname = cInfo->name;
-
-    auto select = CharacterDatabase.PQuery("SELECT spell FROM template_pet_spell WHERE name = '%s';", petname.c_str());
+    auto select = CharacterDatabase.PQuery(
+        "SELECT spell FROM template_pet_spell WHERE entry = '%u' AND active = 1;",
+        petentry);
 
     if (select)
     {
@@ -3833,14 +3848,14 @@ void LearnPetSpellsFromDB(Player* player)
             uint32 spellId = fields[0].GetUInt32();
 
             if (spellId)
-                player->GetPet()->LearnSpell(spellId);
+                pet->LearnSpell(spellId);
 
         } while (select->NextRow());
     }
 
-    //player->GetPet()->SetTP(0);
-    player->GetPet()->SavePetToDB(PET_SAVE_AS_CURRENT);
+    pet->SavePetToDB(PET_SAVE_AS_CURRENT);
 }
+
 
 void CreateHunterPet(Player *player, Creature * m_creature, uint32 entry)
 {
@@ -4388,6 +4403,17 @@ bool GossipHello_TemplateNPC(Player* player, Creature* creature)
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Reset my Cooldowns & Spell Charges.", GOSSIP_SENDER_MAIN, RESET_COOLDOWNS_AND_CHARGES);
         //player->ADD_GOSSIP_ITEM_EXTENDED(GOSSIP_ICON_CHAT,        "Delete my Equipped Gear.", GOSSIP_SENDER_MAIN, DELETE_GEAR, "Are you sure?", false);
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Buff me please.", GOSSIP_SENDER_MAIN, ALL_BUFFS);
+
+#if TEMPLATE_NPC_ENABLE_PETS
+        // Hunter: zusaetzliches Pet-Template-Menu (DB: template_pets + template_pet_spell)
+        if (TemplateNpc_GetPlayerClassId(player) == CLASS_HUNTER)
+        {
+            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, "Hunter Pet Templates.", GOSSIP_SENDER_MAIN, SHOW_PETS);
+
+            if (player->GetPet() && player->GetPet()->GetPetType() == HUNTER_PET)
+                player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Make my Pet happy.", GOSSIP_SENDER_MAIN, MAKE_PET_HAPPY);
+        }
+#endif
 
 		bool hasTemplates = TemplateNpcCache::HasAnyForClass(player);
 		std::string clsKey = GetClassKeyString(player);
