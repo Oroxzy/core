@@ -1,3 +1,4 @@
+#include "AutoLearnCore.h"
 
 // ---------------------------------------------------------------------------
 // vMaNGOS API-Kompatibilitaet (Branch-agnostisch)
@@ -5,7 +6,7 @@
 #ifndef TEMPLATE_NPC_ENABLE_PETS
     // Falls dein Branch Pet/Player APIs anders benennt, setze das vorerst auf 0,
     // damit Gear/Talents/Cache sauber bauen. Danach passen wir Pet-Teil gezielt an.
-    #define TEMPLATE_NPC_ENABLE_PETS 1
+    #define TEMPLATE_NPC_ENABLE_PETS 0
 #endif
 
 static inline uint8 TemplateNpc_GetPlayerClassId(Player* player)
@@ -83,7 +84,6 @@ static const char* GetClassKeyString(Player* player)
 #include <algorithm>
 #include <memory>
 #include <utility>
-#include <cstdio>
 
 
 //std::string spec;
@@ -450,9 +450,28 @@ namespace TemplateNpcCache
 #define SHOW_ILVL           GOSSIP_ACTION_INFO_DEF+14
 #define FIX_DB              GOSSIP_ACTION_INFO_DEF+15
 #define SHOW_SPECS          GOSSIP_ACTION_INFO_DEF+16
-#define SELECT_SPEC_BASE   900000
+#define SELECT_SPEC_BASE 900000
 #define UPGRADE_TALENTS          GOSSIP_ACTION_INFO_DEF+17
+#define LEVEL_LEARN_CURRENT     GOSSIP_ACTION_INFO_DEF+90
+#define LEVEL_LEARN_PLUS_10     GOSSIP_ACTION_INFO_DEF+91
+#define LEVEL_LEARN_NEXT_TEN    GOSSIP_ACTION_INFO_DEF+92
+#define LEVEL_LEARN_TO_60       GOSSIP_ACTION_INFO_DEF+93
+#define LEVEL_LEARN_CANCEL      GOSSIP_ACTION_INFO_DEF+94
 
+#define SHOW_PROF_MENU          GOSSIP_ACTION_INFO_DEF+120
+#define PROF_LEARN_FIRST_AID    GOSSIP_ACTION_INFO_DEF+121
+#define PROF_LEARN_COOKING      GOSSIP_ACTION_INFO_DEF+122
+#define PROF_LEARN_FISHING      GOSSIP_ACTION_INFO_DEF+123
+#define PROF_LEARN_ALCHEMY      GOSSIP_ACTION_INFO_DEF+124
+#define PROF_LEARN_BLACKSMITH   GOSSIP_ACTION_INFO_DEF+125
+#define PROF_LEARN_ENCHANTING   GOSSIP_ACTION_INFO_DEF+126
+#define PROF_LEARN_ENGINEERING  GOSSIP_ACTION_INFO_DEF+127
+#define PROF_LEARN_HERBALISM    GOSSIP_ACTION_INFO_DEF+128
+#define PROF_LEARN_LEATHERWORK  GOSSIP_ACTION_INFO_DEF+129
+#define PROF_LEARN_MINING       GOSSIP_ACTION_INFO_DEF+130
+#define PROF_LEARN_SKINNING     GOSSIP_ACTION_INFO_DEF+131
+#define PROF_LEARN_TAILORING    GOSSIP_ACTION_INFO_DEF+132
+#define PROF_MENU_BACK          GOSSIP_ACTION_INFO_DEF+133
 enum TalentTabNames
 {
     WarriorProtection = 163,
@@ -3717,32 +3736,35 @@ void PlayerLearnAllHunterPetSpellsDB(Player* player)
 
 void SaveHunterPetSpellsToDB(Player* player)
 {
-    if (!player)
-        return;
-
     if (TemplateNpc_GetPlayerClassId(player) != CLASS_HUNTER)
         return;
 
+    if (Pet* pet = player->GetPet())
+    {
+        if (TemplateNpc_GetPlayerClassId(player) != CLASS_HUNTER)
+            return;
+
+        if (!pet)
+            return;
+
+        if (!pet->IsControlled())
+            return;
+    }
+
     Pet* pet = player->GetPet();
-    if (!pet)
-        return;
-
-    if (!pet->IsControlled())
-        return;
-
-    if (pet->GetPetType() != HUNTER_PET)
-        return;
 
     uint32 petentry = pet->GetEntry();
 
+    CreatureInfo const *cInfo = sObjectMgr.GetCreatureTemplate(petentry);
+
+    if (!cInfo) return;
+
+    std::string petname = cInfo->name;
+
     static SqlStatementID delSpell;
     static SqlStatementID insSpell;
-
-    SqlStatement stmtdel = CharacterDatabase.CreateStatement(delSpell,
-        "DELETE FROM template_pet_spell WHERE entry = ? AND spell = ?");
-
-    SqlStatement stmtins = CharacterDatabase.CreateStatement(insSpell,
-        "INSERT INTO template_pet_spell (entry, spell, active) VALUES (?, ?, ?)");
+    SqlStatement stmtdel = CharacterDatabase.CreateStatement(delSpell, "DELETE FROM template_pet_spell WHERE name = ? AND spell = ?");
+    SqlStatement stmtins = CharacterDatabase.CreateStatement(insSpell, "INSERT INTO template_pet_spell (name,spell) VALUES (?, ?)");
 
     for (PetSpellMap::iterator itr = pet->m_petSpells.begin(), next = pet->m_petSpells.begin(); itr != pet->m_petSpells.end(); itr = next)
     {
@@ -3755,90 +3777,72 @@ void SaveHunterPetSpellsToDB(Player* player)
         if (itr->second.state == PETSPELL_REMOVED)
             continue;
 
-        stmtdel.addUInt32(petentry);
-        stmtdel.addUInt32(itr->first);
-        stmtdel.Execute();
-
-        stmtins.addUInt32(petentry);
-        stmtins.addUInt32(itr->first);
-        stmtins.addUInt8(uint8(1));
-        stmtins.Execute();
+        stmtdel.PExecute(petname.c_str(), itr->first);
+        stmtins.PExecute(petname.c_str(), itr->first);
     }
 }
 
-
-static void ExportHunterPetToDB(Player* player)
+void ExportHunterPetToDB(Player* player)
 {
-    if (!player)
-        return;
+    if (Pet* pet = player->GetPet())
+    {
+        if (TemplateNpc_GetPlayerClassId(player) != CLASS_HUNTER)
+            return;
 
-    if (TemplateNpc_GetPlayerClassId(player) != CLASS_HUNTER)
-        return;
+        if (!pet)
+            return;
 
-    Pet* pet = player->GetPet();
-    if (!pet)
-        return;
+        if (!pet->IsControlled())
+            return;
 
-    if (!pet->IsControlled())
-        return;
+        if (pet->GetPetType() != HUNTER_PET)
+            return;
+    }
 
-    if (pet->GetPetType() != HUNTER_PET)
-        return;
+    static SqlStatementID insPet;
+    static SqlStatementID delPet;
+    SqlStatement PetsDEL = CharacterDatabase.CreateStatement(delPet, "DELETE FROM template_pets WHERE name = ? and entry = ?");
+    SqlStatement PetsINS = CharacterDatabase.CreateStatement(insPet, "INSERT INTO template_pets (name, entry, PetFamily, AttackSpeed) VALUES (?, ?, ?, ?)");
 
-    uint32 petentry = pet->GetEntry();
+    uint32 petentry = player->GetPet()->GetEntry();
 
-    CreatureInfo const* cInfo = sObjectMgr.GetCreatureTemplate(petentry);
-    if (!cInfo)
-        return;
+    CreatureInfo const *cInfo = sObjectMgr.GetCreatureTemplate(petentry);
+
+    if (!cInfo) return;
 
     std::string petname = cInfo->name;
     uint32 petfamily = cInfo->pet_family;
     uint32 attackspeed = cInfo->base_attack_time;
-
-    static SqlStatementID insPet;
-    static SqlStatementID delPet;
-
-    SqlStatement stmtDel = CharacterDatabase.CreateStatement(delPet,
-        "DELETE FROM template_pets WHERE name = ? AND entry = ?");
-
-    stmtDel.addString(petname);
-    stmtDel.addUInt32(petentry);
-    stmtDel.Execute();
-
-    SqlStatement stmtIns = CharacterDatabase.CreateStatement(insPet,
-        "INSERT INTO template_pets (name, entry, PetFamily, AttackSpeed) VALUES (?, ?, ?, ?)");
-
-    stmtIns.addString(petname);
-    stmtIns.addUInt32(petentry);
-    stmtIns.addUInt32(petfamily);
-    stmtIns.addUInt32(attackspeed);
-    stmtIns.Execute();
+    PetsDEL.PExecute(petname.c_str(), petentry);
+    PetsINS.PExecute(petname.c_str(), petentry, petfamily, attackspeed);
 }
-
 
 void LearnPetSpellsFromDB(Player* player)
 {
-    if (!player)
-        return;
+    if (Pet* pet = player->GetPet())
+    {
+        if (TemplateNpc_GetPlayerClassId(player) != CLASS_HUNTER)
+            return;
 
-    if (TemplateNpc_GetPlayerClassId(player) != CLASS_HUNTER)
-        return;
+        if (!pet)
+            return;
 
-    Pet* pet = player->GetPet();
-    if (!pet)
-        return;
+        if (!pet->IsControlled())
+            return;
 
-    if (!pet->IsControlled())
-        return;
+        if (pet->GetPetType() != HUNTER_PET)
+            return;
+    }
 
-    if (pet->GetPetType() != HUNTER_PET)
-        return;
+    uint32 petentry = player->GetPet()->GetEntry();
 
-    uint32 petentry = pet->GetEntry();
+    CreatureInfo const *cInfo = sObjectMgr.GetCreatureTemplate(petentry);
 
-    auto select = CharacterDatabase.PQuery(
-        "SELECT spell FROM template_pet_spell WHERE entry = '%u' AND active = 1;",
-        petentry);
+    if (!cInfo) return;
+
+    std::string petname = cInfo->name;
+
+    auto select = CharacterDatabase.PQuery("SELECT spell FROM template_pet_spell WHERE name = '%s';", petname.c_str());
 
     if (select)
     {
@@ -3848,14 +3852,14 @@ void LearnPetSpellsFromDB(Player* player)
             uint32 spellId = fields[0].GetUInt32();
 
             if (spellId)
-                pet->LearnSpell(spellId);
+                player->GetPet()->LearnSpell(spellId);
 
         } while (select->NextRow());
     }
 
-    pet->SavePetToDB(PET_SAVE_AS_CURRENT);
+    //player->GetPet()->SetTP(0);
+    player->GetPet()->SavePetToDB(PET_SAVE_AS_CURRENT);
 }
-
 
 void CreateHunterPet(Player *player, Creature * m_creature, uint32 entry)
 {
@@ -4404,20 +4408,9 @@ bool GossipHello_TemplateNPC(Player* player, Creature* creature)
         //player->ADD_GOSSIP_ITEM_EXTENDED(GOSSIP_ICON_CHAT,        "Delete my Equipped Gear.", GOSSIP_SENDER_MAIN, DELETE_GEAR, "Are you sure?", false);
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Buff me please.", GOSSIP_SENDER_MAIN, ALL_BUFFS);
 
-#if TEMPLATE_NPC_ENABLE_PETS
-        // Hunter: zusaetzliches Pet-Template-Menu (DB: template_pets + template_pet_spell)
-        if (TemplateNpc_GetPlayerClassId(player) == CLASS_HUNTER)
-        {
-            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, "Hunter Pet Templates.", GOSSIP_SENDER_MAIN, SHOW_PETS);
+    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Professions & Recipes", GOSSIP_SENDER_MAIN, SHOW_PROF_MENU);
+        bool hasTemplates = TemplateNpcCache::HasAnyForClass(player);
 
-            if (player->GetPet() && player->GetPet()->GetPetType() == HUNTER_PET)
-                player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Make my Pet happy.", GOSSIP_SENDER_MAIN, MAKE_PET_HAPPY);
-        }
-#endif
-
-		bool hasTemplates = TemplateNpcCache::HasAnyForClass(player);
-		std::string clsKey = GetClassKeyString(player);
-		printf("TEMPLATE_NPC: HasAnyForClass=%u classKey=%s\n", hasTemplates ? 1 : 0, clsKey.c_str());
         if (hasTemplates)
         {
             player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Do you have Specifications and Gear Templates?", GOSSIP_SENDER_MAIN, SHOW_SPECS);
@@ -4438,12 +4431,12 @@ bool GossipHello_TemplateNPC(Player* player, Creature* creature)
 }
 
 
-
-// Forward declarations (required for SELECT_SPEC_BASE routing)
-bool GossipSpecs_Template(Player* player, Creature* creature, uint32 uiAction);
+// Forward declaration (needed for SELECT_SPEC_BASE routing)
+static bool GossipSpecs_Template(Player* player, Creature* creature, uint32 uiAction);
 
 bool GossipStart_TemplateNPC(Player* player, Creature* creature, uint32 uiAction)
 {
+    // Spec-Select Routing: Action-Range (SELECT_SPEC_BASE + TabId) auf GossipSpecs_Template umleiten
     if (uiAction >= SELECT_SPEC_BASE)
     {
         uint32 tabId = uiAction - SELECT_SPEC_BASE;
@@ -4472,35 +4465,141 @@ bool GossipStart_TemplateNPC(Player* player, Creature* creature, uint32 uiAction
     }
     else if (uiAction == GET_LVL_60)
     {
-        player->ModifyMoney(100000000);
-        player->GiveLevel(60);
-        LearnQuestSpells(player);
-        LearnAllSpells(player, creature);
-        UpgradePlayerSpellsToMax(player);
-        player->UpdateSkillsToMaxSkillsForLevel();
-        DeleteBagsAndContent(player);
-        AddBags(player);
+        // Level/Lernen Submenu (AutoTrainer-Logik, GREEN-only)
+        player->PlayerTalkClass->ClearMenus();
 
-        if (!player->HasSkill(SKILL_FIRST_AID))
-            LearnProfession(player, creature, SKILL_FIRST_AID);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Alles lernen (aktuelles Level)",            GOSSIP_SENDER_MAIN, LEVEL_LEARN_CURRENT);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "+10 Level und alles lernen",                GOSSIP_SENDER_MAIN, LEVEL_LEARN_PLUS_10);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Bis naechstes 10er-Level und alles lernen", GOSSIP_SENDER_MAIN, LEVEL_LEARN_NEXT_TEN);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Level 60 setzen und alles lernen",          GOSSIP_SENDER_MAIN, LEVEL_LEARN_TO_60);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT,    "Abbrechen",                                 GOSSIP_SENDER_MAIN, LEVEL_LEARN_CANCEL);
 
-        if (!player->HasSkill(SKILL_COOKING))
-            LearnProfession(player, creature, SKILL_COOKING);
+        player->SEND_GOSSIP_MENU(DEFAULT_GOSSIP_MESSAGE, creature->GetObjectGuid());
+    }
+    else if (uiAction == LEVEL_LEARN_CANCEL)
+    {
+        player->CLOSE_GOSSIP_MENU();
+    }
+    else if (uiAction == LEVEL_LEARN_CURRENT)
+    {
+        uint32 learned = AutoLearnCore::LearnAllAtCurrentLevel(player, creature);
+        (void)learned;
+        player->CLOSE_GOSSIP_MENU();
+    }
+    else if (uiAction == LEVEL_LEARN_PLUS_10)
+    {
+        uint32 learned = AutoLearnCore::LevelPlusTenAndLearnAll(player, creature);
+        (void)learned;
+        player->CLOSE_GOSSIP_MENU();
+    }
+    else if (uiAction == LEVEL_LEARN_NEXT_TEN)
+    {
+        uint32 learned = AutoLearnCore::LevelToNextTenAndLearnAll(player, creature);
+        (void)learned;
+        player->CLOSE_GOSSIP_MENU();
+    }
+    else if (uiAction == LEVEL_LEARN_TO_60)
+    {
+        uint32 learned = AutoLearnCore::LevelToAndLearnAll(player, creature, 60);
+        (void)learned;
+        player->CLOSE_GOSSIP_MENU();
+    }
+    else if (uiAction == SHOW_PROF_MENU)
+    {
+        player->PlayerTalkClass->ClearMenus();
 
-        if (!player->HasSkill(SKILL_FISHING))
-            LearnProfession(player, creature, SKILL_FISHING);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "First Aid (learn + all recipes)",   GOSSIP_SENDER_MAIN, PROF_LEARN_FIRST_AID);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Cooking (learn + all recipes)",    GOSSIP_SENDER_MAIN, PROF_LEARN_COOKING);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Fishing (learn + all recipes)",    GOSSIP_SENDER_MAIN, PROF_LEARN_FISHING);
 
-        if (!player->HasSkill(SKILL_TAILORING))
-            LearnProfession(player, creature, SKILL_TAILORING);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Alchemy (learn + all recipes)",        GOSSIP_SENDER_MAIN, PROF_LEARN_ALCHEMY);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Blacksmithing (learn + all recipes)", GOSSIP_SENDER_MAIN, PROF_LEARN_BLACKSMITH);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Enchanting (learn + all recipes)",    GOSSIP_SENDER_MAIN, PROF_LEARN_ENCHANTING);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Engineering (learn + all recipes)",   GOSSIP_SENDER_MAIN, PROF_LEARN_ENGINEERING);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Herbalism (learn + all recipes)",     GOSSIP_SENDER_MAIN, PROF_LEARN_HERBALISM);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Leatherworking (learn + all recipes)",GOSSIP_SENDER_MAIN, PROF_LEARN_LEATHERWORK);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Mining (learn + all recipes)",        GOSSIP_SENDER_MAIN, PROF_LEARN_MINING);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Skinning (learn + all recipes)",      GOSSIP_SENDER_MAIN, PROF_LEARN_SKINNING);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Tailoring (learn + all recipes)",     GOSSIP_SENDER_MAIN, PROF_LEARN_TAILORING);
 
-        if (!player->HasSkill(SKILL_ENGINEERING))
-            LearnProfession(player, creature, SKILL_ENGINEERING);
-
-
-        player->SaveToDB();
-        creature->CastSpell(player, COOL_VISUAL_SPELL, true);
-        player->CastSpell(player, COOL_VISUAL_SPELL_3, true);
-
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TALK, "<- Back", GOSSIP_SENDER_MAIN, PROF_MENU_BACK);
+        player->SEND_GOSSIP_MENU(DEFAULT_GOSSIP_MESSAGE, creature->GetObjectGuid());
+    }
+    else if (uiAction == PROF_MENU_BACK)
+    {
+        // Zurueck ins Hauptmenu
+        return GossipHello_TemplateNPC(player, creature);
+    }
+    else if (uiAction == PROF_LEARN_FIRST_AID)
+    {
+        LearnProfession(player, creature, SKILL_FIRST_AID);
+        LearnAllRecipesProfession(player, SKILL_FIRST_AID);
+        player->CLOSE_GOSSIP_MENU();
+    }
+    else if (uiAction == PROF_LEARN_COOKING)
+    {
+        LearnProfession(player, creature, SKILL_COOKING);
+        LearnAllRecipesProfession(player, SKILL_COOKING);
+        player->CLOSE_GOSSIP_MENU();
+    }
+    else if (uiAction == PROF_LEARN_FISHING)
+    {
+        LearnProfession(player, creature, SKILL_FISHING);
+        LearnAllRecipesProfession(player, SKILL_FISHING);
+        player->CLOSE_GOSSIP_MENU();
+    }
+    else if (uiAction == PROF_LEARN_ALCHEMY)
+    {
+        LearnProfession(player, creature, SKILL_ALCHEMY);
+        LearnAllRecipesProfession(player, SKILL_ALCHEMY);
+        player->CLOSE_GOSSIP_MENU();
+    }
+    else if (uiAction == PROF_LEARN_BLACKSMITH)
+    {
+        LearnProfession(player, creature, SKILL_BLACKSMITHING);
+        LearnAllRecipesProfession(player, SKILL_BLACKSMITHING);
+        player->CLOSE_GOSSIP_MENU();
+    }
+    else if (uiAction == PROF_LEARN_ENCHANTING)
+    {
+        LearnProfession(player, creature, SKILL_ENCHANTING);
+        LearnAllRecipesProfession(player, SKILL_ENCHANTING);
+        player->CLOSE_GOSSIP_MENU();
+    }
+    else if (uiAction == PROF_LEARN_ENGINEERING)
+    {
+        LearnProfession(player, creature, SKILL_ENGINEERING);
+        LearnAllRecipesProfession(player, SKILL_ENGINEERING);
+        player->CLOSE_GOSSIP_MENU();
+    }
+    else if (uiAction == PROF_LEARN_HERBALISM)
+    {
+        LearnProfession(player, creature, SKILL_HERBALISM);
+        LearnAllRecipesProfession(player, SKILL_HERBALISM);
+        player->CLOSE_GOSSIP_MENU();
+    }
+    else if (uiAction == PROF_LEARN_LEATHERWORK)
+    {
+        LearnProfession(player, creature, SKILL_LEATHERWORKING);
+        LearnAllRecipesProfession(player, SKILL_LEATHERWORKING);
+        player->CLOSE_GOSSIP_MENU();
+    }
+    else if (uiAction == PROF_LEARN_MINING)
+    {
+        LearnProfession(player, creature, SKILL_MINING);
+        LearnAllRecipesProfession(player, SKILL_MINING);
+        player->CLOSE_GOSSIP_MENU();
+    }
+    else if (uiAction == PROF_LEARN_SKINNING)
+    {
+        LearnProfession(player, creature, SKILL_SKINNING);
+        LearnAllRecipesProfession(player, SKILL_SKINNING);
+        player->CLOSE_GOSSIP_MENU();
+    }
+    else if (uiAction == PROF_LEARN_TAILORING)
+    {
+        LearnProfession(player, creature, SKILL_TAILORING);
+        LearnAllRecipesProfession(player, SKILL_TAILORING);
         player->CLOSE_GOSSIP_MENU();
     }
     else if (uiAction == SAVE_PET)
@@ -4613,16 +4712,11 @@ bool GossipStart_TemplateNPC(Player* player, Creature* creature, uint32 uiAction
     }
     else if (uiAction == SHOW_SPECS)
     {
-        // Debug: Welche Specs/Tabs werden gefunden und welche Patch-Minima filtern sie weg?
-        // (printf statt sLog, da Log-API je nach Branch variiert)
-        printf("TEMPLATE_NPC: SHOW_SPECS enter (worldPatch=%u)\n", (unsigned)sWorld.GetWowPatch());
-
         const std::vector<uint32>* tabs = TemplateNpcCache::GetTabsForClass(player);
         const char* SpecText = "";
 
         if (tabs)
         {
-            printf("TEMPLATE_NPC: SHOW_SPECS tabs.size=%u\n", (unsigned)tabs->size());
             for (uint32 SpecID : *tabs)
             {
                 // Patch-Filter: pro Spec die kleinste Patch-Anforderung aller Templates in diesem Tab verwenden
@@ -4638,11 +4732,6 @@ bool GossipStart_TemplateNPC(Player* player, Creature* creature, uint32 uiAction
                     }
                     if (patchMin == 255) patchMin = 0;
                 }
-
-                printf("TEMPLATE_NPC: SHOW_SPECS tab=%u tempCount=%u patchMin=%u\n",
-                       (unsigned)SpecID,
-                       (unsigned)(tempIds ? tempIds->size() : 0u),
-                       (unsigned)patchMin);
 
                 if (sWorld.GetWowPatch() >= patchMin)
                 {
@@ -4736,10 +4825,6 @@ bool GossipStart_TemplateNPC(Player* player, Creature* creature, uint32 uiAction
                     player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, ss.str().c_str(), GOSSIP_SENDER_MAIN, SELECT_SPEC_BASE + SpecID);
                 }
             }
-        }
-        else
-        {
-            printf("TEMPLATE_NPC: SHOW_SPECS tabs=NULL\n");
         }
 
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TALK, "<- Back", GOSSIP_SENDER_MAIN, 0);
@@ -4866,17 +4951,9 @@ bool GossipSpecs_Template(Player* player, Creature* creature, uint32 uiAction)
     if (!player || !creature)
         return true;
 
-    // Debug: Nach Spec-Auswahl kommen wir hier rein. Wenn danach "leer" ist,
-    // dann ist tempIds leer oder Patch-Filter (sWorld.GetWowPatch) wirft alles raus.
-    printf("TEMPLATE_NPC: SPEC_SELECT enter (tabId=%u worldPatch=%u)\n",
-           (unsigned)uiAction,
-           (unsigned)sWorld.GetWowPatch());
-
     const std::vector<uint32>* tempIds = TemplateNpcCache::GetTempIdsForTab(player, uiAction);
     if (tempIds)
     {
-        printf("TEMPLATE_NPC: SPEC_SELECT tempIds.size=%u\n", (unsigned)tempIds->size());
-
         std::vector<std::pair<uint32, uint32> > ordered;
         ordered.reserve(tempIds->size());
 
@@ -4894,13 +4971,6 @@ bool GossipSpecs_Template(Player* player, Creature* creature, uint32 uiAction)
             uint32 Patch = it.first;
             uint32 temp_id = it.second;
 
-            const std::string* gtDbg = TemplateNpcCache::GetGossipText(player, temp_id);
-            const char* gtDbgC = gtDbg ? gtDbg->c_str() : "(null)";
-            printf("TEMPLATE_NPC: SPEC_SELECT tid=%u patch=%u name=%s\n",
-                   (unsigned)temp_id,
-                   (unsigned)Patch,
-                   gtDbgC);
-
             if (sWorld.GetWowPatch() < Patch)
                 continue;
 
@@ -4909,10 +4979,6 @@ bool GossipSpecs_Template(Player* player, Creature* creature, uint32 uiAction)
 
             player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, SpecText, GOSSIP_SENDER_TEMP_CONFIRM, temp_id);
         }
-    }
-    else
-    {
-        printf("TEMPLATE_NPC: SPEC_SELECT tempIds=NULL\n");
     }
 
     player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TALK, "<- Back", GOSSIP_SENDER_MAIN, SHOW_SPECS);
