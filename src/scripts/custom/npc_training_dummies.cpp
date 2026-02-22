@@ -15,9 +15,12 @@ enum
 
 enum
 {
-    GOSSIP_ACTION_BOSS_START  = GOSSIP_ACTION_INFO_DEF + 1,
-    GOSSIP_ACTION_BOSS_RESET  = GOSSIP_ACTION_INFO_DEF + 2,
-    GOSSIP_ACTION_BOSS_REPORT = GOSSIP_ACTION_INFO_DEF + 3
+    GOSSIP_ACTION_BOSS_START_1M  = GOSSIP_ACTION_INFO_DEF + 1,
+    GOSSIP_ACTION_BOSS_START_3M  = GOSSIP_ACTION_INFO_DEF + 2,
+    GOSSIP_ACTION_BOSS_START_5M  = GOSSIP_ACTION_INFO_DEF + 3,
+    GOSSIP_ACTION_BOSS_START_10M = GOSSIP_ACTION_INFO_DEF + 4,
+    GOSSIP_ACTION_BOSS_RESET     = GOSSIP_ACTION_INFO_DEF + 5,
+    GOSSIP_ACTION_BOSS_REPORT    = GOSSIP_ACTION_INFO_DEF + 6
 };
 
 namespace TrainingDummy
@@ -25,7 +28,7 @@ namespace TrainingDummy
     // ------------------------------------------------------------
     // Zentrale Konstanten
     // ------------------------------------------------------------
-    static const uint32 kResetAfterIdleMs   = 12000;   // nach X ms ohne Aktivitaet -> Report + Reset
+    static const uint32 kResetAfterIdleMs   = 10000;   // nach X ms ohne Aktivitaet -> Report + Reset   // nach X ms ohne Aktivitaet -> Report + Reset
     static const uint32 kMinFightMs         = 2500;    // Puffer: verhindert "sofort reset" bei kurzem Antippen
     static const uint32 kAnnounceEveryMs    = 0;       // 0 = keine Zwischen-Ansagen
     static const uint32 kMaxTopEntries      = 5;
@@ -40,7 +43,10 @@ namespace TrainingDummy
     static const uint32 kSoundCountdownGo   = 8232; // <- setz hier deine Wunsch-SoundId
 
     // DU wolltest 12 Sekunden:
-    static const uint32 kKickPlayerAfterIdleMs = 12000;
+    static const uint32 kKickPlayerAfterIdleMs = 10000;
+
+    // Sweep-Takt wie im alten Script (Combat/Attacker Cleanup nicht jede Sekunde)
+    static const uint32 kKickSweepIntervalMs  = 15000;
 
     // Rote Combat-Aura (wie dein alter Dummy). Falls deine SpellId anders ist: hier aendern.
     static const uint32 kCombatAuraSpellId = 31309;
@@ -168,6 +174,152 @@ namespace TrainingDummy
 
         me->SetUInt32Value(UNIT_NPC_FLAGS, npcFlags);
     }
+    // ------------------------------------------------------------
+    // "Sickes Programm": Debuffs/Buffs wie im alten Attack-Dummy
+    // ------------------------------------------------------------
+    static void DummyApplyDebuffAura(Creature* me, uint32 spellId)
+    {
+        if (!me || spellId == 0)
+            return;
+
+        if (SpellAuraHolder* pHolder = me->AddAura(spellId))
+        {
+            switch (spellId)
+            {
+                case 16928: // Armor Shatter
+                    pHolder->SetStackAmount(3);
+                    break;
+                case 11597: // Sunder Armor
+                case 12579: // Winter's Chill
+                case 15258: // Shadow Vulnerability (Priest)
+                case 22959: // Improved Scorch
+                    pHolder->SetStackAmount(5);
+                    break;
+                default:
+                    break;
+            }
+
+            pHolder->UpdateAuraDuration();
+            pHolder->SetPermanent(true);
+            pHolder->SetCasterGuid(me->GetGUID() + urand(1, 999999));
+        }
+    }
+
+    static void ApplyImprovedDebuffAura(Unit* unit, Creature* creature, uint32 spellId)
+    {
+        if (!unit || !creature || spellId == 0)
+            return;
+
+        enum Talents
+        {
+            IMPROVED_HUNTERS_MARK_RANK5          = 19425,
+            IMPROVED_SEAL_OF_THE_CRUSADER_RANK3  = 20337,
+        };
+
+        const uint32 talentspells[2] =
+        {
+            IMPROVED_HUNTERS_MARK_RANK5,
+            IMPROVED_SEAL_OF_THE_CRUSADER_RANK3
+        };
+
+        unit->RemoveAurasDueToSpell(spellId);
+
+        // temporär "beste Ränge" als Aura geben (wie alt), dann Debuff setzen, danach wieder weg
+        if (unit->IsPlayer())
+        {
+            Player* p = unit->ToPlayer();
+            for (uint32 i = 0; i < 2; ++i)
+            {
+                if (!p->HasSpell(talentspells[i]) && !p->HasAura(talentspells[i]))
+                    p->AddAura(talentspells[i]);
+            }
+        }
+
+        creature->AddAura(spellId, ADD_AURA_PERMANENT, unit);
+
+        if (unit->IsPlayer())
+        {
+            Player* p = unit->ToPlayer();
+            for (uint32 i = 0; i < 2; ++i)
+            {
+                if (!p->HasSpell(talentspells[i]) && p->HasAura(talentspells[i]))
+                    p->RemoveAurasDueToSpell(talentspells[i]);
+            }
+        }
+    }
+
+    static void ApplyBuffsAndDebuffs(Creature* me)
+    {
+        if (!me)
+            return;
+
+        if (!me->IsInCombat())
+            return;
+
+        // wie alt: Debuffs nur auf Elite + Boss-Dummies
+        if (!me->IsElite())
+            return;
+
+        switch (me->GetEntry())
+        {
+            case 60003: // caster mob
+                DummyApplyDebuffAura(me, 21992); // Thunderfury
+                DummyApplyDebuffAura(me, 12579); // Winter's Chill
+                DummyApplyDebuffAura(me, 17937); // Curse of Shadow
+                DummyApplyDebuffAura(me, 17800); // Shadow Vulnerability (Warlock)
+                DummyApplyDebuffAura(me, 15258); // Shadow Vulnerability (Priest)
+                DummyApplyDebuffAura(me, 11722); // Curse of the Elements
+                DummyApplyDebuffAura(me, 22959); // Improved Scorch
+                DummyApplyDebuffAura(me, 23605); // Spell Vulnerability (Nightfall)
+                break;
+
+            case 60002: // melee mob
+                DummyApplyDebuffAura(me, 21992); // Thunderfury
+                DummyApplyDebuffAura(me, 11374); // Gift of Arthas
+                DummyApplyDebuffAura(me, 9907);  // Faerie Fire
+                DummyApplyDebuffAura(me, 11597); // Sunder Armor
+                DummyApplyDebuffAura(me, 16928); // Armor Shatter
+                DummyApplyDebuffAura(me, 11717); // Curse of Recklessness
+                DummyApplyDebuffAura(me, 23577); // Expose Weakness
+                break;
+
+            default:
+                break;
+        }
+    }
+
+    static void ApplyBossDebuffs(Creature* me)
+    {
+        // Zweck: Boss-Dummy bekommt die "vollen" Debuffs wie im alten Attack-Dummy.
+        // Hinweis: Permanent Auren -> einmal setzen reicht, wir sweepten trotzdem periodisch falls Aura-Limits greifen.
+        if (!me)
+            return;
+
+        if (!me->IsInCombat())
+            return;
+
+        if (!me->IsElite())
+            return;
+
+        // Union aus melee + caster (alte Datei hatte teilweise doppelte Eintraege)
+        DummyApplyDebuffAura(me, 21992); // Thunderfury
+        DummyApplyDebuffAura(me, 11374); // Gift of Arthas
+        DummyApplyDebuffAura(me, 9907);  // Faerie Fire
+        DummyApplyDebuffAura(me, 11597); // Sunder Armor
+        DummyApplyDebuffAura(me, 16928); // Armor Shatter
+        DummyApplyDebuffAura(me, 11717); // Curse of Recklessness
+        DummyApplyDebuffAura(me, 23577); // Expose Weakness
+
+        DummyApplyDebuffAura(me, 12579); // Winter's Chill
+        DummyApplyDebuffAura(me, 17937); // Curse of Shadow
+        DummyApplyDebuffAura(me, 17800); // Shadow Vulnerability (Warlock)
+        DummyApplyDebuffAura(me, 15258); // Shadow Vulnerability (Priest)
+        DummyApplyDebuffAura(me, 11722); // Curse of the Elements
+        DummyApplyDebuffAura(me, 22959); // Improved Scorch
+        DummyApplyDebuffAura(me, 23605); // Spell Vulnerability (Nightfall)
+    }
+
+
 }
 
 // ============================================================
@@ -177,7 +329,7 @@ struct npc_damage_dummyAI : public ScriptedAI
 {
     npc_damage_dummyAI(Creature* c) : ScriptedAI(c),
         mActive(false), mElapsedMs(0), mIdleMs(0), mHomeOri(0.0f),
-        mKickSweepMs(0)
+        mKickSweepMs(0), mDebuffSweepMs(0)
     {
         Reset();
     }
@@ -192,6 +344,8 @@ struct npc_damage_dummyAI : public ScriptedAI
 
     uint32 mKickSweepMs;
 
+    uint32 mDebuffSweepMs;
+
     std::map<ObjectGuid, uint64>  mDamageByPlayer;
     std::map<ObjectGuid, time_t>  mLastActivityTs; // letzte Aktivitaet als epoch-seconds
 
@@ -203,6 +357,7 @@ struct npc_damage_dummyAI : public ScriptedAI
         mElapsedMs   = 0;
         mIdleMs      = 0;
         mKickSweepMs = 0;
+        mDebuffSweepMs = 0;
 
         mDamageByPlayer.clear();
         mLastActivityTs.clear();
@@ -380,11 +535,11 @@ struct npc_damage_dummyAI : public ScriptedAI
         // Zeit laeuft immer
         mElapsedMs += diff;
 
-        // Sweep alle 1s
+        // Sweep wie im alten Script (15s)
         if (mKickSweepMs <= diff)
         {
             KickInactivePlayers();
-            mKickSweepMs = 1000;
+            mKickSweepMs = TrainingDummy::kKickSweepIntervalMs;
         }
         else
             mKickSweepMs -= diff;
@@ -394,12 +549,10 @@ struct npc_damage_dummyAI : public ScriptedAI
 
         mIdleMs += diff;
 
-        // Reset nur wenn Fight "echt" laeuft (Puffer)
         if (mIdleMs >= TrainingDummy::kResetAfterIdleMs && mElapsedMs >= TrainingDummy::kMinFightMs)
             FinishAndReset();
     }
 };
-
 static CreatureAI* GetAI_npc_damage_dummy(Creature* pCreature)
 {
     return new npc_damage_dummyAI(pCreature);
@@ -459,26 +612,26 @@ struct npc_heal_dummyAI : public ScriptedAI
         mHealByPlayer.clear();
         mLastActivityTs.clear();
 
-        if (me)
-        {
-            mHomeOri = me->GetOrientation();
+        if (!me)
+            return;
 
-            me->SetReactState(REACT_PASSIVE);
-            SetCombatMovement(false);
+        mHomeOri = me->GetOrientation();
 
-            me->CombatStop(true);
-            me->DeleteThreatList();
-            me->AttackStop();
-            me->SetTargetGuid(ObjectGuid());
-            me->ClearInCombat();
+        me->SetReactState(REACT_PASSIVE);
+        SetCombatMovement(false);
 
-            TrainingDummy::SetCombatAura(me, false);
+        me->CombatStop(true);
+        me->DeleteThreatList();
+        me->AttackStop();
+        me->SetTargetGuid(ObjectGuid());
+        me->ClearInCombat();
 
-            ClampToTargetHP();
-            mEvents.ScheduleEvent(TrainingDummy::EVENT_HEALDUMMY_CLAMPHP, TrainingDummy::kHealDummyTickMs);
+        TrainingDummy::SetCombatAura(me, false);
 
-            TrainingDummy::FreezeInPlace(me, mHomeOri);
-        }
+        ClampToTargetHP();
+        mEvents.ScheduleEvent(TrainingDummy::EVENT_HEALDUMMY_CLAMPHP, TrainingDummy::kHealDummyTickMs);
+
+        TrainingDummy::FreezeInPlace(me, mHomeOri);
     }
 
     void StartIfNeeded()
@@ -539,7 +692,6 @@ struct npc_heal_dummyAI : public ScriptedAI
         Reset();
     }
 
-    // bei dir: AI()->HealedBy(pUnit, addhealth) (uint32 by value)
     void HealedBy(Unit* healer, uint32 heal)
     {
         TrainingDummy::FreezeInPlace(me, mHomeOri);
@@ -641,15 +793,16 @@ struct npc_heal_dummyAI : public ScriptedAI
         if (mKickSweepMs <= diff)
         {
             KickInactivePlayers();
-            mKickSweepMs = 1000;
+            mKickSweepMs = TrainingDummy::kKickSweepIntervalMs;
         }
         else
             mKickSweepMs -= diff;
 
-        if (!mActive)
-            return;
-
-        mIdleMs += diff;
+        // Idle -> Fight Ende (wie Damage Dummy)
+        if (mLastActivityTs.empty())
+            mIdleMs += diff;
+        else
+            mIdleMs = 0;
 
         if (mIdleMs >= TrainingDummy::kResetAfterIdleMs && mElapsedMs >= TrainingDummy::kMinFightMs)
             FinishAndReset();
@@ -660,16 +813,15 @@ static CreatureAI* GetAI_npc_heal_dummy(Creature* pCreature)
 {
     return new npc_heal_dummyAI(pCreature);
 }
-
-// ============================================================
 // Boss Dummy AI (ScriptName: npc_boss_dummy) + Gossip
 // ============================================================
 struct npc_boss_dummyAI : public ScriptedAI
 {
     npc_boss_dummyAI(Creature* c) : ScriptedAI(c),
-        mCountingDown(false), mActive(false), mCountdownLeft(0),
+        mCountingDown(false), mActive(false), mFightStarted(false), mCountdownLeft(0),
         mElapsedMs(0), mIdleMs(0), mHomeOri(0.0f), mNpcFlagsOriginal(1),
-        mKickSweepMs(0)
+        mKickSweepMs(0), mDebuffSweepMs(0), mBuffSweepMs(0), mWindfurySweepMs(0),
+        mFightDurationMs(300000), mExecuteAtMs(240000), mDidExecute(false)
     {
         Reset();
     }
@@ -678,6 +830,7 @@ struct npc_boss_dummyAI : public ScriptedAI
 
     bool   mCountingDown;
     bool   mActive;
+    bool   mFightStarted;
     uint32 mCountdownLeft;
     uint32 mElapsedMs;
     uint32 mIdleMs;
@@ -688,6 +841,14 @@ struct npc_boss_dummyAI : public ScriptedAI
 
     uint32 mKickSweepMs;
 
+    uint32 mDebuffSweepMs;
+    uint32 mBuffSweepMs;
+    uint32 mWindfurySweepMs;
+
+    uint32 mFightDurationMs;
+    uint32 mExecuteAtMs;
+    bool   mDidExecute;
+
     std::map<ObjectGuid, uint64>  mDamageByPlayer;
     std::map<ObjectGuid, time_t>  mLastActivityTs;
 
@@ -697,11 +858,20 @@ struct npc_boss_dummyAI : public ScriptedAI
 
         mCountingDown  = false;
         mActive        = false;
+        mFightStarted  = false;
         mCountdownLeft = 0;
 
         mElapsedMs     = 0;
         mIdleMs        = 0;
         mKickSweepMs   = 0;
+        mDebuffSweepMs = 0;
+        mBuffSweepMs = 0;
+        mWindfurySweepMs = 0;
+
+        // Default: 5 Minuten (wie alter Dummy)
+        mFightDurationMs = 300000;
+        mExecuteAtMs     = 240000;
+        mDidExecute      = false;
 
         mDamageByPlayer.clear();
         mLastActivityTs.clear();
@@ -756,6 +926,24 @@ struct npc_boss_dummyAI : public ScriptedAI
         mEvents.ScheduleEvent(TrainingDummy::EVENT_BOSS_COUNTDOWN_TICK, 1000);
     }
 
+    void ConfigureFightDuration(uint32 durationMs)
+    {
+        // 4 Modi: 1/3/5/10 Minuten
+        // Execute-Zeitpunkte: kurz vor Ende (wie beim alten Verhalten).
+        mFightDurationMs = durationMs;
+
+        if (durationMs <= 60000)
+            mExecuteAtMs = 45000;     // 0:45
+        else if (durationMs <= 180000)
+            mExecuteAtMs = 150000;    // 2:30
+        else if (durationMs <= 300000)
+            mExecuteAtMs = 240000;    // 4:00
+        else
+            mExecuteAtMs = 480000;    // 8:00
+
+        mDidExecute = false;
+    }
+
     void BeginCombatTracking()
     {
         if (!me)
@@ -763,6 +951,7 @@ struct npc_boss_dummyAI : public ScriptedAI
 
         mCountingDown = false;
         mActive       = true;
+        mFightStarted = false; // Fight-Uhr startet erst beim ersten Aggro/Hit (wie alt)
 
         mElapsedMs = 0;
         mIdleMs    = 0;
@@ -860,6 +1049,18 @@ struct npc_boss_dummyAI : public ScriptedAI
         if (!owner)
             return;
 
+        // Fight beginnt erst mit dem ersten echten Treffer (Timer ab erstem Aggro)
+        if (!mFightStarted)
+        {
+            mFightStarted = true;
+            mElapsedMs    = 0;
+            mIdleMs       = 0;
+            mDidExecute   = false;
+            // Debuffs sofort setzen, damit der Fight von Sekunde 1 an korrekt ist
+            TrainingDummy::ApplyBossDebuffs(me);
+            mDebuffSweepMs = 0;
+        }
+
         TrainingDummy::EnsureCombat(me, doneBy);
         mLastActivityTs[owner->GetObjectGuid()] = std::time(nullptr);
 
@@ -949,16 +1150,57 @@ struct npc_boss_dummyAI : public ScriptedAI
         if (!mActive)
             return;
 
-        mElapsedMs += diff;
-        mIdleMs    += diff;
+        // WICHTIG: Fight-Uhr laeuft erst ab erstem Aggro/Hit.
+        if (mFightStarted)
+        {
+            mElapsedMs += diff;
+
+            // Idle nur zaehlen, wenn niemand mehr aktiv ist
+            if (mLastActivityTs.empty())
+                mIdleMs += diff;
+            else
+                mIdleMs = 0;
+
+            // Debuffs (Boss) regelmaessig nachsetzen (falls Aura-Limit greift)
+            if (mDebuffSweepMs <= diff)
+            {
+                TrainingDummy::ApplyBossDebuffs(me);
+                mDebuffSweepMs = 5000;
+            }
+            else
+                mDebuffSweepMs -= diff;
+
+            // Execute-Phase: nach X Minuten auf 19% setzen.
+            if (!mDidExecute && mElapsedMs >= mExecuteAtMs)
+            {
+                const uint32 maxHp = me->GetMaxHealth();
+                const uint32 newHp = std::max<uint32>(TrainingDummy::kDamageDummyMinHp, (maxHp * 19) / 100);
+                me->SetHealth(newHp);
+                me->MonsterTextEmote("Boss Dummy: Execute-Phase (19%).", nullptr);
+                mDidExecute = true;
+            }
+        }
+        else
+        {
+            // Vor erstem Hit keine Idle-Resets ausloesen
+            mIdleMs = 0;
+        }
 
         if (mKickSweepMs <= diff)
         {
             KickInactivePlayers();
-            mKickSweepMs = 1000;
+            mKickSweepMs = TrainingDummy::kKickSweepIntervalMs;
         }
         else
             mKickSweepMs -= diff;
+
+        // Kampfende nach gewaehlter Dauer: Report + Reset
+        if (mFightStarted && mElapsedMs >= mFightDurationMs)
+        {
+            me->MonsterTextEmote("Boss Dummy: Fight Ende.", nullptr);
+            FinishAndReset();
+            return;
+        }
 
         if (mIdleMs >= TrainingDummy::kResetAfterIdleMs && mElapsedMs >= TrainingDummy::kMinFightMs)
             FinishAndReset();
@@ -975,9 +1217,12 @@ static bool GossipHello_npc_boss_dummy(Player* pPlayer, Creature* pCreature)
     if (!pPlayer || !pCreature)
         return true;
 
-    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Start (10s Pull)", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_BOSS_START);
-    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Report (jetzt)",   GOSSIP_SENDER_MAIN, GOSSIP_ACTION_BOSS_REPORT);
-    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Reset",            GOSSIP_SENDER_MAIN, GOSSIP_ACTION_BOSS_RESET);
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Start 1 Minute (10s Pull)",   GOSSIP_SENDER_MAIN, GOSSIP_ACTION_BOSS_START_1M);
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Start 3 Minuten (10s Pull)",  GOSSIP_SENDER_MAIN, GOSSIP_ACTION_BOSS_START_3M);
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Start 5 Minuten (10s Pull)",  GOSSIP_SENDER_MAIN, GOSSIP_ACTION_BOSS_START_5M);
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Start 10 Minuten (10s Pull)", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_BOSS_START_10M);
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Report (jetzt)",              GOSSIP_SENDER_MAIN, GOSSIP_ACTION_BOSS_REPORT);
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Reset",                       GOSSIP_SENDER_MAIN, GOSSIP_ACTION_BOSS_RESET);
 
     pPlayer->SEND_GOSSIP_MENU(DEFAULT_GOSSIP_MESSAGE, pCreature->GetObjectGuid());
     return true;
@@ -996,7 +1241,23 @@ static bool GossipSelect_npc_boss_dummy(Player* pPlayer, Creature* pCreature, ui
 
     switch (action)
     {
-        case GOSSIP_ACTION_BOSS_START:
+        case GOSSIP_ACTION_BOSS_START_1M:
+            ai->ConfigureFightDuration(60000);
+            ai->StartCountdown(10);
+            break;
+
+        case GOSSIP_ACTION_BOSS_START_3M:
+            ai->ConfigureFightDuration(180000);
+            ai->StartCountdown(10);
+            break;
+
+        case GOSSIP_ACTION_BOSS_START_5M:
+            ai->ConfigureFightDuration(300000);
+            ai->StartCountdown(10);
+            break;
+
+        case GOSSIP_ACTION_BOSS_START_10M:
+            ai->ConfigureFightDuration(600000);
             ai->StartCountdown(10);
             break;
 
