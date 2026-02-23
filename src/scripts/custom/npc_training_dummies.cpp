@@ -818,10 +818,10 @@ static CreatureAI* GetAI_npc_heal_dummy(Creature* pCreature)
 struct npc_boss_dummyAI : public ScriptedAI
 {
     npc_boss_dummyAI(Creature* c) : ScriptedAI(c),
-        mCountingDown(false), mActive(false), mFightStarted(false), mCountdownLeft(0),
+        mCountingDown(false), mActive(false), mCountdownLeft(0),
+        mFightDurationMs(0), mFightStarted(false), mFightElapsedMs(0),
         mElapsedMs(0), mIdleMs(0), mHomeOri(0.0f), mNpcFlagsOriginal(1),
-        mKickSweepMs(0), mDebuffSweepMs(0), mBuffSweepMs(0), mWindfurySweepMs(0),
-        mFightDurationMs(300000), mExecuteAtMs(240000), mDidExecute(false)
+        mKickSweepMs(0), mDebuffSweepMs(0)
     {
         Reset();
     }
@@ -830,9 +830,13 @@ struct npc_boss_dummyAI : public ScriptedAI
 
     bool   mCountingDown;
     bool   mActive;
-    bool   mFightStarted;
     uint32 mCountdownLeft;
-    uint32 mElapsedMs;
+
+    uint32 mFightDurationMs;   // Auswahl via Gossip (1/3/5/10 Min)
+    bool   mFightStarted;      // startet erst beim ersten Hit/Aggro
+    uint32 mFightElapsedMs;    // laeuft nur wenn mFightStarted
+
+    uint32 mElapsedMs;         // weiterhin fuer Report/Legacy (falls gebraucht)
     uint32 mIdleMs;
 
     float  mHomeOri;
@@ -840,14 +844,7 @@ struct npc_boss_dummyAI : public ScriptedAI
     uint32 mNpcFlagsOriginal;
 
     uint32 mKickSweepMs;
-
     uint32 mDebuffSweepMs;
-    uint32 mBuffSweepMs;
-    uint32 mWindfurySweepMs;
-
-    uint32 mFightDurationMs;
-    uint32 mExecuteAtMs;
-    bool   mDidExecute;
 
     std::map<ObjectGuid, uint64>  mDamageByPlayer;
     std::map<ObjectGuid, time_t>  mLastActivityTs;
@@ -858,20 +855,16 @@ struct npc_boss_dummyAI : public ScriptedAI
 
         mCountingDown  = false;
         mActive        = false;
-        mFightStarted  = false;
         mCountdownLeft = 0;
+
+        mFightDurationMs = 0;
+        mFightStarted    = false;
+        mFightElapsedMs  = 0;
 
         mElapsedMs     = 0;
         mIdleMs        = 0;
         mKickSweepMs   = 0;
         mDebuffSweepMs = 0;
-        mBuffSweepMs = 0;
-        mWindfurySweepMs = 0;
-
-        // Default: 5 Minuten (wie alter Dummy)
-        mFightDurationMs = 300000;
-        mExecuteAtMs     = 240000;
-        mDidExecute      = false;
 
         mDamageByPlayer.clear();
         mLastActivityTs.clear();
@@ -904,12 +897,14 @@ struct npc_boss_dummyAI : public ScriptedAI
         TrainingDummy::FreezeInPlace(me, mHomeOri);
     }
 
-    void StartCountdown(uint32 seconds)
+    void StartCountdown(uint32 seconds, uint32 fightDurationMs)
     {
         Reset();
 
         if (!me)
             return;
+
+        mFightDurationMs = fightDurationMs;
 
         mCountingDown  = true;
         mCountdownLeft = (seconds > 0 ? seconds : 1);
@@ -926,24 +921,6 @@ struct npc_boss_dummyAI : public ScriptedAI
         mEvents.ScheduleEvent(TrainingDummy::EVENT_BOSS_COUNTDOWN_TICK, 1000);
     }
 
-    void ConfigureFightDuration(uint32 durationMs)
-    {
-        // 4 Modi: 1/3/5/10 Minuten
-        // Execute-Zeitpunkte: kurz vor Ende (wie beim alten Verhalten).
-        mFightDurationMs = durationMs;
-
-        if (durationMs <= 60000)
-            mExecuteAtMs = 45000;     // 0:45
-        else if (durationMs <= 180000)
-            mExecuteAtMs = 150000;    // 2:30
-        else if (durationMs <= 300000)
-            mExecuteAtMs = 240000;    // 4:00
-        else
-            mExecuteAtMs = 480000;    // 8:00
-
-        mDidExecute = false;
-    }
-
     void BeginCombatTracking()
     {
         if (!me)
@@ -951,7 +928,10 @@ struct npc_boss_dummyAI : public ScriptedAI
 
         mCountingDown = false;
         mActive       = true;
-        mFightStarted = false; // Fight-Uhr startet erst beim ersten Aggro/Hit (wie alt)
+
+        // WICHTIG: Timer startet NICHT hier, sondern beim ersten Hit/Aggro
+        mFightStarted   = false;
+        mFightElapsedMs = 0;
 
         mElapsedMs = 0;
         mIdleMs    = 0;
@@ -964,7 +944,6 @@ struct npc_boss_dummyAI : public ScriptedAI
         SetCombatMovement(false);
 
         TrainingDummy::FreezeInPlace(me, mHomeOri);
-
         TrainingDummy::SetCombatAura(me, true);
 
         me->PlayDirectSound(TrainingDummy::kSoundCountdownGo, 0);
@@ -976,7 +955,7 @@ struct npc_boss_dummyAI : public ScriptedAI
         if (!me)
             return;
 
-        const float seconds = std::max(1.0f, float(mElapsedMs) / 1000.0f);
+        const float seconds = std::max(1.0f, float(mFightStarted ? mFightElapsedMs : mElapsedMs) / 1000.0f);
 
         uint64 total = 0;
         for (const auto& it : mDamageByPlayer)
@@ -1010,6 +989,47 @@ struct npc_boss_dummyAI : public ScriptedAI
             std::string line = ss.str();
             me->MonsterTextEmote(line.c_str(), nullptr);
         }
+    }
+
+    void ForceEndFightAndReset()
+    {
+        if (!me)
+            return;
+
+        // Report sofort (wie alt)
+        if (mActive && mFightStarted)
+            Report();
+
+        // alle Teilnehmer sofort aus Combat (wie alt)
+        for (auto it = mLastActivityTs.begin(); it != mLastActivityTs.end(); ++it)
+        {
+            Unit* u = me->GetMap() ? me->GetMap()->GetUnit(it->first) : nullptr;
+            if (!u || !u->IsInWorld())
+                continue;
+
+            if (u->IsPlayer())
+            {
+                Player* p = u->ToPlayer();
+                p->CombatStopWithPets(true);
+                p->CombatStop(true);
+            }
+
+            me->_removeAttacker(u);
+        }
+
+        // Dummy-seitig hart aufraeumen
+        me->AttackStop();
+        me->CombatStop(true);
+        me->DeleteThreatList();
+        me->SetTargetGuid(ObjectGuid());
+        me->ClearInCombat();
+
+        TrainingDummy::SetCombatAura(me, false);
+
+        TrainingDummy::RestoreGossip(me, mNpcFlagsOriginal);
+
+        // kompletter Reset (setzt HP etc)
+        Reset();
     }
 
     void FinishAndReset()
@@ -1049,16 +1069,25 @@ struct npc_boss_dummyAI : public ScriptedAI
         if (!owner)
             return;
 
-        // Fight beginnt erst mit dem ersten echten Treffer (Timer ab erstem Aggro)
+        // Start Fight-Timer beim ersten echten Hit/Aggro
         if (!mFightStarted)
         {
-            mFightStarted = true;
-            mElapsedMs    = 0;
-            mIdleMs       = 0;
-            mDidExecute   = false;
-            // Debuffs sofort setzen, damit der Fight von Sekunde 1 an korrekt ist
+            mFightStarted   = true;
+            mFightElapsedMs = 0;
+            mElapsedMs      = 0;
+            mIdleMs         = 0;
+
+            // Debuffs sofort setzen (wie alt)
             TrainingDummy::ApplyBossDebuffs(me);
-            mDebuffSweepMs = 0;
+
+            // erste Message mit Dauer
+            if (mFightDurationMs > 0)
+            {
+                std::ostringstream ss;
+                ss << "Boss Dummy: Fight gestartet (" << (mFightDurationMs / 60000) << " Min).";
+                std::string msg = ss.str();
+                me->MonsterTextEmote(msg.c_str(), nullptr);
+            }
         }
 
         TrainingDummy::EnsureCombat(me, doneBy);
@@ -1150,18 +1179,16 @@ struct npc_boss_dummyAI : public ScriptedAI
         if (!mActive)
             return;
 
-        // WICHTIG: Fight-Uhr laeuft erst ab erstem Aggro/Hit.
+        // Idle/Legacy
+        mElapsedMs += diff;
+        mIdleMs    += diff;
+
+        // Fight-Timer: laeuft nur ab erstem Hit
         if (mFightStarted)
         {
-            mElapsedMs += diff;
+            mFightElapsedMs += diff;
 
-            // Idle nur zaehlen, wenn niemand mehr aktiv ist
-            if (mLastActivityTs.empty())
-                mIdleMs += diff;
-            else
-                mIdleMs = 0;
-
-            // Debuffs (Boss) regelmaessig nachsetzen (falls Aura-Limit greift)
+            // Debuffs periodisch nachsetzen (falls Aura-Limits / Dispel / etc.)
             if (mDebuffSweepMs <= diff)
             {
                 TrainingDummy::ApplyBossDebuffs(me);
@@ -1170,20 +1197,12 @@ struct npc_boss_dummyAI : public ScriptedAI
             else
                 mDebuffSweepMs -= diff;
 
-            // Execute-Phase: nach X Minuten auf 19% setzen.
-            if (!mDidExecute && mElapsedMs >= mExecuteAtMs)
+            // Harte Laufzeit
+            if (mFightDurationMs > 0 && mFightElapsedMs >= mFightDurationMs)
             {
-                const uint32 maxHp = me->GetMaxHealth();
-                const uint32 newHp = std::max<uint32>(TrainingDummy::kDamageDummyMinHp, (maxHp * 19) / 100);
-                me->SetHealth(newHp);
-                me->MonsterTextEmote("Boss Dummy: Execute-Phase (19%).", nullptr);
-                mDidExecute = true;
+                ForceEndFightAndReset();
+                return;
             }
-        }
-        else
-        {
-            // Vor erstem Hit keine Idle-Resets ausloesen
-            mIdleMs = 0;
         }
 
         if (mKickSweepMs <= diff)
@@ -1194,18 +1213,12 @@ struct npc_boss_dummyAI : public ScriptedAI
         else
             mKickSweepMs -= diff;
 
-        // Kampfende nach gewaehlter Dauer: Report + Reset
-        if (mFightStarted && mElapsedMs >= mFightDurationMs)
-        {
-            me->MonsterTextEmote("Boss Dummy: Fight Ende.", nullptr);
-            FinishAndReset();
-            return;
-        }
-
+        // Safety: wenn keiner mehr aktiv ist -> normaler Reset (wie vorher)
         if (mIdleMs >= TrainingDummy::kResetAfterIdleMs && mElapsedMs >= TrainingDummy::kMinFightMs)
             FinishAndReset();
     }
 };
+
 
 static CreatureAI* GetAI_npc_boss_dummy(Creature* pCreature)
 {
@@ -1242,23 +1255,19 @@ static bool GossipSelect_npc_boss_dummy(Player* pPlayer, Creature* pCreature, ui
     switch (action)
     {
         case GOSSIP_ACTION_BOSS_START_1M:
-            ai->ConfigureFightDuration(60000);
-            ai->StartCountdown(10);
+            ai->StartCountdown(10, 1 * 60 * 1000);
             break;
 
         case GOSSIP_ACTION_BOSS_START_3M:
-            ai->ConfigureFightDuration(180000);
-            ai->StartCountdown(10);
+            ai->StartCountdown(10, 3 * 60 * 1000);
             break;
 
         case GOSSIP_ACTION_BOSS_START_5M:
-            ai->ConfigureFightDuration(300000);
-            ai->StartCountdown(10);
+            ai->StartCountdown(10, 5 * 60 * 1000);
             break;
 
         case GOSSIP_ACTION_BOSS_START_10M:
-            ai->ConfigureFightDuration(600000);
-            ai->StartCountdown(10);
+            ai->StartCountdown(10, 10 * 60 * 1000);
             break;
 
         case GOSSIP_ACTION_BOSS_REPORT:
