@@ -1017,15 +1017,20 @@ struct npc_boss_dummyAI : public ScriptedAI
             me->_removeAttacker(u);
         }
 
-        // Dummy-seitig hart aufraeumen
+        // --- Dummy-seitig hart aufraeumen ---
         me->AttackStop();
         me->CombatStop(true);
         me->DeleteThreatList();
         me->SetTargetGuid(ObjectGuid());
         me->ClearInCombat();
 
-        TrainingDummy::SetCombatAura(me, false);
+        // WICHTIG: alle Debuffs/Buffs komplett entfernen (sonst bleiben Boss-Debuffs haengen)
+        me->RemoveAllAuras();
 
+        // Falls dein Core das hat (manche Branches): auch AuraStates resetten
+        me->ClearAllReactives(); // optional, nur falls vorhanden
+
+        TrainingDummy::SetCombatAura(me, false);
         TrainingDummy::RestoreGossip(me, mNpcFlagsOriginal);
 
         // kompletter Reset (setzt HP etc)
