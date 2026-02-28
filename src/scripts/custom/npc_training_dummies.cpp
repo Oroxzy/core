@@ -377,6 +377,9 @@ struct npc_damage_dummyAI : public ScriptedAI
             me->SetTargetGuid(ObjectGuid());
             me->ClearInCombat();
 
+        // kompletter Aura-Reset (auch Debuffs) bei jedem Reset
+        me->RemoveAllAuras();
+
             TrainingDummy::SetCombatAura(me, false);
             TrainingDummy::FreezeInPlace(me, mHomeOri);
         }
@@ -524,6 +527,9 @@ struct npc_damage_dummyAI : public ScriptedAI
             me->SetTargetGuid(ObjectGuid());
             me->ClearInCombat();
 
+        // kompletter Aura-Reset (auch Debuffs) bei jedem Reset
+        me->RemoveAllAuras();
+
             TrainingDummy::SetCombatAura(me, false);
         }
     }
@@ -625,6 +631,9 @@ struct npc_heal_dummyAI : public ScriptedAI
         me->AttackStop();
         me->SetTargetGuid(ObjectGuid());
         me->ClearInCombat();
+
+        // kompletter Aura-Reset (auch Debuffs) bei jedem Reset
+        me->RemoveAllAuras();
 
         TrainingDummy::SetCombatAura(me, false);
 
@@ -770,6 +779,9 @@ struct npc_heal_dummyAI : public ScriptedAI
             me->AttackStop();
             me->SetTargetGuid(ObjectGuid());
             me->ClearInCombat();
+
+        // kompletter Aura-Reset (auch Debuffs) bei jedem Reset
+        me->RemoveAllAuras();
             TrainingDummy::SetCombatAura(me, false);
         }
     }
@@ -892,6 +904,9 @@ struct npc_boss_dummyAI : public ScriptedAI
         me->AttackStop();
         me->SetTargetGuid(ObjectGuid());
         me->ClearInCombat();
+
+        // kompletter Aura-Reset (auch Debuffs) bei jedem Reset
+        me->RemoveAllAuras();
 
         TrainingDummy::SetCombatAura(me, false);
         TrainingDummy::FreezeInPlace(me, mHomeOri);
@@ -1145,6 +1160,9 @@ struct npc_boss_dummyAI : public ScriptedAI
             me->AttackStop();
             me->SetTargetGuid(ObjectGuid());
             me->ClearInCombat();
+
+        // kompletter Aura-Reset (auch Debuffs) bei jedem Reset
+        me->RemoveAllAuras();
             TrainingDummy::SetCombatAura(me, false);
         }
     }
