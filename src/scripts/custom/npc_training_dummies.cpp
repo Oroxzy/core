@@ -1,4 +1,5 @@
 #include "scriptPCH.h"
+#include "ObjectMgr.h"
 #include "Utilities/EventMap.h"
 
 #include <map>
@@ -15,14 +16,63 @@ enum
 
 enum
 {
+    // Raid/Boss Auswahl (Boss Dummy Gossip)
+    GOSSIP_ACTION_RAID_BASE      = GOSSIP_ACTION_INFO_DEF + 10,   // + index
+    GOSSIP_ACTION_BOSS_BASE      = GOSSIP_ACTION_INFO_DEF + 1000, // + index (global)
+    GOSSIP_ACTION_BACK_TO_RAIDS  = GOSSIP_ACTION_INFO_DEF + 9000,
+    GOSSIP_ACTION_BACK_TO_BOSSES = GOSSIP_ACTION_INFO_DEF + 9001,
+
+    // Timer Auswahl
     GOSSIP_ACTION_BOSS_START_1M  = GOSSIP_ACTION_INFO_DEF + 1,
     GOSSIP_ACTION_BOSS_START_3M  = GOSSIP_ACTION_INFO_DEF + 2,
     GOSSIP_ACTION_BOSS_START_5M  = GOSSIP_ACTION_INFO_DEF + 3,
     GOSSIP_ACTION_BOSS_START_10M = GOSSIP_ACTION_INFO_DEF + 4,
+
     GOSSIP_ACTION_BOSS_RESET     = GOSSIP_ACTION_INFO_DEF + 5,
     GOSSIP_ACTION_BOSS_REPORT    = GOSSIP_ACTION_INFO_DEF + 6
 };
 
+
+// ------------------------------------------------------------
+// Boss-Dummy: Raid/Boss Auswahl (hardcoded Liste)
+// Du kannst hier ganz einfach Boss-Entries ergaenzen/korrekturen machen.
+// ------------------------------------------------------------
+struct RaidBossDef
+{
+    const char* raidName;
+    std::vector<uint32> bossEntries;
+};
+
+static const RaidBossDef kRaidBossMenus[] =
+{
+    // Naxxramas (Beispiele)
+    { "Naxxramas", { 16028 /*Patchwerk*/, 15956 /*Anub'Rekhan*/, 16060 /*Gothik the Harvester*/, 15990 /*Kel'Thuzad (DB abhaengig)*/ } },
+
+    // Molten Core (Beispiele)
+    { "Molten Core", { 12118 /*Lucifron*/, 11982 /*Magmadar*/, 12259 /*Gehennas*/, 12056 /*Baron Geddon*/, 11502 /*Ragnaros (DB abhaengig)*/ } },
+
+    // Blackwing Lair (Beispiele)
+    { "Blackwing Lair", { 12435 /*Razorgore*/, 13020 /*Vaelastrasz*/, 11981 /*Nefarian (DB abhaengig)*/ } },
+
+    // Ahn'Qiraj 40 (Beispiele)
+    { "Ahn'Qiraj (40)", { 15263 /*The Prophet Skeram*/, 15511 /*Lord Kri*/, 15727 /*C'Thun (DB abhaengig)*/ } },
+
+    // Onyxia
+    { "Onyxia", { 10184 /*Onyxia*/ } },
+
+    // Zul'Gurub (Beispiele)
+    { "Zul'Gurub", { 14517 /*High Priestess Jeklik*/, 14510 /*High Priestess Mar'li*/, 14834 /*Hakkar*/ } }
+};
+
+static std::map<ObjectGuid, uint32> gSelectedRaidIdxByPlayer;
+static std::map<ObjectGuid, uint32> gSelectedBossEntryByPlayer;
+
+static const CreatureInfo* ResolveCreatureTemplate(uint32 entry)
+{
+    if (!entry)
+        return nullptr;
+    return sObjectMgr.GetCreatureTemplate(entry);
+}
 namespace TrainingDummy
 {
     // ------------------------------------------------------------
@@ -377,8 +427,8 @@ struct npc_damage_dummyAI : public ScriptedAI
             me->SetTargetGuid(ObjectGuid());
             me->ClearInCombat();
 
-        // kompletter Aura-Reset (auch Debuffs) bei jedem Reset
-        me->RemoveAllAuras();
+            // kompletter Aura-Reset (auch Debuffs)
+            me->RemoveAllAuras();
 
             TrainingDummy::SetCombatAura(me, false);
             TrainingDummy::FreezeInPlace(me, mHomeOri);
@@ -527,8 +577,8 @@ struct npc_damage_dummyAI : public ScriptedAI
             me->SetTargetGuid(ObjectGuid());
             me->ClearInCombat();
 
-        // kompletter Aura-Reset (auch Debuffs) bei jedem Reset
-        me->RemoveAllAuras();
+            // kompletter Aura-Reset (auch Debuffs)
+            me->RemoveAllAuras();
 
             TrainingDummy::SetCombatAura(me, false);
         }
@@ -632,8 +682,8 @@ struct npc_heal_dummyAI : public ScriptedAI
         me->SetTargetGuid(ObjectGuid());
         me->ClearInCombat();
 
-        // kompletter Aura-Reset (auch Debuffs) bei jedem Reset
-        me->RemoveAllAuras();
+            // kompletter Aura-Reset (auch Debuffs)
+            me->RemoveAllAuras();
 
         TrainingDummy::SetCombatAura(me, false);
 
@@ -780,8 +830,8 @@ struct npc_heal_dummyAI : public ScriptedAI
             me->SetTargetGuid(ObjectGuid());
             me->ClearInCombat();
 
-        // kompletter Aura-Reset (auch Debuffs) bei jedem Reset
-        me->RemoveAllAuras();
+            // kompletter Aura-Reset (auch Debuffs)
+            me->RemoveAllAuras();
             TrainingDummy::SetCombatAura(me, false);
         }
     }
@@ -831,7 +881,7 @@ struct npc_boss_dummyAI : public ScriptedAI
 {
     npc_boss_dummyAI(Creature* c) : ScriptedAI(c),
         mCountingDown(false), mActive(false), mCountdownLeft(0),
-        mFightDurationMs(0), mFightStarted(false), mFightElapsedMs(0),
+        mFightDurationMs(0), mSelectedBossEntry(0), mAppliedMechanicMask(0), mAppliedSchoolMask(0), mFightStarted(false), mFightElapsedMs(0),
         mElapsedMs(0), mIdleMs(0), mHomeOri(0.0f), mNpcFlagsOriginal(1),
         mKickSweepMs(0), mDebuffSweepMs(0)
     {
@@ -845,6 +895,9 @@ struct npc_boss_dummyAI : public ScriptedAI
     uint32 mCountdownLeft;
 
     uint32 mFightDurationMs;   // Auswahl via Gossip (1/3/5/10 Min)
+    uint32 mSelectedBossEntry; // gewaehlter Boss (creature_template entry)
+    uint32 mAppliedMechanicMask;
+    uint32 mAppliedSchoolMask;
     bool   mFightStarted;      // startet erst beim ersten Hit/Aggro
     uint32 mFightElapsedMs;    // laeuft nur wenn mFightStarted
 
@@ -870,6 +923,9 @@ struct npc_boss_dummyAI : public ScriptedAI
         mCountdownLeft = 0;
 
         mFightDurationMs = 0;
+        // mSelectedBossEntry bleibt bestehen (Menue-Auswahl bleibt erhalten)
+        mAppliedMechanicMask = 0;
+        mAppliedSchoolMask   = 0;
         mFightStarted    = false;
         mFightElapsedMs  = 0;
 
@@ -905,14 +961,112 @@ struct npc_boss_dummyAI : public ScriptedAI
         me->SetTargetGuid(ObjectGuid());
         me->ClearInCombat();
 
-        // kompletter Aura-Reset (auch Debuffs) bei jedem Reset
-        me->RemoveAllAuras();
+            // kompletter Aura-Reset (auch Debuffs)
+            me->RemoveAllAuras();
 
         TrainingDummy::SetCombatAura(me, false);
         TrainingDummy::FreezeInPlace(me, mHomeOri);
     }
 
-    void StartCountdown(uint32 seconds, uint32 fightDurationMs)
+    void ClearAndApplyImmunityMasks(uint32 mechanicMask, uint32 schoolMask)
+    {
+        // Entferne alte (falls wir welche gesetzt hatten)
+        if (mAppliedMechanicMask)
+        {
+            for (uint32 bit = 0; bit < 32; ++bit)
+            {
+                const uint32 m = (1u << bit);
+                if (mAppliedMechanicMask & m)
+                    me->ApplySpellImmune(0, IMMUNITY_MECHANIC, bit, false);
+            }
+        }
+
+        if (mAppliedSchoolMask)
+            me->ApplySpellImmune(0, IMMUNITY_SCHOOL, mAppliedSchoolMask, false);
+
+        // Setze neue
+        if (mechanicMask)
+        {
+            for (uint32 bit = 0; bit < 32; ++bit)
+            {
+                const uint32 m = (1u << bit);
+                if (mechanicMask & m)
+                    me->ApplySpellImmune(0, IMMUNITY_MECHANIC, bit, true);
+            }
+        }
+
+        if (schoolMask)
+            me->ApplySpellImmune(0, IMMUNITY_SCHOOL, schoolMask, true);
+
+        mAppliedMechanicMask = mechanicMask;
+        mAppliedSchoolMask   = schoolMask;
+    }
+
+    bool ApplyBossTemplateToDummy(uint32 bossEntry)
+    {
+        if (!me || !bossEntry)
+            return false;
+
+        const CreatureInfo* ci = ResolveCreatureTemplate(bossEntry);
+        if (!ci)
+            return false;
+
+        // Level: wir nehmen level_max (Boss ist in der Regel fix)
+        const uint32 level = (ci->level_max > 0 ? ci->level_max : ci->level_min);
+        if (level > 0)
+            me->SetLevel(level);
+
+        // CreatureClassLevelStats -> Basiswerte + Multipliers
+        // Stats (HP/Mana/Armor): in manchen Branches sind CreatureClassLevelStats APIs unterschiedlich.
+        // Wir skalieren hier auf Basis der aktuellen Dummy-Werte mit den Multipliers aus dem Boss-Template.
+        {
+            uint32 hpBase = me->GetMaxHealth();
+            if (hpBase < 1)
+                hpBase = 1;
+            uint32 hp = hpBase;
+            if (ci->health_multiplier > 0.0f)
+                hp = uint32(std::max(1.0f, float(hpBase) * ci->health_multiplier));
+            me->SetMaxHealth(hp);
+            me->SetHealth(hp);
+
+            uint32 manaBase = me->GetMaxPower(POWER_MANA);
+            uint32 mana = manaBase;
+            if (ci->mana_multiplier > 0.0f)
+                mana = uint32(std::max(0.0f, float(manaBase) * ci->mana_multiplier));
+            me->SetMaxPower(POWER_MANA, mana);
+            me->SetPower(POWER_MANA, mana);
+
+            int32 armorBase = me->GetResistance(SPELL_SCHOOL_NORMAL);
+            int32 armor = armorBase;
+            if (ci->armor_multiplier > 0.0f)
+                armor = int32(std::max(0.0f, float(armorBase) * ci->armor_multiplier));
+        me->SetUInt32Value(UNIT_FIELD_RESISTANCES + SPELL_SCHOOL_NORMAL, uint32(std::max(0, int32(armor))));
+        }
+
+        // Resistenzen aus template
+        me->SetUInt32Value(UNIT_FIELD_RESISTANCES + SPELL_SCHOOL_HOLY, uint32(std::max(0, int32(ci->holy_res))));
+        me->SetUInt32Value(UNIT_FIELD_RESISTANCES + SPELL_SCHOOL_FIRE, uint32(std::max(0, int32(ci->fire_res))));
+        me->SetUInt32Value(UNIT_FIELD_RESISTANCES + SPELL_SCHOOL_NATURE, uint32(std::max(0, int32(ci->nature_res))));
+        me->SetUInt32Value(UNIT_FIELD_RESISTANCES + SPELL_SCHOOL_FROST, uint32(std::max(0, int32(ci->frost_res))));
+        me->SetUInt32Value(UNIT_FIELD_RESISTANCES + SPELL_SCHOOL_SHADOW, uint32(std::max(0, int32(ci->shadow_res))));
+        me->SetUInt32Value(UNIT_FIELD_RESISTANCES + SPELL_SCHOOL_ARCANE, uint32(std::max(0, int32(ci->arcane_res))));
+
+        // Unit class Byte (damit z.B. PowerType/Stat-Auswertung passt)
+        me->SetByteValue(UNIT_FIELD_BYTES_0, 1, uint8(ci->unit_class));
+
+        // Immunities (mechanic / school) wie in DB
+        ClearAndApplyImmunityMasks(ci->mechanic_immune_mask, ci->school_immune_mask);
+
+        // Dummy-Eigenschaften beibehalten: passiv, nicht drehen, nicht angreifen
+        me->SetReactState(REACT_PASSIVE);
+        SetCombatMovement(false);
+        TrainingDummy::FreezeInPlace(me, mHomeOri);
+
+        mSelectedBossEntry = bossEntry;
+        return true;
+    }
+
+    void StartCountdown(uint32 seconds, uint32 fightDurationMs, uint32 bossEntry)
     {
         Reset();
 
@@ -920,6 +1074,10 @@ struct npc_boss_dummyAI : public ScriptedAI
             return;
 
         mFightDurationMs = fightDurationMs;
+
+        // Boss-Stats sofort setzen (damit HP/Resis ab Fight korrekt sind)
+        if (bossEntry)
+            ApplyBossTemplateToDummy(bossEntry);
 
         mCountingDown  = true;
         mCountdownLeft = (seconds > 0 ? seconds : 1);
@@ -936,311 +1094,309 @@ struct npc_boss_dummyAI : public ScriptedAI
         mEvents.ScheduleEvent(TrainingDummy::EVENT_BOSS_COUNTDOWN_TICK, 1000);
     }
 
-    void BeginCombatTracking()
-    {
-        if (!me)
-            return;
-
-        mCountingDown = false;
-        mActive       = true;
-
-        // WICHTIG: Timer startet NICHT hier, sondern beim ersten Hit/Aggro
-        mFightStarted   = false;
-        mFightElapsedMs = 0;
-
-        mElapsedMs = 0;
-        mIdleMs    = 0;
-
-        me->RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE_2);
-        me->RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_ATTACKABLE_1);
-        me->RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE);
-
-        me->SetReactState(REACT_PASSIVE);
-        SetCombatMovement(false);
-
-        TrainingDummy::FreezeInPlace(me, mHomeOri);
-        TrainingDummy::SetCombatAura(me, true);
-
-        me->PlayDirectSound(TrainingDummy::kSoundCountdownGo, 0);
-        me->MonsterTextEmote("Boss Dummy: GO!", nullptr);
-    }
-
-    void Report()
-    {
-        if (!me)
-            return;
-
-        const float seconds = std::max(1.0f, float(mFightStarted ? mFightElapsedMs : mElapsedMs) / 1000.0f);
-
-        uint64 total = 0;
-        for (const auto& it : mDamageByPlayer)
-            total += it.second;
-
-        const float dps = float(total) / seconds;
-
-        std::vector<TrainingDummy::GuidValue> top;
-        TrainingDummy::BuildTopList(mDamageByPlayer, top);
-
+        void BeginCombatTracking()
         {
-            std::ostringstream ss;
-            ss << "Boss Dummy Report: Dauer " << uint32(seconds) << "s, Total "
-               << total << ", DPS " << TrainingDummy::FormatFloat2(dps);
+            if (!me)
+                return;
 
-            std::string msg = ss.str();
-            me->MonsterTextEmote(msg.c_str(), nullptr);
-        }
+            mCountingDown = false;
+            mActive       = true;
 
-        for (size_t i = 0; i < top.size(); ++i)
-        {
-            Player* p = me->GetMap() ? me->GetMap()->GetPlayer(top[i].guid) : nullptr;
-            std::string name = p ? p->GetName() : std::string("Unbekannt");
-
-            float pdps = float(top[i].value) / seconds;
-
-            std::ostringstream ss;
-            ss << (i + 1) << ". " << name << ": " << top[i].value
-               << " (" << TrainingDummy::FormatFloat2(pdps) << " DPS)";
-
-            std::string line = ss.str();
-            me->MonsterTextEmote(line.c_str(), nullptr);
-        }
-    }
-
-    void ForceEndFightAndReset()
-    {
-        if (!me)
-            return;
-
-        // Report sofort (wie alt)
-        if (mActive && mFightStarted)
-            Report();
-
-        // alle Teilnehmer sofort aus Combat (wie alt)
-        for (auto it = mLastActivityTs.begin(); it != mLastActivityTs.end(); ++it)
-        {
-            Unit* u = me->GetMap() ? me->GetMap()->GetUnit(it->first) : nullptr;
-            if (!u || !u->IsInWorld())
-                continue;
-
-            if (u->IsPlayer())
-            {
-                Player* p = u->ToPlayer();
-                p->CombatStopWithPets(true);
-                p->CombatStop(true);
-            }
-
-            me->_removeAttacker(u);
-        }
-
-        // --- Dummy-seitig hart aufraeumen ---
-        me->AttackStop();
-        me->CombatStop(true);
-        me->DeleteThreatList();
-        me->SetTargetGuid(ObjectGuid());
-        me->ClearInCombat();
-
-        // WICHTIG: alle Debuffs/Buffs komplett entfernen (sonst bleiben Boss-Debuffs haengen)
-        me->RemoveAllAuras();
-
-        // Falls dein Core das hat (manche Branches): auch AuraStates resetten
-        me->ClearAllReactives(); // optional, nur falls vorhanden
-
-        TrainingDummy::SetCombatAura(me, false);
-        TrainingDummy::RestoreGossip(me, mNpcFlagsOriginal);
-
-        // kompletter Reset (setzt HP etc)
-        Reset();
-    }
-
-    void FinishAndReset()
-    {
-        if (mActive)
-            Report();
-
-        if (me)
-            TrainingDummy::RestoreGossip(me, mNpcFlagsOriginal);
-
-        Reset();
-    }
-
-    void DamageTaken(Unit* doneBy, uint32& damage) override
-    {
-        TrainingDummy::FreezeInPlace(me, mHomeOri);
-
-        if (!mActive)
-        {
-            damage = 0;
-            return;
-        }
-
-        if (me->GetHealth() <= TrainingDummy::kDamageDummyMinHp)
-        {
-            damage = 0;
-            return;
-        }
-
-        if (damage >= me->GetHealth())
-            damage = me->GetHealth() - TrainingDummy::kDamageDummyMinHp;
-
-        if (damage == 0)
-            return;
-
-        Player* owner = TrainingDummy::ResolveOwnerPlayer(doneBy);
-        if (!owner)
-            return;
-
-        // Start Fight-Timer beim ersten echten Hit/Aggro
-        if (!mFightStarted)
-        {
-            mFightStarted   = true;
+            // WICHTIG: Timer startet NICHT hier, sondern beim ersten Hit/Aggro
+            mFightStarted   = false;
             mFightElapsedMs = 0;
-            mElapsedMs      = 0;
-            mIdleMs         = 0;
 
-            // Debuffs sofort setzen (wie alt)
-            TrainingDummy::ApplyBossDebuffs(me);
+            mElapsedMs = 0;
+            mIdleMs    = 0;
 
-            // erste Message mit Dauer
-            if (mFightDurationMs > 0)
+            me->RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE_2);
+            me->RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_ATTACKABLE_1);
+            me->RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE);
+
+            me->SetReactState(REACT_PASSIVE);
+            SetCombatMovement(false);
+
+            TrainingDummy::FreezeInPlace(me, mHomeOri);
+            TrainingDummy::SetCombatAura(me, true);
+
+            me->PlayDirectSound(TrainingDummy::kSoundCountdownGo, 0);
+            me->MonsterTextEmote("Boss Dummy: GO!", nullptr);
+        }
+
+        void Report()
+        {
+            if (!me)
+                return;
+
+            const float seconds = std::max(1.0f, float(mFightStarted ? mFightElapsedMs : mElapsedMs) / 1000.0f);
+
+            uint64 total = 0;
+            for (const auto& it : mDamageByPlayer)
+                total += it.second;
+
+            const float dps = float(total) / seconds;
+
+            std::vector<TrainingDummy::GuidValue> top;
+            TrainingDummy::BuildTopList(mDamageByPlayer, top);
+
             {
                 std::ostringstream ss;
-                ss << "Boss Dummy: Fight gestartet (" << (mFightDurationMs / 60000) << " Min).";
+                ss << "Boss Dummy Report: Dauer " << uint32(seconds) << "s, Total "
+                   << total << ", DPS " << TrainingDummy::FormatFloat2(dps);
+
                 std::string msg = ss.str();
                 me->MonsterTextEmote(msg.c_str(), nullptr);
             }
+
+            for (size_t i = 0; i < top.size(); ++i)
+            {
+                Player* p = me->GetMap() ? me->GetMap()->GetPlayer(top[i].guid) : nullptr;
+                std::string name = p ? p->GetName() : std::string("Unbekannt");
+
+                float pdps = float(top[i].value) / seconds;
+
+                std::ostringstream ss;
+                ss << (i + 1) << ". " << name << ": " << top[i].value
+                   << " (" << TrainingDummy::FormatFloat2(pdps) << " DPS)";
+
+                std::string line = ss.str();
+                me->MonsterTextEmote(line.c_str(), nullptr);
+            }
         }
 
-        TrainingDummy::EnsureCombat(me, doneBy);
-        mLastActivityTs[owner->GetObjectGuid()] = std::time(nullptr);
-
-        mIdleMs = 0;
-        mDamageByPlayer[owner->GetObjectGuid()] += uint64(damage);
-    }
-
-    void KickInactivePlayers()
-    {
-        if (!me)
-            return;
-
-        if (mLastActivityTs.empty())
-            return;
-
-        const time_t now = std::time(nullptr);
-
-        for (auto it = mLastActivityTs.begin(); it != mLastActivityTs.end(); )
+        void ForceEndFightAndReset()
         {
-            Unit* u = me->GetMap() ? me->GetMap()->GetUnit(it->first) : nullptr;
+            if (!me)
+                return;
 
-            if (!u || !u->IsInWorld())
-            {
-                it = mLastActivityTs.erase(it);
-                continue;
-            }
+            // Report sofort (wie alt)
+            if (mActive && mFightStarted)
+                Report();
 
-            if ((now - it->second) * 1000 >= TrainingDummy::kKickPlayerAfterIdleMs)
+            // alle Teilnehmer sofort aus Combat (wie alt)
+            for (auto it = mLastActivityTs.begin(); it != mLastActivityTs.end(); ++it)
             {
+                Unit* u = me->GetMap() ? me->GetMap()->GetUnit(it->first) : nullptr;
+                if (!u || !u->IsInWorld())
+                    continue;
+
                 if (u->IsPlayer())
                 {
                     Player* p = u->ToPlayer();
                     p->CombatStopWithPets(true);
                     p->CombatStop(true);
-                    me->_removeAttacker(u);
                 }
 
-                it = mLastActivityTs.erase(it);
-                continue;
+                me->_removeAttacker(u);
             }
 
-            ++it;
-        }
-
-        if (mLastActivityTs.empty())
-        {
-            me->DeleteThreatList();
+            // --- Dummy-seitig hart aufraeumen ---
             me->AttackStop();
+            me->CombatStop(true);
+            me->DeleteThreatList();
             me->SetTargetGuid(ObjectGuid());
             me->ClearInCombat();
 
-        // kompletter Aura-Reset (auch Debuffs) bei jedem Reset
-        me->RemoveAllAuras();
+            // WICHTIG: alle Debuffs/Buffs komplett entfernen (sonst bleiben Boss-Debuffs haengen)
+            me->RemoveAllAuras();
+
+            // Falls dein Core das hat (manche Branches): auch AuraStates resetten
             TrainingDummy::SetCombatAura(me, false);
-        }
-    }
+            TrainingDummy::RestoreGossip(me, mNpcFlagsOriginal);
 
-    void UpdateAI(uint32 diff) override
-    {
-        TrainingDummy::FreezeInPlace(me, mHomeOri);
-
-        mEvents.Update(diff);
-        while (uint32 ev = mEvents.ExecuteEvent())
-        {
-            if (ev == TrainingDummy::EVENT_BOSS_COUNTDOWN_TICK)
-            {
-                if (!mCountingDown)
-                    continue;
-
-                if (mCountdownLeft > 1)
-                {
-                    --mCountdownLeft;
-
-                    me->PlayDirectSound(TrainingDummy::kSoundCountdownTick, 0);
-
-                    std::ostringstream ss;
-                    ss << "Boss Dummy: Pull in " << mCountdownLeft << " Sekunden.";
-                    std::string msg = ss.str();
-                    me->MonsterTextEmote(msg.c_str(), nullptr);
-
-                    mEvents.ScheduleEvent(TrainingDummy::EVENT_BOSS_COUNTDOWN_TICK, 1000);
-                }
-                else
-                {
-                    BeginCombatTracking();
-                }
-            }
+            // kompletter Reset (setzt HP etc)
+            Reset();
         }
 
-        if (!mActive)
-            return;
-
-        // Idle/Legacy
-        mElapsedMs += diff;
-        mIdleMs    += diff;
-
-        // Fight-Timer: laeuft nur ab erstem Hit
-        if (mFightStarted)
+        void FinishAndReset()
         {
-            mFightElapsedMs += diff;
+            if (mActive)
+                Report();
 
-            // Debuffs periodisch nachsetzen (falls Aura-Limits / Dispel / etc.)
-            if (mDebuffSweepMs <= diff)
-            {
-                TrainingDummy::ApplyBossDebuffs(me);
-                mDebuffSweepMs = 5000;
-            }
-            else
-                mDebuffSweepMs -= diff;
+            if (me)
+                TrainingDummy::RestoreGossip(me, mNpcFlagsOriginal);
 
-            // Harte Laufzeit
-            if (mFightDurationMs > 0 && mFightElapsedMs >= mFightDurationMs)
+            Reset();
+        }
+
+        void DamageTaken(Unit* doneBy, uint32& damage) override
+        {
+            TrainingDummy::FreezeInPlace(me, mHomeOri);
+
+            if (!mActive)
             {
-                ForceEndFightAndReset();
+                damage = 0;
                 return;
             }
+
+            if (me->GetHealth() <= TrainingDummy::kDamageDummyMinHp)
+            {
+                damage = 0;
+                return;
+            }
+
+            if (damage >= me->GetHealth())
+                damage = me->GetHealth() - TrainingDummy::kDamageDummyMinHp;
+
+            if (damage == 0)
+                return;
+
+            Player* owner = TrainingDummy::ResolveOwnerPlayer(doneBy);
+            if (!owner)
+                return;
+
+            // Start Fight-Timer beim ersten echten Hit/Aggro
+            if (!mFightStarted)
+            {
+                mFightStarted   = true;
+                mFightElapsedMs = 0;
+                mElapsedMs      = 0;
+                mIdleMs         = 0;
+
+                // Debuffs sofort setzen (wie alt)
+                TrainingDummy::ApplyBossDebuffs(me);
+
+                // erste Message mit Dauer
+                if (mFightDurationMs > 0)
+                {
+                    std::ostringstream ss;
+                    ss << "Boss Dummy: Fight gestartet (" << (mFightDurationMs / 60000) << " Min).";
+                    std::string msg = ss.str();
+                    me->MonsterTextEmote(msg.c_str(), nullptr);
+                }
+            }
+
+            TrainingDummy::EnsureCombat(me, doneBy);
+            mLastActivityTs[owner->GetObjectGuid()] = std::time(nullptr);
+
+            mIdleMs = 0;
+            mDamageByPlayer[owner->GetObjectGuid()] += uint64(damage);
         }
 
-        if (mKickSweepMs <= diff)
+        void KickInactivePlayers()
         {
-            KickInactivePlayers();
-            mKickSweepMs = TrainingDummy::kKickSweepIntervalMs;
-        }
-        else
-            mKickSweepMs -= diff;
+            if (!me)
+                return;
 
-        // Safety: wenn keiner mehr aktiv ist -> normaler Reset (wie vorher)
-        if (mIdleMs >= TrainingDummy::kResetAfterIdleMs && mElapsedMs >= TrainingDummy::kMinFightMs)
-            FinishAndReset();
-    }
-};
+            if (mLastActivityTs.empty())
+                return;
+
+            const time_t now = std::time(nullptr);
+
+            for (auto it = mLastActivityTs.begin(); it != mLastActivityTs.end(); )
+            {
+                Unit* u = me->GetMap() ? me->GetMap()->GetUnit(it->first) : nullptr;
+
+                if (!u || !u->IsInWorld())
+                {
+                    it = mLastActivityTs.erase(it);
+                    continue;
+                }
+
+                if ((now - it->second) * 1000 >= TrainingDummy::kKickPlayerAfterIdleMs)
+                {
+                    if (u->IsPlayer())
+                    {
+                        Player* p = u->ToPlayer();
+                        p->CombatStopWithPets(true);
+                        p->CombatStop(true);
+                        me->_removeAttacker(u);
+                    }
+
+                    it = mLastActivityTs.erase(it);
+                    continue;
+                }
+
+                ++it;
+            }
+
+            if (mLastActivityTs.empty())
+            {
+                me->DeleteThreatList();
+                me->AttackStop();
+                me->SetTargetGuid(ObjectGuid());
+                me->ClearInCombat();
+
+                // kompletter Aura-Reset (auch Debuffs)
+                me->RemoveAllAuras();
+                TrainingDummy::SetCombatAura(me, false);
+            }
+        }
+
+        void UpdateAI(uint32 diff) override
+        {
+            TrainingDummy::FreezeInPlace(me, mHomeOri);
+
+            mEvents.Update(diff);
+            while (uint32 ev = mEvents.ExecuteEvent())
+            {
+                if (ev == TrainingDummy::EVENT_BOSS_COUNTDOWN_TICK)
+                {
+                    if (!mCountingDown)
+                        continue;
+
+                    if (mCountdownLeft > 1)
+                    {
+                        --mCountdownLeft;
+
+                        me->PlayDirectSound(TrainingDummy::kSoundCountdownTick, 0);
+
+                        std::ostringstream ss;
+                        ss << "Boss Dummy: Pull in " << mCountdownLeft << " Sekunden.";
+                        std::string msg = ss.str();
+                        me->MonsterTextEmote(msg.c_str(), nullptr);
+
+                        mEvents.ScheduleEvent(TrainingDummy::EVENT_BOSS_COUNTDOWN_TICK, 1000);
+                    }
+                    else
+                    {
+                        BeginCombatTracking();
+                    }
+                }
+            }
+
+            if (!mActive)
+                return;
+
+            // Idle/Legacy
+            mElapsedMs += diff;
+            mIdleMs    += diff;
+
+            // Fight-Timer: laeuft nur ab erstem Hit
+            if (mFightStarted)
+            {
+                mFightElapsedMs += diff;
+
+                // Debuffs periodisch nachsetzen (falls Aura-Limits / Dispel / etc.)
+                if (mDebuffSweepMs <= diff)
+                {
+                    TrainingDummy::ApplyBossDebuffs(me);
+                    mDebuffSweepMs = 5000;
+                }
+                else
+                    mDebuffSweepMs -= diff;
+
+                // Harte Laufzeit
+                if (mFightDurationMs > 0 && mFightElapsedMs >= mFightDurationMs)
+                {
+                    ForceEndFightAndReset();
+                    return;
+                }
+            }
+
+            if (mKickSweepMs <= diff)
+            {
+                KickInactivePlayers();
+                mKickSweepMs = TrainingDummy::kKickSweepIntervalMs;
+            }
+            else
+                mKickSweepMs -= diff;
+
+            // Safety: wenn keiner mehr aktiv ist -> normaler Reset (wie vorher)
+            if (mIdleMs >= TrainingDummy::kResetAfterIdleMs && mElapsedMs >= TrainingDummy::kMinFightMs)
+                FinishAndReset();
+        }
+    };
 
 
 static CreatureAI* GetAI_npc_boss_dummy(Creature* pCreature)
@@ -1248,19 +1404,82 @@ static CreatureAI* GetAI_npc_boss_dummy(Creature* pCreature)
     return new npc_boss_dummyAI(pCreature);
 }
 
-static bool GossipHello_npc_boss_dummy(Player* pPlayer, Creature* pCreature)
+static void BuildRaidMenu(Player* pPlayer, Creature* pCreature)
 {
     if (!pPlayer || !pCreature)
-        return true;
+        return;
+
+    pPlayer->PlayerTalkClass->ClearMenus();
+
+    for (uint32 i = 0; i < (sizeof(kRaidBossMenus) / sizeof(kRaidBossMenus[0])); ++i)
+        pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, kRaidBossMenus[i].raidName, GOSSIP_SENDER_MAIN, GOSSIP_ACTION_RAID_BASE + i);
+
+    // optional quick tools
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Report (jetzt)", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_BOSS_REPORT);
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Reset",          GOSSIP_SENDER_MAIN, GOSSIP_ACTION_BOSS_RESET);
+
+    pPlayer->SEND_GOSSIP_MENU(DEFAULT_GOSSIP_MESSAGE, pCreature->GetObjectGuid());
+}
+
+static void BuildBossMenu(Player* pPlayer, Creature* pCreature, uint32 raidIdx)
+{
+    if (!pPlayer || !pCreature)
+        return;
+
+    pPlayer->PlayerTalkClass->ClearMenus();
+
+    if (raidIdx >= (sizeof(kRaidBossMenus) / sizeof(kRaidBossMenus[0])))
+    {
+        BuildRaidMenu(pPlayer, pCreature);
+        return;
+    }
+
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "< Zurueck (Raids)", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_BACK_TO_RAIDS);
+
+    const RaidBossDef& raid = kRaidBossMenus[raidIdx];
+    for (uint32 i = 0; i < raid.bossEntries.size(); ++i)
+    {
+        const uint32 entry = raid.bossEntries[i];
+        const CreatureInfo* ci = ResolveCreatureTemplate(entry);
+
+        std::ostringstream ss;
+        ss << (ci ? ci->name : std::string("Boss Entry ")) << entry;
+
+        // globale Boss-Liste: wir encoden raidIdx und local idx in action index
+        // action = GOSSIP_ACTION_BOSS_BASE + (raidIdx * 100) + i
+        std::string label = ss.str();
+        pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, label.c_str(), GOSSIP_SENDER_MAIN, GOSSIP_ACTION_BOSS_BASE + (raidIdx * 100) + i);
+    }
+
+    pPlayer->SEND_GOSSIP_MENU(DEFAULT_GOSSIP_MESSAGE, pCreature->GetObjectGuid());
+}
+
+static void BuildTimerMenu(Player* pPlayer, Creature* pCreature)
+{
+    if (!pPlayer || !pCreature)
+        return;
+
+    pPlayer->PlayerTalkClass->ClearMenus();
+
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "< Zurueck (Bosses)", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_BACK_TO_BOSSES);
 
     pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Start 1 Minute (10s Pull)",   GOSSIP_SENDER_MAIN, GOSSIP_ACTION_BOSS_START_1M);
     pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Start 3 Minuten (10s Pull)",  GOSSIP_SENDER_MAIN, GOSSIP_ACTION_BOSS_START_3M);
     pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Start 5 Minuten (10s Pull)",  GOSSIP_SENDER_MAIN, GOSSIP_ACTION_BOSS_START_5M);
     pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Start 10 Minuten (10s Pull)", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_BOSS_START_10M);
+
     pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Report (jetzt)",              GOSSIP_SENDER_MAIN, GOSSIP_ACTION_BOSS_REPORT);
     pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Reset",                       GOSSIP_SENDER_MAIN, GOSSIP_ACTION_BOSS_RESET);
 
     pPlayer->SEND_GOSSIP_MENU(DEFAULT_GOSSIP_MESSAGE, pCreature->GetObjectGuid());
+}
+
+static bool GossipHello_npc_boss_dummy(Player* pPlayer, Creature* pCreature)
+{
+    if (!pPlayer || !pCreature)
+        return true;
+
+    BuildRaidMenu(pPlayer, pCreature);
     return true;
 }
 
@@ -1269,28 +1488,91 @@ static bool GossipSelect_npc_boss_dummy(Player* pPlayer, Creature* pCreature, ui
     if (!pPlayer || !pCreature)
         return true;
 
-    pPlayer->CLOSE_GOSSIP_MENU();
-
     npc_boss_dummyAI* ai = dynamic_cast<npc_boss_dummyAI*>(pCreature->AI());
     if (!ai)
         return true;
 
+    const ObjectGuid pguid = pPlayer->GetObjectGuid();
+
+    // Navigation / Auswahl
+    if (action >= GOSSIP_ACTION_RAID_BASE && action < GOSSIP_ACTION_RAID_BASE + (sizeof(kRaidBossMenus) / sizeof(kRaidBossMenus[0])))
+    {
+        const uint32 raidIdx = action - GOSSIP_ACTION_RAID_BASE;
+        gSelectedRaidIdxByPlayer[pguid] = raidIdx;
+        BuildBossMenu(pPlayer, pCreature, raidIdx);
+        return true;
+    }
+
+    if (action >= GOSSIP_ACTION_BOSS_BASE && action < GOSSIP_ACTION_BOSS_BASE + 10000)
+    {
+        const uint32 packed = action - GOSSIP_ACTION_BOSS_BASE;
+        const uint32 raidIdx = packed / 100;
+        const uint32 localIdx = packed % 100;
+
+        if (raidIdx < (sizeof(kRaidBossMenus) / sizeof(kRaidBossMenus[0])))
+        {
+            const RaidBossDef& raid = kRaidBossMenus[raidIdx];
+            if (localIdx < raid.bossEntries.size())
+            {
+                const uint32 bossEntry = raid.bossEntries[localIdx];
+                gSelectedBossEntryByPlayer[pguid] = bossEntry;
+                gSelectedRaidIdxByPlayer[pguid] = raidIdx;
+
+                // Anzeige direkt: Stats jetzt schon setzen (damit HP sofort sichtbar ist)
+                ai->ApplyBossTemplateToDummy(bossEntry);
+
+                BuildTimerMenu(pPlayer, pCreature);
+                return true;
+            }
+        }
+
+        BuildRaidMenu(pPlayer, pCreature);
+        return true;
+    }
+
+    if (action == GOSSIP_ACTION_BACK_TO_RAIDS)
+    {
+        BuildRaidMenu(pPlayer, pCreature);
+        return true;
+    }
+
+    if (action == GOSSIP_ACTION_BACK_TO_BOSSES)
+    {
+        uint32 raidIdx = 0;
+        auto it = gSelectedRaidIdxByPlayer.find(pguid);
+        if (it != gSelectedRaidIdxByPlayer.end())
+            raidIdx = it->second;
+
+        BuildBossMenu(pPlayer, pCreature, raidIdx);
+        return true;
+    }
+
+    // Timer starten -> Gossip schliessen
+    pPlayer->CLOSE_GOSSIP_MENU();
+
+    const uint32 bossEntry = (gSelectedBossEntryByPlayer.count(pguid) ? gSelectedBossEntryByPlayer[pguid] : 0);
+    if (!bossEntry && (action == GOSSIP_ACTION_BOSS_START_1M || action == GOSSIP_ACTION_BOSS_START_3M || action == GOSSIP_ACTION_BOSS_START_5M || action == GOSSIP_ACTION_BOSS_START_10M))
+    {
+        pCreature->MonsterTextEmote("Boss Dummy: Bitte zuerst Raid -> Boss auswaehlen.", nullptr);
+        return true;
+    }
+
     switch (action)
     {
         case GOSSIP_ACTION_BOSS_START_1M:
-            ai->StartCountdown(10, 1 * 60 * 1000);
+            ai->StartCountdown(10, 1 * 60 * 1000, bossEntry);
             break;
 
         case GOSSIP_ACTION_BOSS_START_3M:
-            ai->StartCountdown(10, 3 * 60 * 1000);
+            ai->StartCountdown(10, 3 * 60 * 1000, bossEntry);
             break;
 
         case GOSSIP_ACTION_BOSS_START_5M:
-            ai->StartCountdown(10, 5 * 60 * 1000);
+            ai->StartCountdown(10, 5 * 60 * 1000, bossEntry);
             break;
 
         case GOSSIP_ACTION_BOSS_START_10M:
-            ai->StartCountdown(10, 10 * 60 * 1000);
+            ai->StartCountdown(10, 10 * 60 * 1000, bossEntry);
             break;
 
         case GOSSIP_ACTION_BOSS_REPORT:
@@ -1308,7 +1590,6 @@ static bool GossipSelect_npc_boss_dummy(Player* pPlayer, Creature* pCreature, ui
 
     return true;
 }
-
 // ============================================================
 // Registration (ScriptDev2 / vMaNGOS Style)
 // ============================================================
