@@ -1150,7 +1150,7 @@ static std::string& GetClsColClass(){ static std::string s; return s; }static vo
             }
         }
 
-        if (col == "basemana" || col == "mana" || col == "basemana0")
+        if (col == "base_mana" || col == "basemana" || col == "mana" || col == "basemana0")
         {
             hasBasemana = true;
             sColMana = colRaw;
@@ -1391,23 +1391,27 @@ static bool ApplyBossTemplateToDummy(Creature* pDummy, uint32 bossEntry, Player*
     // Debug-Ausgabe
     if (pPlayerForChat)
     {
+                const uint32 rbHp = pDummy->GetHealth();
+        const uint32 rbHpMax = pDummy->GetMaxHealth();
+        const uint32 rbMana = pDummy->GetPower(POWER_MANA);
+        const uint32 rbManaMax = pDummy->GetMaxPower(POWER_MANA);
+        const uint32 rbArmor = pDummy->GetResistance(SPELL_SCHOOL_NORMAL);
+
         SendBossDummyDebug(pPlayerForChat, pDummy,
-            "BossDummy: Boss=%u (%s) -> Level=%u, HP=%u, Mana=%u, Armor=%u, Res(H/F/N/Fr/S/A)=%u/%u/%u/%u/%u/%u",
+            "BossDummy: Boss=%u (%s) -> Level=%u, HP=%u, Mana=%u, Armor=%u, Res(H/F/N/Fr/S/A)=%u/%u/%u/%u/%u/%u | Readback HP=%u/%u Mana=%u/%u Armor=%u",
             bossEntry, ci->name.c_str(), level, hpFinal, manaFinal,
-            pDummy->GetResistance(SPELL_SCHOOL_NORMAL),
+            rbArmor,
             pDummy->GetResistance(SPELL_SCHOOL_HOLY),
             pDummy->GetResistance(SPELL_SCHOOL_FIRE),
             pDummy->GetResistance(SPELL_SCHOOL_NATURE),
             pDummy->GetResistance(SPELL_SCHOOL_FROST),
             pDummy->GetResistance(SPELL_SCHOOL_SHADOW),
-            pDummy->GetResistance(SPELL_SCHOOL_ARCANE));
-    }
+            pDummy->GetResistance(SPELL_SCHOOL_ARCANE),
+            rbHp, rbHpMax, rbMana, rbManaMax, rbArmor);
+}
 
     return true;
 }
-
-
-
 
 void StartCountdown(uint32 seconds, uint32 fightDurationMs, uint32 bossEntry)
 {
