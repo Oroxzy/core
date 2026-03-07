@@ -45,7 +45,8 @@ set (SCRIPTS_SRCS
     custom/npc_j_eevee.cpp
     custom/npc_autotrainer.cpp
     custom/npc_training_dummies.cpp
-	custom/template_npc.cpp
+    custom/template_npc.cpp
+    custom/npc_enchanter.cpp
     eastern_kingdoms/alterac_mountains/alterac_mountains.cpp
     eastern_kingdoms/arathi_highlands/arathi_highlands.cpp
     eastern_kingdoms/blasted_lands/blasted_lands.cpp
