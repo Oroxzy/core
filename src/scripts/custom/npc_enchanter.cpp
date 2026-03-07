@@ -10,6 +10,7 @@ Script made by jeremymeile for uterusone.net
 #define COOL_VISUAL_SPELL_1     14867
 #define COOL_VISUAL_SPELL_2     19473
 #define REMOVE_ENCHANTS         99
+#define REMOVE_ENCHANTS_CONFIRM 100
 
 static bool IsEnchantableEquipmentSlot(uint8 slot)
 {
@@ -47,6 +48,46 @@ static uint32 GetCurrentEnchantId(Player* player, uint8 slot)
     }
 
     return enchantEntry->ID;
+}
+
+static const char* GetSlotName(uint8 slot)
+{
+    switch (slot)
+    {
+    case EQUIPMENT_SLOT_HEAD:     return "Head";
+    case EQUIPMENT_SLOT_SHOULDERS:return "Shoulders";
+    case EQUIPMENT_SLOT_BACK:     return "Back";
+    case EQUIPMENT_SLOT_CHEST:    return "Chest";
+    case EQUIPMENT_SLOT_WRISTS:   return "Wrists";
+    case EQUIPMENT_SLOT_HANDS:    return "Hands";
+    case EQUIPMENT_SLOT_LEGS:     return "Legs";
+    case EQUIPMENT_SLOT_FEET:     return "Feet";
+    case EQUIPMENT_SLOT_MAINHAND: return "Main Hand";
+    case EQUIPMENT_SLOT_OFFHAND:  return "Off Hand";
+    case EQUIPMENT_SLOT_RANGED:   return "Ranged";
+    default:                      return "Unknown Slot";
+    }
+}
+
+static std::string GetEnchantDisplayName(uint32 enchantId)
+{
+    if (!enchantId)
+    {
+        return "none";
+    }
+
+    SpellItemEnchantmentEntry const* enchantEntry = sSpellItemEnchantmentStore.LookupEntry(enchantId);
+    if (!enchantEntry)
+    {
+        return "unknown enchant";
+    }
+
+    if (enchantEntry->description[0] && enchantEntry->description[0][0] != '\0')
+    {
+        return std::string(enchantEntry->description[0]);
+    }
+
+    return "unknown enchant";
 }
 
 static bool IsItemCompatibleForEnchant(Item* pItem, SpellEntry const* spellInfo)
@@ -120,6 +161,8 @@ void EnchantItem(Player* player, GameObject* /*gameobject*/, uint32 spellid, uin
         return;
     }
 
+    uint32 oldEnchantId = GetCurrentEnchantId(player, slot);
+
     uint32 enchantid = spellInfo->EffectMiscValue[0];
     if (!enchantid)
     {
@@ -139,6 +182,20 @@ void EnchantItem(Player* player, GameObject* /*gameobject*/, uint32 spellid, uin
     player->CastSpell(player, COOL_VISUAL_SPELL_1, true);
     player->CastSpell(player, COOL_VISUAL_SPELL_2, true);
     player->GetSession()->SendAreaTriggerMessage("Your item was enchanted successfully!");
+
+    std::string itemName = pProto->Name1;
+    std::string newEnchantName = GetEnchantDisplayName(enchantid);
+    std::string slotName = GetSlotName(slot);
+
+    if (oldEnchantId)
+    {
+        std::string oldEnchantName = GetEnchantDisplayName(oldEnchantId);
+        player->GetSession()->SendNotification("%s: %s enchanted with %s (replaced %s).", slotName.c_str(), itemName.c_str(), newEnchantName.c_str(), oldEnchantName.c_str());
+    }
+    else
+    {
+        player->GetSession()->SendNotification("%s: %s enchanted with %s.", slotName.c_str(), itemName.c_str(), newEnchantName.c_str());
+    }
 }
 
 void RemoveEnchantItem(Player* player, GameObject* /*gameobject*/)
@@ -186,6 +243,19 @@ void RemoveEnchantItem(Player* player, GameObject* /*gameobject*/)
 uint32 CheckEnchantID(Player* player, uint8 slot)
 {
     return GetCurrentEnchantId(player, slot);
+}
+
+static void ShowRemoveEnchantsConfirmMenu(Player* player, GameObject* gameobject)
+{
+    if (!player || !gameobject)
+    {
+        return;
+    }
+
+    player->PlayerTalkClass->ClearMenus();
+    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Yes, remove all my permanent enchants.", GOSSIP_SENDER_MAIN, REMOVE_ENCHANTS_CONFIRM);
+    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TALK, "<- Back", GOSSIP_SENDER_MAIN, 0);
+    player->SEND_GOSSIP_MENU(600007, gameobject->GetObjectGuid());
 }
 
 bool GossipHello_EnchanterNPC(Player* player, GameObject* gameobject)
@@ -1165,6 +1235,10 @@ bool GossipSelect_EnchanterNPC(Player* player, GameObject* gameobject, uint32 ui
         player->SEND_GOSSIP_MENU(600006, gameobject->GetObjectGuid());
     }
     else if (uiAction == REMOVE_ENCHANTS)
+    {
+        ShowRemoveEnchantsConfirmMenu(player, gameobject);
+    }
+    else if (uiAction == REMOVE_ENCHANTS_CONFIRM)
     {
         RemoveEnchantItem(player, gameobject);
         GossipHello_EnchanterNPC(player, gameobject);
