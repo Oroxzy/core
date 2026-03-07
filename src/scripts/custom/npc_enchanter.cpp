@@ -93,7 +93,7 @@ void EnchantItem(Player* player, GameObject* /*gameobject*/, uint32 spellid, uin
         return;
     }
 
-    if (player->isInCombat())
+    if (player->IsInCombat())
     {
         player->GetSession()->SendNotification("You are in combat!");
         return;
@@ -148,7 +148,7 @@ void RemoveEnchantItem(Player* player, GameObject* /*gameobject*/)
         return;
     }
 
-    if (player->isInCombat())
+    if (player->IsInCombat())
     {
         player->GetSession()->SendNotification("You are in combat!");
         return;
@@ -195,7 +195,7 @@ bool GossipHello_EnchanterNPC(Player* player, GameObject* gameobject)
         return true;
     }
 
-    if (player->isInCombat())
+    if (player->IsInCombat())
     {
         player->GetSession()->SendNotification("You are in combat!");
         return true;
@@ -211,7 +211,7 @@ bool GossipHello_EnchanterNPC(Player* player, GameObject* gameobject)
         if (equippedItem)
         {
             uint32 itemId = equippedItem->GetEntry();
-            ItemPrototype const* item_proto = ObjectMgr::GetItemPrototype(itemId);
+            ItemPrototype const* item_proto = sObjectMgr.GetItemPrototype(itemId);
             if (!item_proto)
             {
                 continue;
@@ -295,7 +295,7 @@ bool GossipSelect_EnchanterNPC(Player* player, GameObject* gameobject, uint32 ui
     player->PlayerTalkClass->ClearMenus();
     uint8 GOSSIP_ICON_SET = GOSSIP_ICON_CHAT;
 
-    if (player->isInCombat())
+    if (player->IsInCombat())
     {
         player->GetSession()->SendNotification("You are in combat!");
         return true;
@@ -304,25 +304,25 @@ bool GossipSelect_EnchanterNPC(Player* player, GameObject* gameobject, uint32 ui
     {
         if (sWorld.GetWowPatch() >= 5)
         {
-            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) != 2591 && player->getClass() == CLASS_DRUID)   { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Intellect +10, Stamina +10, Healing Spells +24",   EQUIPMENT_SLOT_HEAD, 24168); }
-            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) != 2586 && player->getClass() == CLASS_HUNTER)  { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Ranged Attack Power +24, Stamina +10, Hit +1%",    EQUIPMENT_SLOT_HEAD, 24162); }
-            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) != 2588 && player->getClass() == CLASS_MAGE)    { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Healing and Spell Damage +18, Spell Hit +1%",      EQUIPMENT_SLOT_HEAD, 24164); }
-            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) != 2584 && player->getClass() == CLASS_PALADIN) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Defense +7, Stamina +10, Healing Spells +24",      EQUIPMENT_SLOT_HEAD, 24160); }
-            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) != 2590 && player->getClass() == CLASS_PRIEST)  { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Mana Regen +4, Stamina +10, Healing Spells +24",   EQUIPMENT_SLOT_HEAD, 24167); }
-            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) != 2585 && player->getClass() == CLASS_ROGUE)   { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Attack Power +28, Dodge +1%",                      EQUIPMENT_SLOT_HEAD, 24161); }
-            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) != 2587 && player->getClass() == CLASS_SHAMAN)  { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Healing and Spell Damage +13, Intellect +15",      EQUIPMENT_SLOT_HEAD, 24163); }
-            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) != 2589 && player->getClass() == CLASS_WARLOCK) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Healing and Spell Damage +18, Stamina +10",        EQUIPMENT_SLOT_HEAD, 24165); }
-            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) != 2583 && player->getClass() == CLASS_WARRIOR) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Defense +7, Stamina + 10, Block value +15",        EQUIPMENT_SLOT_HEAD, 24149); }
+            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) != 2591 && player->GetClass() == CLASS_DRUID)   { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Intellect +10, Stamina +10, Healing Spells +24",   EQUIPMENT_SLOT_HEAD, 24168); }
+            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) != 2586 && player->GetClass() == CLASS_HUNTER)  { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Ranged Attack Power +24, Stamina +10, Hit +1%",    EQUIPMENT_SLOT_HEAD, 24162); }
+            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) != 2588 && player->GetClass() == CLASS_MAGE)    { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Healing and Spell Damage +18, Spell Hit +1%",      EQUIPMENT_SLOT_HEAD, 24164); }
+            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) != 2584 && player->GetClass() == CLASS_PALADIN) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Defense +7, Stamina +10, Healing Spells +24",      EQUIPMENT_SLOT_HEAD, 24160); }
+            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) != 2590 && player->GetClass() == CLASS_PRIEST)  { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Mana Regen +4, Stamina +10, Healing Spells +24",   EQUIPMENT_SLOT_HEAD, 24167); }
+            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) != 2585 && player->GetClass() == CLASS_ROGUE)   { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Attack Power +28, Dodge +1%",                      EQUIPMENT_SLOT_HEAD, 24161); }
+            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) != 2587 && player->GetClass() == CLASS_SHAMAN)  { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Healing and Spell Damage +13, Intellect +15",      EQUIPMENT_SLOT_HEAD, 24163); }
+            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) != 2589 && player->GetClass() == CLASS_WARLOCK) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Healing and Spell Damage +18, Stamina +10",        EQUIPMENT_SLOT_HEAD, 24165); }
+            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) != 2583 && player->GetClass() == CLASS_WARRIOR) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Defense +7, Stamina + 10, Block value +15",        EQUIPMENT_SLOT_HEAD, 24149); }
 
-            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) == 2591 && player->getClass() == CLASS_DRUID)   { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Intellect +10, Stamina +10, Healing Spells +24", EQUIPMENT_SLOT_HEAD, 24168); }
-            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) == 2586 && player->getClass() == CLASS_HUNTER)  { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Ranged Attack Power +24, Stamina +10, Hit +1%",  EQUIPMENT_SLOT_HEAD, 24162); }
-            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) == 2588 && player->getClass() == CLASS_MAGE)    { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Healing and Spell Damage +18, Spell Hit +1%",        EQUIPMENT_SLOT_HEAD, 24164); }
-            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) == 2584 && player->getClass() == CLASS_PALADIN) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Defense +7, Stamina +10, Healing Spells +24",        EQUIPMENT_SLOT_HEAD, 24160); }
-            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) == 2590 && player->getClass() == CLASS_PRIEST)  { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Mana Regen +4, Stamina +10, Healing Spells +24", EQUIPMENT_SLOT_HEAD, 24167); }
-            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) == 2585 && player->getClass() == CLASS_ROGUE)   { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Attack Power +28, Dodge +1%",                        EQUIPMENT_SLOT_HEAD, 24161); }
-            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) == 2587 && player->getClass() == CLASS_SHAMAN)  { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Healing and Spell Damage +13, Intellect +15",        EQUIPMENT_SLOT_HEAD, 24163); }
-            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) == 2589 && player->getClass() == CLASS_WARLOCK) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Healing and Spell Damage +18, Stamina +10",      EQUIPMENT_SLOT_HEAD, 24165); }
-            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) == 2583 && player->getClass() == CLASS_WARRIOR) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Defense +7, Stamina + 10, Block value +15",      EQUIPMENT_SLOT_HEAD, 24149); }
+            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) == 2591 && player->GetClass() == CLASS_DRUID)   { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Intellect +10, Stamina +10, Healing Spells +24", EQUIPMENT_SLOT_HEAD, 24168); }
+            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) == 2586 && player->GetClass() == CLASS_HUNTER)  { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Ranged Attack Power +24, Stamina +10, Hit +1%",  EQUIPMENT_SLOT_HEAD, 24162); }
+            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) == 2588 && player->GetClass() == CLASS_MAGE)    { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Healing and Spell Damage +18, Spell Hit +1%",        EQUIPMENT_SLOT_HEAD, 24164); }
+            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) == 2584 && player->GetClass() == CLASS_PALADIN) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Defense +7, Stamina +10, Healing Spells +24",        EQUIPMENT_SLOT_HEAD, 24160); }
+            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) == 2590 && player->GetClass() == CLASS_PRIEST)  { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Mana Regen +4, Stamina +10, Healing Spells +24", EQUIPMENT_SLOT_HEAD, 24167); }
+            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) == 2585 && player->GetClass() == CLASS_ROGUE)   { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Attack Power +28, Dodge +1%",                        EQUIPMENT_SLOT_HEAD, 24161); }
+            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) == 2587 && player->GetClass() == CLASS_SHAMAN)  { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Healing and Spell Damage +13, Intellect +15",        EQUIPMENT_SLOT_HEAD, 24163); }
+            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) == 2589 && player->GetClass() == CLASS_WARLOCK) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Healing and Spell Damage +18, Stamina +10",      EQUIPMENT_SLOT_HEAD, 24165); }
+            if (CheckEnchantID(player, EQUIPMENT_SLOT_HEAD) == 2583 && player->GetClass() == CLASS_WARRIOR) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Defense +7, Stamina + 10, Block value +15",      EQUIPMENT_SLOT_HEAD, 24149); }
         }
         if (sWorld.GetWowPatch() >= 1)
         {
@@ -736,25 +736,25 @@ bool GossipSelect_EnchanterNPC(Player* player, GameObject* gameobject, uint32 ui
     {
     if (sWorld.GetWowPatch() >= 5)
     {
-        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) != 2591 && player->getClass() == CLASS_DRUID) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Intellect +10, Stamina +10, Healing Spells +24", EQUIPMENT_SLOT_LEGS, 24168); }
-        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) != 2586 && player->getClass() == CLASS_HUNTER) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Ranged Attack Power +24, Stamina +10, Hit +1%", EQUIPMENT_SLOT_LEGS, 24162); }
-        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) != 2588 && player->getClass() == CLASS_MAGE) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Healing and Spell Damage +18, Spell Hit +1%", EQUIPMENT_SLOT_LEGS, 24164); }
-        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) != 2584 && player->getClass() == CLASS_PALADIN) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Defense +7, Stamina +10, Healing Spells +24", EQUIPMENT_SLOT_LEGS, 24160); }
-        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) != 2590 && player->getClass() == CLASS_PRIEST) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Mana Regen +4, Stamina +10, Healing Spells +24", EQUIPMENT_SLOT_LEGS, 24167); }
-        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) != 2585 && player->getClass() == CLASS_ROGUE) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Attack Power +28, Dodge +1%", EQUIPMENT_SLOT_LEGS, 24161); }
-        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) != 2587 && player->getClass() == CLASS_SHAMAN) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Healing and Spell Damage +13, Intellect +15", EQUIPMENT_SLOT_LEGS, 24163); }
-        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) != 2589 && player->getClass() == CLASS_WARLOCK) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Healing and Spell Damage +18, Stamina +10", EQUIPMENT_SLOT_LEGS, 24165); }
-        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) != 2583 && player->getClass() == CLASS_WARRIOR) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Defense +7, Stamina + 10, Block value +15", EQUIPMENT_SLOT_LEGS, 24149); }
+        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) != 2591 && player->GetClass() == CLASS_DRUID) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Intellect +10, Stamina +10, Healing Spells +24", EQUIPMENT_SLOT_LEGS, 24168); }
+        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) != 2586 && player->GetClass() == CLASS_HUNTER) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Ranged Attack Power +24, Stamina +10, Hit +1%", EQUIPMENT_SLOT_LEGS, 24162); }
+        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) != 2588 && player->GetClass() == CLASS_MAGE) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Healing and Spell Damage +18, Spell Hit +1%", EQUIPMENT_SLOT_LEGS, 24164); }
+        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) != 2584 && player->GetClass() == CLASS_PALADIN) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Defense +7, Stamina +10, Healing Spells +24", EQUIPMENT_SLOT_LEGS, 24160); }
+        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) != 2590 && player->GetClass() == CLASS_PRIEST) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Mana Regen +4, Stamina +10, Healing Spells +24", EQUIPMENT_SLOT_LEGS, 24167); }
+        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) != 2585 && player->GetClass() == CLASS_ROGUE) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Attack Power +28, Dodge +1%", EQUIPMENT_SLOT_LEGS, 24161); }
+        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) != 2587 && player->GetClass() == CLASS_SHAMAN) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Healing and Spell Damage +13, Intellect +15", EQUIPMENT_SLOT_LEGS, 24163); }
+        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) != 2589 && player->GetClass() == CLASS_WARLOCK) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Healing and Spell Damage +18, Stamina +10", EQUIPMENT_SLOT_LEGS, 24165); }
+        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) != 2583 && player->GetClass() == CLASS_WARRIOR) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Defense +7, Stamina + 10, Block value +15", EQUIPMENT_SLOT_LEGS, 24149); }
 
-        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) == 2591 && player->getClass() == CLASS_DRUID) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Intellect +10, Stamina +10, Healing Spells +24", EQUIPMENT_SLOT_LEGS, 24168); }
-        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) == 2586 && player->getClass() == CLASS_HUNTER) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Ranged Attack Power +24, Stamina +10, Hit +1%", EQUIPMENT_SLOT_LEGS, 24162); }
-        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) == 2588 && player->getClass() == CLASS_MAGE) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Healing and Spell Damage +18, Spell Hit +1%", EQUIPMENT_SLOT_LEGS, 24164); }
-        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) == 2584 && player->getClass() == CLASS_PALADIN) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Defense +7, Stamina +10, Healing Spells +24", EQUIPMENT_SLOT_LEGS, 24160); }
-        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) == 2590 && player->getClass() == CLASS_PRIEST) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Mana Regen +4, Stamina +10, Healing Spells +24", EQUIPMENT_SLOT_LEGS, 24167); }
-        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) == 2585 && player->getClass() == CLASS_ROGUE) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Attack Power +28, Dodge +1%", EQUIPMENT_SLOT_LEGS, 24161); }
-        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) == 2587 && player->getClass() == CLASS_SHAMAN) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Healing and Spell Damage +13, Intellect +15", EQUIPMENT_SLOT_LEGS, 24163); }
-        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) == 2589 && player->getClass() == CLASS_WARLOCK) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Healing and Spell Damage +18, Stamina +10", EQUIPMENT_SLOT_LEGS, 24165); }
-        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) == 2583 && player->getClass() == CLASS_WARRIOR) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Defense +7, Stamina + 10, Block value +15", EQUIPMENT_SLOT_LEGS, 24149); }
+        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) == 2591 && player->GetClass() == CLASS_DRUID) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Intellect +10, Stamina +10, Healing Spells +24", EQUIPMENT_SLOT_LEGS, 24168); }
+        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) == 2586 && player->GetClass() == CLASS_HUNTER) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Ranged Attack Power +24, Stamina +10, Hit +1%", EQUIPMENT_SLOT_LEGS, 24162); }
+        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) == 2588 && player->GetClass() == CLASS_MAGE) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Healing and Spell Damage +18, Spell Hit +1%", EQUIPMENT_SLOT_LEGS, 24164); }
+        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) == 2584 && player->GetClass() == CLASS_PALADIN) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Defense +7, Stamina +10, Healing Spells +24", EQUIPMENT_SLOT_LEGS, 24160); }
+        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) == 2590 && player->GetClass() == CLASS_PRIEST) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Mana Regen +4, Stamina +10, Healing Spells +24", EQUIPMENT_SLOT_LEGS, 24167); }
+        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) == 2585 && player->GetClass() == CLASS_ROGUE) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Attack Power +28, Dodge +1%", EQUIPMENT_SLOT_LEGS, 24161); }
+        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) == 2587 && player->GetClass() == CLASS_SHAMAN) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Healing and Spell Damage +13, Intellect +15", EQUIPMENT_SLOT_LEGS, 24163); }
+        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) == 2589 && player->GetClass() == CLASS_WARLOCK) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Healing and Spell Damage +18, Stamina +10", EQUIPMENT_SLOT_LEGS, 24165); }
+        if (CheckEnchantID(player, EQUIPMENT_SLOT_LEGS) == 2583 && player->GetClass() == CLASS_WARRIOR) { player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Defense +7, Stamina + 10, Block value +15", EQUIPMENT_SLOT_LEGS, 24149); }
     }
     if (sWorld.GetWowPatch() >= 1)
     {
