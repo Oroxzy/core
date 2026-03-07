@@ -47,6 +47,7 @@ set (SCRIPTS_SRCS
     custom/npc_training_dummies.cpp
     custom/template_npc.cpp
     custom/npc_enchanter.cpp
+	custom/PlayerStash.cpp
     eastern_kingdoms/alterac_mountains/alterac_mountains.cpp
     eastern_kingdoms/arathi_highlands/arathi_highlands.cpp
     eastern_kingdoms/blasted_lands/blasted_lands.cpp

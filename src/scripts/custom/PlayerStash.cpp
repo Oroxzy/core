@@ -107,13 +107,12 @@ namespace PlayerStash
     static uint32 GetNextTempId(const char* tableName)
     {
         uint32 tempId = 0;
-        QueryResult* result = CharacterDatabase.PQuery("SELECT MAX(temp_id) FROM %s", tableName);
+        auto result = CharacterDatabase.PQuery("SELECT MAX(temp_id) FROM %s", tableName);
         if (result)
         {
             Field* fields = result->Fetch();
             if (fields)
                 tempId = fields[0].GetUInt32();
-            delete result;
         }
 
         return tempId ? (tempId + 1) : MIN_TEMP_ID;
@@ -135,13 +134,12 @@ namespace PlayerStash
             return 0;
 
         uint32 count = 0;
-        QueryResult* result = CharacterDatabase.PQuery("SELECT COUNT(DISTINCT temp_id) FROM %s WHERE char_guid='%u'", tableName, player->GetGUID());
+        auto result = CharacterDatabase.PQuery("SELECT COUNT(DISTINCT temp_id) FROM %s WHERE char_guid='%u'", tableName, player->GetGUID());
         if (result)
         {
             Field* fields = result->Fetch();
             if (fields)
                 count = fields[0].GetUInt32();
-            delete result;
         }
 
         return count;
@@ -162,11 +160,10 @@ namespace PlayerStash
         if (!player || !tempId)
             return false;
 
-        QueryResult* result = CharacterDatabase.PQuery("SELECT 1 FROM player_stash_gear WHERE temp_id='%u' AND char_guid='%u' LIMIT 1", tempId, player->GetGUID());
+        auto result = CharacterDatabase.PQuery("SELECT 1 FROM player_stash_gear WHERE temp_id='%u' AND char_guid='%u' LIMIT 1", tempId, player->GetGUID());
         if (!result)
             return false;
 
-        delete result;
         return true;
     }
 
@@ -175,24 +172,22 @@ namespace PlayerStash
         if (!player || !tempId)
             return false;
 
-        QueryResult* result = CharacterDatabase.PQuery("SELECT 1 FROM player_stash_talents WHERE temp_id='%u' AND char_guid='%u' LIMIT 1", tempId, player->GetGUID());
+        auto result = CharacterDatabase.PQuery("SELECT 1 FROM player_stash_talents WHERE temp_id='%u' AND char_guid='%u' LIMIT 1", tempId, player->GetGUID());
         if (!result)
             return false;
 
-        delete result;
         return true;
     }
 
     static uint32 GetItemPatch(uint32 itemEntry)
     {
         uint32 patch = 0;
-        QueryResult* result = WorldDatabase.PQuery("SELECT patch FROM item_template WHERE entry='%u'", itemEntry);
+        auto result = WorldDatabase.PQuery("SELECT patch FROM item_template WHERE entry='%u'", itemEntry);
         if (result)
         {
             Field* fields = result->Fetch();
             if (fields)
                 patch = fields[0].GetUInt32();
-            delete result;
         }
         return patch;
     }
@@ -246,7 +241,7 @@ namespace PlayerStash
         if (!player || !tempId)
             return false;
 
-        QueryResult* result = CharacterDatabase.PQuery(
+        auto result = CharacterDatabase.PQuery(
             "SELECT item_slot, item_entry, item_enchant FROM player_stash_gear WHERE char_guid='%u' AND temp_id='%u' ORDER BY item_slot ASC",
             player->GetGUID(), tempId);
 
@@ -267,7 +262,6 @@ namespace PlayerStash
         }
         while (result->NextRow());
 
-        delete result;
         return !rows.empty();
     }
 
@@ -306,7 +300,7 @@ namespace PlayerStash
         if (!player || !tempId)
             return;
 
-        QueryResult* result = CharacterDatabase.PQuery(
+        auto result = CharacterDatabase.PQuery(
             "SELECT talent_id FROM player_stash_talents WHERE char_guid='%u' AND temp_id='%u' ORDER BY rank ASC",
             player->GetGUID(), tempId);
 
@@ -325,7 +319,6 @@ namespace PlayerStash
         }
         while (result->NextRow());
 
-        delete result;
     }
 
     static std::string TalentsExportNameString(Player* player)
@@ -345,7 +338,7 @@ namespace PlayerStash
             if (!talentTabInfo)
                 continue;
 
-            if ((player->getClassMask() & talentTabInfo->ClassMask) == 0)
+            if ((player->GetClassMask() & talentTabInfo->ClassMask) == 0)
                 continue;
 
             int32 highestRank = -1;
@@ -370,7 +363,7 @@ namespace PlayerStash
         uint32 treeC = 0;
         const char* dominantName = "";
 
-        switch (player->getClass())
+        switch (player->GetByteValue(UNIT_FIELD_BYTES_0, 1))
         {
         case CLASS_WARRIOR:
             treeA = pointsByTab[WarriorArms];
@@ -504,7 +497,7 @@ namespace PlayerStash
             if (!talentTabInfo)
                 continue;
 
-            if ((player->getClassMask() & talentTabInfo->ClassMask) == 0)
+            if ((player->GetClassMask() & talentTabInfo->ClassMask) == 0)
                 continue;
 
             for (int32 rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
@@ -545,7 +538,7 @@ namespace PlayerStash
         if (!player || !gameobject)
             return;
 
-        if (player->isInCombat())
+        if (player->IsInCombat())
         {
             player->GetSession()->SendNotification("You are in combat!");
             return;
@@ -585,7 +578,7 @@ namespace PlayerStash
     {
         player->PlayerTalkClass->ClearMenus();
 
-        QueryResult* result = CharacterDatabase.PQuery(
+        auto result = CharacterDatabase.PQuery(
             "SELECT gossip_text, temp_id, patch FROM player_stash_gear WHERE char_guid='%u' GROUP BY temp_id ORDER BY temp_id ASC",
             player->GetGUID());
 
@@ -610,7 +603,6 @@ namespace PlayerStash
             }
             while (result->NextRow());
 
-            delete result;
         }
 
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Delete an Equipment Set.", GOSSIP_SENDER_MAIN, DELETE_GEAR);
@@ -622,7 +614,7 @@ namespace PlayerStash
     {
         player->PlayerTalkClass->ClearMenus();
 
-        QueryResult* result = CharacterDatabase.PQuery(
+        auto result = CharacterDatabase.PQuery(
             "SELECT gossip_text, temp_id FROM player_stash_talents WHERE char_guid='%u' GROUP BY temp_id ORDER BY temp_id ASC",
             player->GetGUID());
 
@@ -640,7 +632,6 @@ namespace PlayerStash
             }
             while (result->NextRow());
 
-            delete result;
         }
 
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Delete a Specification.", GOSSIP_SENDER_MAIN, DELETE_TALENTS);
@@ -652,7 +643,7 @@ namespace PlayerStash
     {
         player->PlayerTalkClass->ClearMenus();
 
-        QueryResult* result = CharacterDatabase.PQuery(
+        auto result = CharacterDatabase.PQuery(
             "SELECT gossip_text, temp_id FROM player_stash_talents WHERE char_guid='%u' GROUP BY temp_id ORDER BY temp_id ASC",
             player->GetGUID());
 
@@ -670,7 +661,6 @@ namespace PlayerStash
             }
             while (result->NextRow());
 
-            delete result;
         }
 
         AddBackButton(player);
@@ -681,7 +671,7 @@ namespace PlayerStash
     {
         player->PlayerTalkClass->ClearMenus();
 
-        QueryResult* result = CharacterDatabase.PQuery(
+        auto result = CharacterDatabase.PQuery(
             "SELECT gossip_text, temp_id FROM player_stash_gear WHERE char_guid='%u' GROUP BY temp_id ORDER BY temp_id ASC",
             player->GetGUID());
 
@@ -699,7 +689,6 @@ namespace PlayerStash
             }
             while (result->NextRow());
 
-            delete result;
         }
 
         AddBackButton(player);
@@ -946,7 +935,7 @@ bool GossipSelectCode_player_stash(Player* player, GameObject* gameobject, uint3
     return true;
 }
 
-void AddSC_player_stash()
+void AddSC_PlayerStash()
 {
     Script* newscript = new Script;
     newscript->Name = "player_stash";
