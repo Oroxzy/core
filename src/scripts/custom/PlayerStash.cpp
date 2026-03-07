@@ -1,20 +1,14 @@
 
 #include "scriptPCH.h"
-#include "BattleGroundAV.h"
-#include "BattleGroundWS.h"
-
-#include "Totem.h"
-#include "WorldPacket.h"
-#include "Log.h"
-#include "Group.h"
 #include "Player.h"
 #include "ObjectMgr.h"
 #include "SpellMgr.h"
 #include "DBCStores.h"
-#include "CreatureAI.h"
-#include "InstanceData.h"
 
-#include <ctime>
+#include <map>
+#include <sstream>
+#include <string>
+#include <vector>
 
 #define GOSSIP_SENDER_GEAR_DELETE       10000001
 #define GOSSIP_SENDER_TALENTS_DELETE    10000002
@@ -23,989 +17,850 @@
 #define GOSSIP_SENDER_GEAR_USE          10000007
 #define GOSSIP_SENDER_TALENT_USE        10000008
 
-// item defines
-#define BOTTOMLESS_BAG      14156
-// sound defines
-#define ChestOpen           1277
-#define ChestClose          1278
-#define SpellFizzleHoly     1430
-#define Click               116
-// generic defines
-#define SHOWBANK            GOSSIP_ACTION_INFO_DEF+1
-#define SHOWMAIL            GOSSIP_ACTION_INFO_DEF+2
-#define SAVE_TALENTS        GOSSIP_ACTION_INFO_DEF+3
-#define SAVE_GEAR           GOSSIP_ACTION_INFO_DEF+4
-#define SHOW_TALENTS        GOSSIP_ACTION_INFO_DEF+5
-#define SHOW_GEAR           GOSSIP_ACTION_INFO_DEF+6
-#define DELETE_GEAR         GOSSIP_ACTION_INFO_DEF+7
-#define DELETE_TALENTS      GOSSIP_ACTION_INFO_DEF+8
-#define DELETE_GEAR_OK      GOSSIP_ACTION_INFO_DEF+9
-#define DELETE_TALENTS_OK   GOSSIP_ACTION_INFO_DEF+10
-#define APPLY_GEAR          GOSSIP_ACTION_INFO_DEF+11
-#define APPLY_TALENTS       GOSSIP_ACTION_INFO_DEF+12
-#define BINDHOME       GOSSIP_ACTION_INFO_DEF+13
-// spell defines
-#define COOL_VISUAL_SPELL   25100
+#define BOTTOMLESS_BAG                  14156
 
-std::string StashGetClassString(Player* player)
+#define ChestOpen                       1277
+#define ChestClose                      1278
+#define SpellFizzleHoly                 1430
+#define Click                           116
+
+#define SHOWBANK                        (GOSSIP_ACTION_INFO_DEF + 1)
+#define SHOWMAIL                        (GOSSIP_ACTION_INFO_DEF + 2)
+#define SAVE_TALENTS                    (GOSSIP_ACTION_INFO_DEF + 3)
+#define SAVE_GEAR                       (GOSSIP_ACTION_INFO_DEF + 4)
+#define SHOW_TALENTS                    (GOSSIP_ACTION_INFO_DEF + 5)
+#define SHOW_GEAR                       (GOSSIP_ACTION_INFO_DEF + 6)
+#define DELETE_GEAR                     (GOSSIP_ACTION_INFO_DEF + 7)
+#define DELETE_TALENTS                  (GOSSIP_ACTION_INFO_DEF + 8)
+#define DELETE_GEAR_OK                  (GOSSIP_ACTION_INFO_DEF + 9)
+#define DELETE_TALENTS_OK               (GOSSIP_ACTION_INFO_DEF + 10)
+#define APPLY_GEAR                      (GOSSIP_ACTION_INFO_DEF + 11)
+#define APPLY_TALENTS                   (GOSSIP_ACTION_INFO_DEF + 12)
+#define BINDHOME                        (GOSSIP_ACTION_INFO_DEF + 13)
+
+#define COOL_VISUAL_SPELL               25100
+#define MAX_STASH_SETS                  6
+#define MIN_TEMP_ID                     50
+#define STASH_TELEPORTER_ITEM           90678
+
+namespace PlayerStash
 {
-    switch (player->getClass())
+    enum TalentTabNames
     {
-    case CLASS_PRIEST:
-        return "Priest";
-        break;
-    case CLASS_PALADIN:
-        return "Paladin";
-        break;
-    case CLASS_WARRIOR:
-        return "Warrior";
-        break;
-    case CLASS_MAGE:
-        return "Mage";
-        break;
-    case CLASS_WARLOCK:
-        return "Warlock";
-        break;
-    case CLASS_SHAMAN:
-        return "Shaman";
-        break;
-    case CLASS_DRUID:
-        return "Druid";
-        break;
-    case CLASS_HUNTER:
-        return "Hunter";
-        break;
-    case CLASS_ROGUE:
-        return "Rogue";
-        break;
-    default:
-        break;
+        WarriorProtection      = 163,
+        WarriorFury            = 164,
+        WarriorArms            = 161,
+        WarlockDemonology      = 303,
+        WarlockDestruction     = 301,
+        WarlockAffliction      = 302,
+        ShamanRestoration      = 262,
+        ShamanEnhancement      = 263,
+        ShamanElementalCombat  = 261,
+        RogueSubtlety          = 183,
+        RogueCombat            = 181,
+        RogueAssassination     = 182,
+        PriestShadow           = 203,
+        PriestHoly             = 202,
+        PriestDiscipline       = 201,
+        PaladinProtection      = 383,
+        PaladinHoly            = 382,
+        PaladinRetribution     = 381,
+        MageFrost              = 61,
+        MageFire               = 41,
+        MageArcane             = 81,
+        HunterSurvival         = 362,
+        HunterMarksmanship     = 363,
+        HunterBeastMastery     = 361,
+        DruidRestoration       = 282,
+        DruidFeralCombat       = 281,
+        DruidBalance           = 283
+    };
+
+    struct GearRow
+    {
+        uint8 slot;
+        uint32 itemEntry;
+        uint32 enchantId;
+
+        GearRow() : slot(0), itemEntry(0), enchantId(0) {}
+        GearRow(uint8 pSlot, uint32 pItemEntry, uint32 pEnchantId)
+            : slot(pSlot), itemEntry(pItemEntry), enchantId(pEnchantId) {}
+    };
+
+    static bool IsSupportedEquipmentSlot(uint8 slot)
+    {
+        if (slot < EQUIPMENT_SLOT_START || slot >= EQUIPMENT_SLOT_END)
+            return false;
+
+        return slot != EQUIPMENT_SLOT_BODY && slot != EQUIPMENT_SLOT_TABARD;
     }
-    return ""; // Fix warning, this should never happen
-}
 
-
-enum TalentTabNames
-{
-    WarriorProtection = 163,
-    WarriorFury = 164,
-    WarriorArms = 161,
-    WarlockDemonology = 303,
-    WarlockDestruction = 301,
-    WarlockAffliction = 302,
-    ShamanRestoration = 262,
-    ShamanEnhancement = 263,
-    ShamanElementalCombat = 261,
-    RogueSubtlety = 183,
-    RogueCombat = 181,
-    RogueAssassination = 182,
-    PriestShadow = 203,
-    PriestHoly = 202,
-    PriestDiscipline = 201,
-    PaladinProtection = 383,
-    PaladinHoly = 382,
-    PaladinRetribution = 381,
-    MageFrost = 61,
-    MageFire = 41,
-    MageArcane = 81,
-    HunterSurvival = 362,
-    HunterMarksmanship = 363,
-    HunterBeastMastery = 361,
-    DruidRestoration = 282,
-    DruidFeralCombat = 281,
-    DruidBalance = 283,
-};
-
-std::string TalentsExportNameString(Player* player)
-{
-    uint32 curtalent_spent = 0;
-    uint32 WarriorProtectionPoints = 0;
-    uint32 WarriorFuryPoints = 0;
-    uint32 WarriorArmsPoints = 0;
-    uint32 WarlockDemonologyPoints = 0;
-    uint32 WarlockDestructionPoints = 0;
-    uint32 WarlockAfflictionPoints = 0;
-    uint32 ShamanRestorationPoints = 0;
-    uint32 ShamanEnhancementPoints = 0;
-    uint32 ShamanElementalCombatPoints = 0;
-    uint32 RogueSubtletyPoints = 0;
-    uint32 RogueCombatPoints = 0;
-    uint32 RogueAssassinationPoints = 0;
-    uint32 PriestShadowPoints = 0;
-    uint32 PriestHolyPoints = 0;
-    uint32 PriestDisciplinePoints = 0;
-    uint32 PaladinProtectionPoints = 0;
-    uint32 PaladinHolyPoints = 0;
-    uint32 PaladinRetributionPoints = 0;
-    uint32 MageFrostPoints = 0;
-    uint32 MageFirePoints = 0;
-    uint32 MageArcanePoints = 0;
-    uint32 HunterSurvivalPoints = 0;
-    uint32 HunterMarksmanshipPoints = 0;
-    uint32 HunterBeastMasteryPoints = 0;
-    uint32 DruidRestorationPoints = 0;
-    uint32 DruidFeralCombatPoints = 0;
-    uint32 DruidBalancePoints = 0;
-
-    for (uint32 i = 1; i < sTalentStore.GetNumRows(); ++i)
+    static void PlaySuccessFeedback(Player* player)
     {
-        TalentEntry const *talentInfo = sTalentStore.LookupEntry(i);
-        if (!talentInfo) continue;
+        if (!player)
+            return;
 
-        TalentTabEntry const *talentTabInfo = sTalentTabStore.LookupEntry(talentInfo->TalentTab);
-        if (!talentTabInfo)
-            continue;
+        player->CastSpell(player, COOL_VISUAL_SPELL, true);
+        player->PlayDirectSound(SpellFizzleHoly, 0);
+    }
 
-        if (talentTabInfo->ClassMask != player->getClassMask())
-            continue;
-
-        uint32 spentPoints = 0;
-        for (int j = 0; j < MAX_TALENT_RANK; ++j)
+    static uint32 GetNextTempId(const char* tableName)
+    {
+        uint32 tempId = 0;
+        QueryResult* result = CharacterDatabase.PQuery("SELECT MAX(temp_id) FROM %s", tableName);
+        if (result)
         {
-            if (talentInfo->RankID[j] != 0)
+            Field* fields = result->Fetch();
+            if (fields)
+                tempId = fields[0].GetUInt32();
+            delete result;
+        }
+
+        return tempId ? (tempId + 1) : MIN_TEMP_ID;
+    }
+
+    static uint32 GetTalentId()
+    {
+        return GetNextTempId("player_stash_talents");
+    }
+
+    static uint32 GetGearId()
+    {
+        return GetNextTempId("player_stash_gear");
+    }
+
+    static uint32 CountDistinctSets(Player* player, const char* tableName)
+    {
+        if (!player)
+            return 0;
+
+        uint32 count = 0;
+        QueryResult* result = CharacterDatabase.PQuery("SELECT COUNT(DISTINCT temp_id) FROM %s WHERE char_guid='%u'", tableName, player->GetGUID());
+        if (result)
+        {
+            Field* fields = result->Fetch();
+            if (fields)
+                count = fields[0].GetUInt32();
+            delete result;
+        }
+
+        return count;
+    }
+
+    static uint32 CountStoredGear(Player* player)
+    {
+        return CountDistinctSets(player, "player_stash_gear");
+    }
+
+    static uint32 CountStoredTalents(Player* player)
+    {
+        return CountDistinctSets(player, "player_stash_talents");
+    }
+
+    static bool HasStoredGear(Player* player, uint32 tempId)
+    {
+        if (!player || !tempId)
+            return false;
+
+        QueryResult* result = CharacterDatabase.PQuery("SELECT 1 FROM player_stash_gear WHERE temp_id='%u' AND char_guid='%u' LIMIT 1", tempId, player->GetGUID());
+        if (!result)
+            return false;
+
+        delete result;
+        return true;
+    }
+
+    static bool HasStoredTalents(Player* player, uint32 tempId)
+    {
+        if (!player || !tempId)
+            return false;
+
+        QueryResult* result = CharacterDatabase.PQuery("SELECT 1 FROM player_stash_talents WHERE temp_id='%u' AND char_guid='%u' LIMIT 1", tempId, player->GetGUID());
+        if (!result)
+            return false;
+
+        delete result;
+        return true;
+    }
+
+    static uint32 GetItemPatch(uint32 itemEntry)
+    {
+        uint32 patch = 0;
+        QueryResult* result = WorldDatabase.PQuery("SELECT patch FROM item_template WHERE entry='%u'", itemEntry);
+        if (result)
+        {
+            Field* fields = result->Fetch();
+            if (fields)
+                patch = fields[0].GetUInt32();
+            delete result;
+        }
+        return patch;
+    }
+
+    static bool PlayerHasUnspentTalentPoints(Player* player)
+    {
+        return player && player->GetFreeTalentPoints() > 0;
+    }
+
+    static void AddBankBags(Player* player)
+    {
+        if (!player)
+            return;
+
+        for (uint8 slot = BANK_SLOT_BAG_START; slot < BANK_SLOT_BAG_END; ++slot)
+        {
+            if (!player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                player->EquipNewItem(slot, BOTTOMLESS_BAG, true);
+        }
+    }
+
+    static void ApplyEnchantment(Player* player, Item* item, EnchantmentSlot slot, uint32 enchantEntry, uint32 duration, uint32 charges)
+    {
+        if (!player || !item || !enchantEntry)
+            return;
+
+        player->ApplyEnchantment(item, slot, false);
+        item->SetEnchantment(slot, enchantEntry, duration, charges);
+        player->ApplyEnchantment(item, slot, true);
+    }
+
+    static void DeleteEquippedGear(Player* player)
+    {
+        if (!player)
+            return;
+
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        {
+            if (!IsSupportedEquipmentSlot(slot))
+                continue;
+
+            if (player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                player->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
+        }
+    }
+
+    static bool LoadGearRows(Player* player, uint32 tempId, std::vector<GearRow>& rows)
+    {
+        rows.clear();
+
+        if (!player || !tempId)
+            return false;
+
+        QueryResult* result = CharacterDatabase.PQuery(
+            "SELECT item_slot, item_entry, item_enchant FROM player_stash_gear WHERE char_guid='%u' AND temp_id='%u' ORDER BY item_slot ASC",
+            player->GetGUID(), tempId);
+
+        if (!result)
+            return false;
+
+        do
+        {
+            Field* fields = result->Fetch();
+            if (!fields)
+                continue;
+
+            uint8 slot = uint8(fields[0].GetUInt32());
+            if (!IsSupportedEquipmentSlot(slot))
+                continue;
+
+            rows.push_back(GearRow(slot, fields[1].GetUInt32(), fields[2].GetUInt32()));
+        }
+        while (result->NextRow());
+
+        delete result;
+        return !rows.empty();
+    }
+
+    static void EquipItemsFromDB(Player* player, uint32 tempId)
+    {
+        if (!player || !tempId)
+            return;
+
+        std::vector<GearRow> rows;
+        if (!LoadGearRows(player, tempId, rows))
+            return;
+
+        for (std::vector<GearRow>::const_iterator itr = rows.begin(); itr != rows.end(); ++itr)
+        {
+            ItemPrototype const* itemProto = sObjectMgr.GetItemPrototype(itr->itemEntry);
+            if (!itemProto)
+                continue;
+
+            if (itemProto->RequiredReputationFaction && itemProto->RequiredReputationRank > 0)
             {
-                switch (talentInfo->TalentTab)
+                if (ReputationRank(itemProto->RequiredReputationRank) > player->GetReputationRank(itemProto->RequiredReputationFaction))
                 {
-                    //  WARRIOR
+                    FactionEntry const* factionEntry = sObjectMgr.GetFactionEntry(itemProto->RequiredReputationFaction);
+                    if (factionEntry)
+                        player->GetReputationMgr().ModifyReputation(factionEntry, 85000);
+                }
+            }
 
-                case WarriorProtection:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == WarriorProtection)
-                    {
-                        spentPoints += j + 1;
-                        WarriorProtectionPoints += spentPoints;
-                    }
-                    break;
-                case WarriorFury:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == WarriorFury)
-                    {
-                        spentPoints += j + 1;
-                        WarriorFuryPoints += spentPoints;
-                    }
-                    break;
-                case WarriorArms:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == WarriorArms)
-                    {
-                        spentPoints += j + 1;
-                        WarriorArmsPoints += spentPoints;
-                    }
-                    break;
+            player->EquipNewItem(itr->slot, itr->itemEntry, true);
+            ApplyEnchantment(player, player->GetItemByPos(INVENTORY_SLOT_BAG_0, itr->slot), PERM_ENCHANTMENT_SLOT, itr->enchantId, 0, 0);
+        }
+    }
 
-                    //  WARLOCK
+    static void LearnTalentsFromDB(Player* player, uint32 tempId)
+    {
+        if (!player || !tempId)
+            return;
 
-                case WarlockDemonology:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == WarlockDemonology)
-                    {
-                        spentPoints += j + 1;
-                        WarlockDemonologyPoints += spentPoints;
-                    }
-                    break;
-                case WarlockDestruction:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == WarlockDestruction)
-                    {
-                        spentPoints += j + 1;
-                        WarlockDestructionPoints += spentPoints;
-                    }
-                    break;
-                case WarlockAffliction:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == WarlockAffliction)
-                    {
-                        spentPoints += j + 1;
-                        WarlockAfflictionPoints += spentPoints;
-                    }
-                    break;
+        QueryResult* result = CharacterDatabase.PQuery(
+            "SELECT talent_id FROM player_stash_talents WHERE char_guid='%u' AND temp_id='%u' ORDER BY rank ASC",
+            player->GetGUID(), tempId);
 
-                    //  SHAMAN
+        if (!result)
+            return;
 
-                case ShamanElementalCombat:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == ShamanElementalCombat)
-                    {
-                        spentPoints += j + 1;
-                        ShamanElementalCombatPoints += spentPoints;
-                    }
-                    break;
-                case ShamanEnhancement:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == ShamanEnhancement)
-                    {
-                        spentPoints += j + 1;
-                        ShamanEnhancementPoints += spentPoints;
-                    }
-                    break;
-                case ShamanRestoration:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == ShamanRestoration)
-                    {
-                        spentPoints += j + 1;
-                        ShamanRestorationPoints += spentPoints;
-                    }
-                    break;
+        do
+        {
+            Field* fields = result->Fetch();
+            if (!fields)
+                continue;
 
-                    //  ROGUE
+            uint32 talentId = fields[0].GetUInt32();
+            if (talentId)
+                player->LearnSpell(talentId, false, true);
+        }
+        while (result->NextRow());
 
-                case RogueAssassination:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == RogueAssassination)
-                    {
-                        spentPoints += j + 1;
-                        RogueAssassinationPoints += spentPoints;
-                    }
-                    break;
-                case RogueCombat:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == RogueCombat)
-                    {
-                        spentPoints += j + 1;
-                        RogueCombatPoints += spentPoints;
-                    }
-                    break;
-                case RogueSubtlety:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == RogueSubtlety)
-                    {
-                        spentPoints += j + 1;
-                        RogueSubtletyPoints += spentPoints;
-                    }
-                    break;
+        delete result;
+    }
 
-                    //  PRIEST
+    static std::string TalentsExportNameString(Player* player)
+    {
+        if (!player)
+            return "";
 
-                case PriestDiscipline:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == PriestDiscipline)
-                    {
-                        spentPoints += j + 1;
-                        PriestDisciplinePoints += spentPoints;
-                    }
-                    break;
-                case PriestHoly:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == PriestHoly)
-                    {
-                        spentPoints += j + 1;
-                        PriestHolyPoints += spentPoints;
-                    }
-                    break;
-                case PriestShadow:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == PriestShadow)
-                    {
-                        spentPoints += j + 1;
-                        PriestShadowPoints += spentPoints;
-                    }
-                    break;
+        std::map<uint32, uint32> pointsByTab;
 
-                    //  PALADIN
+        for (uint32 i = 0; i < sTalentStore.GetNumRows(); ++i)
+        {
+            TalentEntry const* talentInfo = sTalentStore.LookupEntry(i);
+            if (!talentInfo)
+                continue;
 
-                case PaladinHoly:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == PaladinHoly)
-                    {
-                        spentPoints += j + 1;
-                        PaladinHolyPoints += spentPoints;
-                    }
-                    break;
-                case PaladinProtection:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == PaladinProtection)
-                    {
-                        spentPoints += j + 1;
-                        PaladinProtectionPoints += spentPoints;
-                    }
-                    break;
-                case PaladinRetribution:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == PaladinRetribution)
-                    {
-                        spentPoints += j + 1;
-                        PaladinRetributionPoints += spentPoints;
-                    }
-                    break;
+            TalentTabEntry const* talentTabInfo = sTalentTabStore.LookupEntry(talentInfo->TalentTab);
+            if (!talentTabInfo)
+                continue;
 
-                    //  MAGE
+            if ((player->getClassMask() & talentTabInfo->ClassMask) == 0)
+                continue;
 
-                case MageArcane:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == MageArcane)
-                    {
-                        spentPoints += j + 1;
-                        MageArcanePoints += spentPoints;
-                    }
-                    break;
-                case MageFire:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == MageFire)
-                    {
-                        spentPoints += j + 1;
-                        MageFirePoints += spentPoints;
-                    }
-                    break;
-                case MageFrost:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == MageFrost)
-                    {
-                        spentPoints += j + 1;
-                        MageFrostPoints += spentPoints;
-                    }
-                    break;
+            int32 highestRank = -1;
+            for (int32 rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
+            {
+                if (!talentInfo->RankID[rank])
+                    continue;
 
-                    //  HUNTER
+                if (player->HasSpell(talentInfo->RankID[rank]))
+                {
+                    highestRank = rank;
+                    break;
+                }
+            }
 
-                case HunterBeastMastery:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == HunterBeastMastery)
-                    {
-                        spentPoints += j + 1;
-                        HunterBeastMasteryPoints += spentPoints;
-                    }
-                    break;
-                case HunterMarksmanship:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == HunterMarksmanship)
-                    {
-                        spentPoints += j + 1;
-                        HunterMarksmanshipPoints += spentPoints;
-                    }
-                    break;
-                case HunterSurvival:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == HunterSurvival)
-                    {
-                        spentPoints += j + 1;
-                        HunterSurvivalPoints += spentPoints;
-                    }
-                    break;
+            if (highestRank >= 0)
+                pointsByTab[talentInfo->TalentTab] += uint32(highestRank + 1);
+        }
 
-                    //  DRUID
+        uint32 treeA = 0;
+        uint32 treeB = 0;
+        uint32 treeC = 0;
+        const char* dominantName = "";
 
-                case DruidBalance:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == DruidBalance)
-                    {
-                        spentPoints += j + 1;
-                        DruidBalancePoints += spentPoints;
-                    }
-                    break;
-                case DruidFeralCombat:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == DruidFeralCombat)
-                    {
-                        spentPoints += j + 1;
-                        DruidFeralCombatPoints += spentPoints;
-                    }
-                    break;
-                case DruidRestoration:
-                    if (player->HasSpell(talentInfo->RankID[j]) && talentInfo->TalentTab == DruidRestoration)
-                    {
-                        spentPoints += j + 1;
-                        DruidRestorationPoints += spentPoints;
-                    }
+        switch (player->getClass())
+        {
+        case CLASS_WARRIOR:
+            treeA = pointsByTab[WarriorArms];
+            treeB = pointsByTab[WarriorFury];
+            treeC = pointsByTab[WarriorProtection];
+            dominantName = (treeA >= treeB && treeA >= treeC) ? "Arms" : ((treeB >= treeA && treeB >= treeC) ? "Fury" : "Protection");
+            break;
+        case CLASS_WARLOCK:
+            treeA = pointsByTab[WarlockAffliction];
+            treeB = pointsByTab[WarlockDemonology];
+            treeC = pointsByTab[WarlockDestruction];
+            dominantName = (treeA >= treeB && treeA >= treeC) ? "Affliction" : ((treeB >= treeA && treeB >= treeC) ? "Demonology" : "Destruction");
+            break;
+        case CLASS_SHAMAN:
+            treeA = pointsByTab[ShamanElementalCombat];
+            treeB = pointsByTab[ShamanEnhancement];
+            treeC = pointsByTab[ShamanRestoration];
+            dominantName = (treeA >= treeB && treeA >= treeC) ? "Elemental" : ((treeB >= treeA && treeB >= treeC) ? "Enhancement" : "Restoration");
+            break;
+        case CLASS_ROGUE:
+            treeA = pointsByTab[RogueAssassination];
+            treeB = pointsByTab[RogueCombat];
+            treeC = pointsByTab[RogueSubtlety];
+            dominantName = (treeA >= treeB && treeA >= treeC) ? "Assassination" : ((treeB >= treeA && treeB >= treeC) ? "Combat" : "Subtlety");
+            break;
+        case CLASS_PRIEST:
+            treeA = pointsByTab[PriestDiscipline];
+            treeB = pointsByTab[PriestHoly];
+            treeC = pointsByTab[PriestShadow];
+            dominantName = (treeA >= treeB && treeA >= treeC) ? "Discipline" : ((treeB >= treeA && treeB >= treeC) ? "Holy" : "Shadow");
+            break;
+        case CLASS_PALADIN:
+            treeA = pointsByTab[PaladinHoly];
+            treeB = pointsByTab[PaladinProtection];
+            treeC = pointsByTab[PaladinRetribution];
+            dominantName = (treeA >= treeB && treeA >= treeC) ? "Holy" : ((treeB >= treeA && treeB >= treeC) ? "Protection" : "Retribution");
+            break;
+        case CLASS_MAGE:
+            treeA = pointsByTab[MageArcane];
+            treeB = pointsByTab[MageFire];
+            treeC = pointsByTab[MageFrost];
+            dominantName = (treeA >= treeB && treeA >= treeC) ? "Arcane" : ((treeB >= treeA && treeB >= treeC) ? "Fire" : "Frost");
+            break;
+        case CLASS_HUNTER:
+            treeA = pointsByTab[HunterBeastMastery];
+            treeB = pointsByTab[HunterMarksmanship];
+            treeC = pointsByTab[HunterSurvival];
+            dominantName = (treeA >= treeB && treeA >= treeC) ? "Beast Mastery" : ((treeB >= treeA && treeB >= treeC) ? "Marksmanship" : "Survival");
+            break;
+        case CLASS_DRUID:
+            treeA = pointsByTab[DruidBalance];
+            treeB = pointsByTab[DruidFeralCombat];
+            treeC = pointsByTab[DruidRestoration];
+            dominantName = (treeA >= treeB && treeA >= treeC) ? "Balance" : ((treeB >= treeA && treeB >= treeC) ? "Feral Combat" : "Restoration");
+            break;
+        default:
+            return "";
+        }
+
+        std::ostringstream out;
+        out << "(" << dominantName << " " << treeA << "/" << treeB << "/" << treeC << ")";
+        return out.str();
+    }
+
+    static void ExtractGearToDB(Player* player, std::string const& gossipText)
+    {
+        if (!player)
+            return;
+
+        uint32 tempId = GetGearId();
+        uint32 patch = 0;
+        std::vector<GearRow> rows;
+
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        {
+            if (!IsSupportedEquipmentSlot(slot))
+                continue;
+
+            Item* equippedItem = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+            if (!equippedItem)
+                continue;
+
+            uint32 itemEntry = equippedItem->GetEntry();
+            uint32 itemPatch = GetItemPatch(itemEntry);
+            if (itemPatch > patch)
+                patch = itemPatch;
+
+            rows.push_back(GearRow(slot, itemEntry, equippedItem->GetEnchantmentId(PERM_ENCHANTMENT_SLOT)));
+        }
+
+        if (rows.empty())
+        {
+            player->GetSession()->SendNotification("No equipped items found to store.");
+            return;
+        }
+
+        for (std::vector<GearRow>::const_iterator itr = rows.begin(); itr != rows.end(); ++itr)
+        {
+            CharacterDatabase.PExecute(
+                "INSERT INTO player_stash_gear (char_guid, temp_id, gossip_text, item_slot, item_entry, item_enchant, patch) VALUES ('%u', '%u', '%s', '%u', '%u', '%u', '%u')",
+                player->GetGUID(), tempId, gossipText.c_str(), itr->slot, itr->itemEntry, itr->enchantId, patch);
+        }
+
+        player->PlayDirectSound(Click, player);
+        player->GetSession()->SendAreaTriggerMessage("Equipment set stored.");
+    }
+
+    static void ExtractTalentsToDB(Player* player, std::string const& gossipText)
+    {
+        if (!player)
+            return;
+
+        if (PlayerHasUnspentTalentPoints(player))
+        {
+            player->GetSession()->SendAreaTriggerMessage("You have unspent talent points. Please spend all your talent points.");
+            return;
+        }
+
+        uint32 tempId = GetTalentId();
+        static SqlStatementID insTalents;
+        SqlStatement stmtIns = CharacterDatabase.CreateStatement(insTalents, "INSERT INTO player_stash_talents (char_guid, temp_id, gossip_text, talent_id, rank) VALUES (?, ?, ?, ?, ?)");
+
+        uint32 savedCount = 0;
+        for (uint32 i = 0; i < sTalentStore.GetNumRows(); ++i)
+        {
+            TalentEntry const* talentInfo = sTalentStore.LookupEntry(i);
+            if (!talentInfo)
+                continue;
+
+            TalentTabEntry const* talentTabInfo = sTalentTabStore.LookupEntry(talentInfo->TalentTab);
+            if (!talentTabInfo)
+                continue;
+
+            if ((player->getClassMask() & talentTabInfo->ClassMask) == 0)
+                continue;
+
+            for (int32 rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
+            {
+                if (!talentInfo->RankID[rank])
+                    continue;
+
+                if (player->HasSpell(talentInfo->RankID[rank]))
+                {
+                    stmtIns.PExecute(player->GetGUID(), tempId, gossipText.c_str(), talentInfo->RankID[rank], rank + 1);
+                    ++savedCount;
                     break;
                 }
             }
         }
-        /* for debugging
-        std::ostringstream ss;
-        ss << "talentpoints spent " << talentInfo->TalentTab << " / " << curtalent_spent << " / " << spentPoints << ".";
-        ChatHandler(player->GetSession()).PSendSysMessage(ss.str().c_str());
-        */
-    }
 
-    std::ostringstream PointsStream;
-
-    //WARRIOR
-    if (WarriorProtectionPoints > WarriorFuryPoints && WarriorProtectionPoints > WarriorArmsPoints)
-    {
-        PointsStream << "(Protection " << WarriorArmsPoints << "/" << WarriorFuryPoints << "/" << WarriorProtectionPoints << ")";
-    }
-    else if (WarriorFuryPoints > WarriorProtectionPoints && WarriorFuryPoints > WarriorArmsPoints)
-    {
-        PointsStream << "(Fury " << WarriorArmsPoints << "/" << WarriorFuryPoints << "/" << WarriorProtectionPoints << ")";
-    }
-    else if (WarriorArmsPoints > WarriorFuryPoints && WarriorArmsPoints > WarriorProtectionPoints)
-    {
-        PointsStream << "(Arms " << WarriorArmsPoints << "/" << WarriorFuryPoints << "/" << WarriorProtectionPoints << ")";
-    }
-
-    //WARLOCK
-    if (WarlockAfflictionPoints > WarlockDemonologyPoints && WarlockAfflictionPoints > WarlockDestructionPoints)
-    {
-        PointsStream << "(Affliction " << WarlockAfflictionPoints << "/" << WarlockDemonologyPoints << "/" << WarlockDestructionPoints << ")";
-    }
-    else if (WarlockDemonologyPoints > WarlockAfflictionPoints && WarlockDemonologyPoints > WarlockDestructionPoints)
-    {
-        PointsStream << "(Demonology" << WarlockAfflictionPoints << "/" << WarlockDemonologyPoints << "/" << WarlockDestructionPoints << ")";
-    }
-    else if (WarlockDestructionPoints > WarlockDemonologyPoints && WarlockDestructionPoints > WarlockAfflictionPoints)
-    {
-        PointsStream << "(Destruction " << WarlockAfflictionPoints << "/" << WarlockDemonologyPoints << "/" << WarlockDestructionPoints << ")";
-    }
-
-    //SHAMAN
-    if (ShamanElementalCombatPoints > ShamanEnhancementPoints && ShamanElementalCombatPoints > ShamanRestorationPoints)
-    {
-        PointsStream << "(Elemental " << ShamanElementalCombatPoints << "/" << ShamanEnhancementPoints << "/" << ShamanRestorationPoints << ")";
-    }
-    else if (ShamanEnhancementPoints > ShamanElementalCombatPoints && ShamanEnhancementPoints > ShamanRestorationPoints)
-    {
-        PointsStream << "(Enhancement " << ShamanElementalCombatPoints << "/" << ShamanEnhancementPoints << "/" << ShamanRestorationPoints << ")";
-    }
-    else if (ShamanRestorationPoints > ShamanEnhancementPoints && ShamanRestorationPoints > ShamanElementalCombatPoints)
-    {
-        PointsStream << "(Restoration " << ShamanElementalCombatPoints << "/" << ShamanEnhancementPoints << "/" << ShamanRestorationPoints << ")";
-    }
-
-    //ROGUE
-    if (RogueAssassinationPoints > RogueCombatPoints && RogueAssassinationPoints > RogueSubtletyPoints)
-    {
-        PointsStream << "(Assassination " << RogueAssassinationPoints << "/" << RogueCombatPoints << "/" << RogueSubtletyPoints << ")";
-    }
-    else if (RogueCombatPoints > RogueAssassinationPoints && RogueCombatPoints > RogueSubtletyPoints)
-    {
-        PointsStream << "(Combat " << RogueAssassinationPoints << "/" << RogueCombatPoints << "/" << RogueSubtletyPoints << ")";
-    }
-    else if (RogueSubtletyPoints > RogueCombatPoints && RogueSubtletyPoints > RogueAssassinationPoints)
-    {
-        PointsStream << "(Subtlety " << RogueAssassinationPoints << "/" << RogueCombatPoints << "/" << RogueSubtletyPoints << ")";
-    }
-
-    //PRIEST
-    if (PriestDisciplinePoints > PriestHolyPoints && PriestDisciplinePoints > PriestShadowPoints)
-    {
-        PointsStream << "(Discipline " << PriestDisciplinePoints << "/" << PriestHolyPoints << "/" << PriestShadowPoints << ")";
-    }
-    else if (PriestHolyPoints > PriestDisciplinePoints && PriestHolyPoints > PriestShadowPoints)
-    {
-        PointsStream << "(Holy " << PriestDisciplinePoints << "/" << PriestHolyPoints << "/" << PriestShadowPoints << ")";
-    }
-    else if (PriestShadowPoints > PriestDisciplinePoints && PriestShadowPoints > PriestHolyPoints)
-    {
-        PointsStream << "(Shadow " << PriestDisciplinePoints << "/" << PriestHolyPoints << "/" << PriestShadowPoints << ")";
-    }
-
-    //PALADIN
-    if (PaladinHolyPoints > PaladinProtectionPoints && PaladinHolyPoints > PaladinRetributionPoints)
-    {
-        PointsStream << "(Holy " << PaladinHolyPoints << "/" << PaladinProtectionPoints << "/" << PaladinRetributionPoints << ")";
-    }
-    else if (PaladinProtectionPoints > PaladinHolyPoints && PaladinProtectionPoints > PaladinRetributionPoints)
-    {
-        PointsStream << "(Protection " << PaladinHolyPoints << "/" << PaladinProtectionPoints << "/" << PaladinRetributionPoints << ")";
-    }
-    else if (PaladinRetributionPoints > PaladinHolyPoints && PaladinRetributionPoints > PaladinProtectionPoints)
-    {
-        PointsStream << "(Retribution " << PaladinHolyPoints << "/" << PaladinProtectionPoints << "/" << PaladinRetributionPoints << ")";
-    }
-
-    //MAGE
-    if (MageArcanePoints > MageFirePoints && MageArcanePoints > MageFrostPoints)
-    {
-        PointsStream << "(Arcane " << MageArcanePoints << "/" << MageFirePoints << "/" << MageFrostPoints << ")";
-    }
-    else if (MageFirePoints > MageArcanePoints && MageFirePoints > MageFrostPoints)
-    {
-        PointsStream << "(Fire " << MageArcanePoints << "/" << MageFirePoints << "/" << MageFrostPoints << ")";
-    }
-    else if (MageFrostPoints > MageArcanePoints && MageFrostPoints > MageFirePoints)
-    {
-        PointsStream << "(Frost " << MageArcanePoints << "/" << MageFirePoints << "/" << MageFrostPoints << ")";
-    }
-
-    //HUNTER
-    if (HunterBeastMasteryPoints > HunterMarksmanshipPoints && HunterBeastMasteryPoints > HunterSurvivalPoints)
-    {
-        PointsStream << "(Beast Mastery " << HunterBeastMasteryPoints << "/" << HunterMarksmanshipPoints << "/" << HunterSurvivalPoints << ")";
-    }
-    else if (HunterMarksmanshipPoints > HunterBeastMasteryPoints && HunterMarksmanshipPoints > HunterSurvivalPoints)
-    {
-        PointsStream << "(Marksmanship " << HunterBeastMasteryPoints << "/" << HunterMarksmanshipPoints << "/" << HunterSurvivalPoints << ")";
-    }
-    else if (HunterSurvivalPoints > HunterBeastMasteryPoints && HunterSurvivalPoints > HunterMarksmanshipPoints)
-    {
-        PointsStream << "(Survival " << HunterBeastMasteryPoints << "/" << HunterMarksmanshipPoints << "/" << HunterSurvivalPoints << ")";
-    }
-
-    //DRUID
-    if (DruidBalancePoints > DruidFeralCombatPoints && DruidBalancePoints > DruidRestorationPoints)
-    {
-        PointsStream << "(Balance " << DruidBalancePoints << "/" << DruidFeralCombatPoints << "/" << DruidRestorationPoints << ")";
-    }
-    else if (DruidFeralCombatPoints > DruidBalancePoints && DruidFeralCombatPoints > DruidRestorationPoints)
-    {
-        PointsStream << "(Feral Combat " << DruidBalancePoints << "/" << DruidFeralCombatPoints << "/" << DruidRestorationPoints << ")";
-    }
-    else if (DruidRestorationPoints > DruidBalancePoints && DruidRestorationPoints > DruidFeralCombatPoints)
-    {
-        PointsStream << "(Restoration " << DruidBalancePoints << "/" << DruidFeralCombatPoints << "/" << DruidRestorationPoints << ")";
-    }
-
-    return (PointsStream.str().c_str());
-}
-
-uint32 GetTalentID()
-{
-    QueryResult* TalentIdResult = CharacterDatabase.PQuery("SELECT MAX(temp_id) FROM player_stash_talents");
-
-    uint32 TalentId;
-
-    if (TalentIdResult)
-    {
-        Field* fields = TalentIdResult->Fetch();
-        TalentId = fields[0].GetInt32();
-		delete TalentIdResult;
-    }
-    if (TalentId)
-        return TalentId + 1;
-    else
-        return 50;
-}
-
-uint32 GetGearID()
-{
-    QueryResult* GearIdResult = CharacterDatabase.PQuery("SELECT MAX(temp_id) FROM player_stash_gear");
-
-    uint32 GearId;
-
-    if (GearIdResult)
-    {
-        Field* fields = GearIdResult->Fetch();
-        GearId = fields[0].GetInt32();
-		delete GearIdResult;
-    }
-    if (GearId)
-        return GearId + 1;
-    else
-        return 50;
-}
-
-void AddBankBags(Player* player)
-{
-    for (int i = BANK_SLOT_BAG_START; i < BANK_SLOT_BAG_END; ++i)
-    {
-        if (Bag* pBag = (Bag*)player->GetItemByPos(INVENTORY_SLOT_BAG_0, i))
+        if (!savedCount)
         {
-            if (!pBag)
-                player->EquipNewItem(i, BOTTOMLESS_BAG, true);
+            CharacterDatabase.PExecute("DELETE FROM player_stash_talents WHERE char_guid='%u' AND temp_id='%u'", player->GetGUID(), tempId);
+            player->GetSession()->SendNotification("No talents found to store.");
+            return;
         }
-        else
-            player->EquipNewItem(i, BOTTOMLESS_BAG, true);
+
+        player->PlayDirectSound(Click, player);
+        player->GetSession()->SendAreaTriggerMessage("Specification stored.");
     }
-}
 
-void StashApplyBonus(Player* player, Item* item, EnchantmentSlot slot, uint32 bonusEntry, uint32 duration, uint32 charges)
-{
-    if (!item)
-        return;
-
-    if (!bonusEntry || bonusEntry == 0)
-        return;
-
-    player->ApplyEnchantment(item, slot, false);
-    item->SetEnchantment(slot, bonusEntry, duration, charges);
-    player->ApplyEnchantment(item, slot, true);
-}
-
-void ExtractGearToDB(Player* player, std::string& gossipTempText)
-{
-    uint32 TempID = GetGearID();
-    uint32 patch = 0;
-
-    // todo get specid
-
-    for (uint8 i = EQUIPMENT_SLOT_START; i < EQUIPMENT_SLOT_END; ++i)
+    static void AddBackButton(Player* player)
     {
-        if (i == EQUIPMENT_SLOT_TABARD || i == EQUIPMENT_SLOT_BODY)
-            continue;
+        if (!player)
+            return;
 
-        Item* equippedItem = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TALK, "<- Back", GOSSIP_SENDER_MAIN, 0);
+    }
 
-        if (equippedItem)
+    static void ShowMainMenu(Player* player, GameObject* gameobject)
+    {
+        if (!player || !gameobject)
+            return;
+
+        if (player->isInCombat())
         {
-            uint32 itemId = equippedItem->GetEntry();
+            player->GetSession()->SendNotification("You are in combat!");
+            return;
+        }
 
-            QueryResult *getpatch = WorldDatabase.PQuery("SELECT patch FROM item_template "
-                "WHERE entry = '%u'", itemId);
+        player->PlayerTalkClass->ClearMenus();
+        gameobject->PlayDirectSound(ChestOpen, player);
 
-            if (getpatch)
+        const uint32 gearsets = CountStoredGear(player);
+        const uint32 specs = CountStoredTalents(player);
+
+        std::ostringstream ssSpecs;
+        ssSpecs << "Stored Specifications (" << specs << ").";
+
+        std::ostringstream ssGearsets;
+        ssGearsets << "Stored Equipment Sets (" << gearsets << ").";
+
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_VENDOR, "Storage.", GOSSIP_SENDER_MAIN, SHOWBANK);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Create a new UterusOne Teleporter.", GOSSIP_SENDER_MAIN, BINDHOME);
+
+        if (gearsets > 0)
+            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TABARD, ssGearsets.str().c_str(), GOSSIP_SENDER_MAIN, SHOW_GEAR);
+
+        if (specs > 0)
+            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, ssSpecs.str().c_str(), GOSSIP_SENDER_MAIN, SHOW_TALENTS);
+
+        if (gearsets < MAX_STASH_SETS)
+            player->ADD_GOSSIP_ITEM_EXTENDED(GOSSIP_ICON_INTERACT_1, "Store equipped Items & Enchants.", GOSSIP_SENDER_MAIN, SAVE_GEAR, "Save as...", true);
+
+        if (specs < MAX_STASH_SETS)
+            player->ADD_GOSSIP_ITEM_EXTENDED(GOSSIP_ICON_INTERACT_1, "Store current Specification.", GOSSIP_SENDER_MAIN, SAVE_TALENTS, "Save as...", true);
+
+        player->SEND_GOSSIP_MENU(600020, gameobject->GetObjectGuid());
+    }
+
+    static void ShowGearMenu(Player* player, GameObject* gameobject)
+    {
+        player->PlayerTalkClass->ClearMenus();
+
+        QueryResult* result = CharacterDatabase.PQuery(
+            "SELECT gossip_text, temp_id, patch FROM player_stash_gear WHERE char_guid='%u' GROUP BY temp_id ORDER BY temp_id ASC",
+            player->GetGUID());
+
+        if (result)
+        {
+            do
             {
-                Field* fields = getpatch->Fetch();
-                uint32 newpatch = fields[0].GetInt32();
-                if (patch < newpatch)
-                    patch = newpatch;
-
-				delete getpatch;
-            }
-
-            CharacterDatabase.PExecute("INSERT INTO player_stash_gear (`char_guid`, `temp_id`, `gossip_text`, `item_slot`, `item_entry`, `item_enchant`, `patch`) VALUES ('%u', '%u', '%s', '%u', '%u', '%u', '%u');"
-                , player->GetGUID(), TempID, gossipTempText.c_str(), equippedItem->GetSlot(), equippedItem->GetEntry(), equippedItem->GetEnchantmentId(PERM_ENCHANTMENT_SLOT), patch);
-        }
-
-        CharacterDatabase.PExecute("UPDATE player_stash_gear SET patch = '%u' WHERE temp_id='%u'", patch, TempID);
-    }
-    player->PlayDirectSound(Click, player);
-}
-
-void StashLearnTalentsFromDB(Player* player, uint32 temp_id)
-{
-    QueryResult *select = CharacterDatabase.PQuery("SELECT talent_id FROM player_stash_talents WHERE char_guid = '%u' AND "
-        "temp_id = '%u';", player->GetGUID(), temp_id);
-
-    if (select)
-    {
-        do
-        {
-            Field* fields = select->Fetch();
-            uint32 talentID = fields[0].GetUInt32();
-
-            player->LearnSpell(talentID, false, true);
-        } while (select->NextRow());
-		delete select;
-    }
-}
-
-void StashDeleteEquippedGear(Player* player)
-{
-    for (uint8 i = EQUIPMENT_SLOT_START; i < EQUIPMENT_SLOT_END; i++)
-    {
-        if (i == EQUIPMENT_SLOT_TABARD || i == EQUIPMENT_SLOT_BODY)
-            continue;
-
-        if (Item* haveItemEquipped = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i))
-        {
-            if (haveItemEquipped)
-            {
-                player->DestroyItem(INVENTORY_SLOT_BAG_0, i, true);
-            }
-        }
-    }
-}
-
-uint32 CountStoredGear(Player* player)
-{
-    uint32 inv_count = 0;
-    QueryResult *result = CharacterDatabase.PQuery("SELECT char_guid FROM player_stash_gear WHERE char_guid='%u' GROUP BY temp_id", player->GetGUID());
-    if (result)
-    {
-        do {
-            inv_count++;
-        } while (result->NextRow());
-        delete result;
-    }
-    return inv_count;
-}
-
-uint32 CountStoredTalents(Player* player)
-{
-    uint32 inv_count = 0;
-    QueryResult *result = CharacterDatabase.PQuery("SELECT char_guid FROM player_stash_talents WHERE char_guid='%u' GROUP BY temp_id", player->GetGUID());
-    if (result)
-    {
-        do {
-            inv_count++;
-        } while (result->NextRow());
-        delete result;
-    }
-    return inv_count;
-}
-
-void StashEquipItemsFromDB(Player* player, uint32 temp_id)
-{
-    if (!temp_id)
-    {
-        ChatHandler(player).PSendSysMessage("no temp id.");
-        return;
-    }
-
-    for (uint8 equipmentSlot = EQUIPMENT_SLOT_START; equipmentSlot < EQUIPMENT_SLOT_END; ++equipmentSlot)
-    {
-        if (equipmentSlot == EQUIPMENT_SLOT_TABARD || equipmentSlot == EQUIPMENT_SLOT_BODY)
-            continue;
-
-        std::unique_ptr<QueryResult> player_stash_gear(CharacterDatabase.PQuery("SELECT item_entry, item_enchant "
-            "FROM player_stash_gear WHERE char_guid = '%u' AND temp_id = '%u' AND item_slot = '%u';", player->GetGUID(), temp_id, equipmentSlot));
-
-        if (!player_stash_gear)
-            continue;
-
-        Field* fields = player_stash_gear->Fetch();
-        uint32 itemEntry = fields[0].GetUInt32();
-        uint32 enchant = fields[1].GetUInt32();
-
-        ItemPrototype const* item_proto = ObjectMgr::GetItemPrototype(itemEntry);
-
-        if (!item_proto)
-            continue;
-
-        // Check if we need some Reputation for the Item and set it to Exalted.
-        if (item_proto->RequiredReputationFaction && item_proto->RequiredReputationRank > 0)
-        {
-            if (ReputationRank(item_proto->RequiredReputationRank) > player->GetReputationRank(item_proto->RequiredReputationFaction))
-                player->GetReputationMgr().ModifyReputation(sObjectMgr.GetFactionEntry(item_proto->RequiredReputationFaction), 85000);
-        }
-
-        player->EquipNewItem(equipmentSlot, itemEntry, true); // No items found in player_factionchange_items equip itemEntry.
-
-        // Apply Enchants
-        StashApplyBonus(player, player->GetItemByPos(INVENTORY_SLOT_BAG_0, equipmentSlot), PERM_ENCHANTMENT_SLOT, enchant, 0, 0);
-    }
-}
-
-void ExtractTalentsToDB(Player* player, std::string gossipTempText)
-{
-    static SqlStatementID insTalents;
-    uint32 TempID = GetTalentID();
-
-    SqlStatement stmtIns = CharacterDatabase.CreateStatement(insTalents, "INSERT INTO player_stash_talents (char_guid, temp_id, gossip_text, talent_id, rank) VALUES (?, ?, ?, ?, ?)");
-
-    if (player->GetFreeTalentPoints() > 0)
-    {
-        player->GetSession()->SendAreaTriggerMessage("You have unspend talent points. Please spend all your talent points.");
-        return;
-    }
-
-    for (uint32 i = 0; i < sTalentStore.GetNumRows(); ++i)
-    {
-        TalentEntry const *talentInfo = sTalentStore.LookupEntry(i);
-        if (!talentInfo)
-            continue;
-
-        TalentTabEntry const *talentTabInfo = sTalentTabStore.LookupEntry(talentInfo->TalentTab);
-        if (!talentTabInfo)
-            continue;
-
-        if ((player->getClassMask() & talentTabInfo->ClassMask) == 0)
-            continue;
-
-        uint32 spellid = 0;
-
-        for (int rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
-        {
-            PlayerSpellMap const& uSpells = player->GetSpellMap();
-            for (PlayerSpellMap::const_iterator itr = uSpells.begin(); itr != uSpells.end(); ++itr)
-            {
-                if (itr->second.state == PLAYERSPELL_REMOVED || itr->second.disabled)
+                Field* fields = result->Fetch();
+                if (!fields)
                     continue;
 
-                uint32 rank2 = sSpellMgr.GetSpellRank(itr->first);
+                const char* specText = fields[0].GetString();
+                uint32 tempId = fields[1].GetUInt32();
+                uint32 patch = fields[2].GetUInt32();
 
-                if (itr->first == talentInfo->RankID[rank] || sSpellMgr.IsSpellLearnToSpell(talentInfo->RankID[rank], itr->first))
-                    stmtIns.PExecute(player->GetGUID(), TempID, gossipTempText.c_str(), talentInfo->RankID[rank], rank + 1);
+                if (sWorld.GetWowPatch() >= patch)
+                {
+                    std::ostringstream ss;
+                    ss << "Equip " << specText << ".";
+                    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, ss.str().c_str(), GOSSIP_SENDER_GEAR_CONFIRM, tempId);
+                }
             }
+            while (result->NextRow());
+
+            delete result;
         }
+
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Delete an Equipment Set.", GOSSIP_SENDER_MAIN, DELETE_GEAR);
+        AddBackButton(player);
+        player->SEND_GOSSIP_MENU(1, gameobject->GetObjectGuid());
     }
-    player->PlayDirectSound(Click, player);
+
+    static void ShowTalentMenu(Player* player, GameObject* gameobject)
+    {
+        player->PlayerTalkClass->ClearMenus();
+
+        QueryResult* result = CharacterDatabase.PQuery(
+            "SELECT gossip_text, temp_id FROM player_stash_talents WHERE char_guid='%u' GROUP BY temp_id ORDER BY temp_id ASC",
+            player->GetGUID());
+
+        if (result)
+        {
+            do
+            {
+                Field* fields = result->Fetch();
+                if (!fields)
+                    continue;
+
+                std::ostringstream ss;
+                ss << "Use " << fields[0].GetString() << ".";
+                player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, ss.str().c_str(), GOSSIP_SENDER_TALENT_CONFIRM, fields[1].GetUInt32());
+            }
+            while (result->NextRow());
+
+            delete result;
+        }
+
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Delete a Specification.", GOSSIP_SENDER_MAIN, DELETE_TALENTS);
+        AddBackButton(player);
+        player->SEND_GOSSIP_MENU(1, gameobject->GetObjectGuid());
+    }
+
+    static void ShowDeleteTalentMenu(Player* player, GameObject* gameobject)
+    {
+        player->PlayerTalkClass->ClearMenus();
+
+        QueryResult* result = CharacterDatabase.PQuery(
+            "SELECT gossip_text, temp_id FROM player_stash_talents WHERE char_guid='%u' GROUP BY temp_id ORDER BY temp_id ASC",
+            player->GetGUID());
+
+        if (result)
+        {
+            do
+            {
+                Field* fields = result->Fetch();
+                if (!fields)
+                    continue;
+
+                std::ostringstream ss;
+                ss << "Delete " << fields[0].GetString() << ".";
+                player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, ss.str().c_str(), GOSSIP_SENDER_TALENTS_DELETE, fields[1].GetUInt32());
+            }
+            while (result->NextRow());
+
+            delete result;
+        }
+
+        AddBackButton(player);
+        player->SEND_GOSSIP_MENU(1, gameobject->GetObjectGuid());
+    }
+
+    static void ShowDeleteGearMenu(Player* player, GameObject* gameobject)
+    {
+        player->PlayerTalkClass->ClearMenus();
+
+        QueryResult* result = CharacterDatabase.PQuery(
+            "SELECT gossip_text, temp_id FROM player_stash_gear WHERE char_guid='%u' GROUP BY temp_id ORDER BY temp_id ASC",
+            player->GetGUID());
+
+        if (result)
+        {
+            do
+            {
+                Field* fields = result->Fetch();
+                if (!fields)
+                    continue;
+
+                std::ostringstream ss;
+                ss << "Delete " << fields[0].GetString() << ".";
+                player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, ss.str().c_str(), GOSSIP_SENDER_GEAR_DELETE, fields[1].GetUInt32());
+            }
+            while (result->NextRow());
+
+            delete result;
+        }
+
+        AddBackButton(player);
+        player->SEND_GOSSIP_MENU(1, gameobject->GetObjectGuid());
+    }
+
+    static bool DeleteTalents(Player* player, GameObject* gameobject, uint32 tempId)
+    {
+        if (!player)
+            return true;
+
+        CharacterDatabase.PExecute("DELETE FROM player_stash_talents WHERE temp_id='%u' AND char_guid='%u'", tempId, player->GetGUID());
+        player->GetSession()->SendAreaTriggerMessage("Successfully deleted.");
+        player->PlayDirectSound(Click, player);
+        ShowDeleteTalentMenu(player, gameobject);
+        return true;
+    }
+
+    static bool DeleteGear(Player* player, GameObject* gameobject, uint32 tempId)
+    {
+        if (!player)
+            return true;
+
+        CharacterDatabase.PExecute("DELETE FROM player_stash_gear WHERE temp_id='%u' AND char_guid='%u'", tempId, player->GetGUID());
+        player->GetSession()->SendAreaTriggerMessage("Successfully deleted.");
+        player->PlayDirectSound(Click, player);
+        ShowDeleteGearMenu(player, gameobject);
+        return true;
+    }
+
+    static bool EquipGear(Player* player, GameObject* gameobject, uint32 tempId)
+    {
+        if (!player)
+            return true;
+
+        if (!HasStoredGear(player, tempId))
+        {
+            player->GetSession()->SendNotification("This equipment set does not exist.");
+            ShowMainMenu(player, gameobject);
+            return true;
+        }
+
+        DeleteEquippedGear(player);
+        EquipItemsFromDB(player, tempId);
+        PlaySuccessFeedback(player);
+        ShowMainMenu(player, gameobject);
+        return true;
+    }
+
+    static bool UseTalents(Player* player, GameObject* gameobject, uint32 tempId)
+    {
+        if (!player)
+            return true;
+
+        if (!HasStoredTalents(player, tempId))
+        {
+            player->GetSession()->SendNotification("This specification does not exist.");
+            ShowMainMenu(player, gameobject);
+            return true;
+        }
+
+        player->ResetTalents(true);
+        LearnTalentsFromDB(player, tempId);
+        PlaySuccessFeedback(player);
+        ShowMainMenu(player, gameobject);
+        return true;
+    }
+
+    static bool ConfirmGear(Player* player, GameObject* gameobject, uint32 tempId)
+    {
+        player->PlayerTalkClass->ClearMenus();
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Yes.", GOSSIP_SENDER_GEAR_USE, tempId);
+        player->SEND_GOSSIP_MENU(600007, gameobject->GetObjectGuid());
+        return true;
+    }
+
+    static bool ConfirmTalents(Player* player, GameObject* gameobject, uint32 tempId)
+    {
+        player->PlayerTalkClass->ClearMenus();
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Yes.", GOSSIP_SENDER_TALENT_USE, tempId);
+        player->SEND_GOSSIP_MENU(600021, gameobject->GetObjectGuid());
+        return true;
+    }
+
+    static bool HandleMainAction(Player* player, GameObject* gameobject, uint32 uiAction)
+    {
+        if (!player || !gameobject)
+            return true;
+
+        switch (uiAction)
+        {
+        case SHOWBANK:
+            player->GetSession()->SendShowBank(player->GetGUID());
+            AddBankBags(player);
+            break;
+        case BINDHOME:
+            player->AddItem(STASH_TELEPORTER_ITEM, 1);
+            player->CLOSE_GOSSIP_MENU();
+            break;
+        case SHOW_GEAR:
+            ShowGearMenu(player, gameobject);
+            break;
+        case SHOW_TALENTS:
+            ShowTalentMenu(player, gameobject);
+            break;
+        case DELETE_TALENTS:
+            ShowDeleteTalentMenu(player, gameobject);
+            break;
+        case DELETE_GEAR:
+            ShowDeleteGearMenu(player, gameobject);
+            break;
+        case 0:
+            ShowMainMenu(player, gameobject);
+            break;
+        default:
+            break;
+        }
+
+        return true;
+    }
 }
 
 bool GossipHello_player_stash(Player* player, GameObject* gameobject)
 {
-    if (player->isInCombat())
-    {
-        player->GetSession()->SendNotification("You are in combat!");
-        return false;
-    }
-
-    player->PlayerTalkClass->ClearMenus();
-    gameobject->PlayDirectSound(ChestOpen, player);
-
-    uint32 gearsets = 0;
-    uint32 specs = 0;
-    std::string talentstext = "Save as...";
-    std::string gearstext = "Save as...";
-
-    gearsets = CountStoredGear(player);
-    specs = CountStoredTalents(player);
-
-    std::ostringstream ss_specs;
-    ss_specs << "Stored Specifications (" << specs << ").";
-
-    std::ostringstream ss_gearsets;
-    ss_gearsets << "Stored Equipement Sets (" << gearsets << ").";
-
-	player->ADD_GOSSIP_ITEM(GOSSIP_ICON_VENDOR, "Storage.", GOSSIP_SENDER_MAIN, SHOWBANK);
-	player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Create a new UterusOne Teleporter.", GOSSIP_SENDER_MAIN, BINDHOME);
-	//player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Mail.", GOSSIP_SENDER_MAIN, SHOWMAIL);
-    if (gearsets > 0)
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TABARD, ss_gearsets.str().c_str(), GOSSIP_SENDER_MAIN, SHOW_GEAR);
-    if (specs > 0)
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, ss_specs.str().c_str(), GOSSIP_SENDER_MAIN, SHOW_TALENTS);
-    if (gearsets < 6)
-        player->ADD_GOSSIP_ITEM_EXTENDED(GOSSIP_ICON_INTERACT_1, "Store equipped Items & Enchants.", GOSSIP_SENDER_MAIN, SAVE_GEAR, gearstext, true);
-    if (specs < 6)
-        player->ADD_GOSSIP_ITEM_EXTENDED(GOSSIP_ICON_INTERACT_1, "Store current Specification.", GOSSIP_SENDER_MAIN, SAVE_TALENTS, talentstext, true);
-
-    player->SEND_GOSSIP_MENU(600020, gameobject->GetObjectGuid());
-
+    PlayerStash::ShowMainMenu(player, gameobject);
     return true;
 }
 
-bool Gossipstart_player_stash(Player* player, GameObject* gameobject, uint32 uiSender, uint32 uiAction)
+bool Gossipstart_player_stash(Player* player, GameObject* gameobject, uint32 /*uiSender*/, uint32 uiAction)
 {
-    if (uiAction == SHOWBANK)
-    {
-        player->GetSession()->SendShowBank(player->GetGUID());
-        AddBankBags(player);
-    }
-	if (uiAction == BINDHOME)
-	{
-		player->AddItem(90678, 1);
-		player->CLOSE_GOSSIP_MENU();
-	}
-    else if (uiAction == SHOW_GEAR)
-    {
-        QueryResult *result = CharacterDatabase.PQuery("SELECT gossip_text, temp_id, patch "
-            "FROM player_stash_gear WHERE char_guid = '%u' GROUP BY temp_id", player->GetGUID());
-
-        if (result)
-        {
-            do
-            {
-                Field* fields = result->Fetch();
-                const char* SpecText = fields[0].GetString();
-                uint32 temp_id = fields[1].GetUInt32();
-                uint32 patch = fields[2].GetUInt32();
-                std::ostringstream ss;
-                ss << "Equip " << SpecText << ".";
-
-                if (sWorld.GetWowPatch() >= patch)
-                {
-                    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, ss.str().c_str(), GOSSIP_SENDER_GEAR_CONFIRM, temp_id);
-                }
-            } while (result->NextRow());
-        }
-
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Delete an Equipement Set.", GOSSIP_SENDER_MAIN, DELETE_GEAR);
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TALK, "<- Back", GOSSIP_SENDER_MAIN, 0);
-        player->SEND_GOSSIP_MENU(1, gameobject->GetObjectGuid());
-    }
-    else if (uiAction == SHOW_TALENTS)
-    {
-        QueryResult *result = CharacterDatabase.PQuery("SELECT gossip_text, temp_id "
-            "FROM player_stash_talents WHERE char_guid = '%u' GROUP BY temp_id", player->GetGUID());
-
-        if (result)
-        {
-            do
-            {
-                Field* fields = result->Fetch();
-                const char* SpecText = fields[0].GetString();
-                uint32 temp_id = fields[1].GetUInt32();
-                std::ostringstream ss;
-                ss << "Use " << SpecText << ".";
-
-                player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, ss.str().c_str(), GOSSIP_SENDER_TALENT_CONFIRM, temp_id);
-
-            } while (result->NextRow());
-			delete result;
-        }
-
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Delete a Specification.", GOSSIP_SENDER_MAIN, DELETE_TALENTS);
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TALK, "<- Back", GOSSIP_SENDER_MAIN, 0);
-        player->SEND_GOSSIP_MENU(1, gameobject->GetObjectGuid());
-    }
-    else if (uiAction == DELETE_TALENTS)
-    {
-        QueryResult *result = CharacterDatabase.PQuery("SELECT gossip_text, temp_id "
-            "FROM player_stash_talents WHERE char_guid = '%u' GROUP BY temp_id", player->GetGUID());
-
-        if (result)
-        {
-            do
-            {
-                Field* fields = result->Fetch();
-                const char* SpecText = fields[0].GetString();
-                uint32 temp_id = fields[1].GetUInt32();
-                std::ostringstream ss;
-                ss << "Delete " << SpecText << ".";
-
-                player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, ss.str().c_str(), GOSSIP_SENDER_TALENTS_DELETE, temp_id);
-
-            } while (result->NextRow());
-			delete result;
-        }
-
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TALK, "<- Back", GOSSIP_SENDER_MAIN, 0);
-        player->SEND_GOSSIP_MENU(1, gameobject->GetObjectGuid());
-    }
-    else if (uiAction == DELETE_GEAR)
-    {
-        QueryResult *result = CharacterDatabase.PQuery("SELECT gossip_text, temp_id, patch "
-            "FROM player_stash_gear WHERE char_guid = '%u' GROUP BY temp_id", player->GetGUID());
-
-        if (result)
-        {
-            do
-            {
-                Field* fields = result->Fetch();
-                const char* SpecText = fields[0].GetString();
-                uint32 temp_id = fields[1].GetUInt32();
-                std::ostringstream ss;
-                ss << "Delete " << SpecText << ".";
-
-                player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, ss.str().c_str(), GOSSIP_SENDER_GEAR_DELETE, temp_id);
-
-            } while (result->NextRow());
-			delete result;
-        }
-
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TALK, "<- Back", GOSSIP_SENDER_MAIN, 0);
-        player->SEND_GOSSIP_MENU(1, gameobject->GetObjectGuid());
-    }
-    else if (uiAction == 0)
-        GossipHello_player_stash(player, gameobject);
-
-    return true;
+    return PlayerStash::HandleMainAction(player, gameobject, uiAction);
 }
 
 bool GossipDelete_Talents(Player* player, GameObject* gameobject, uint32 uiAction)
 {
-    bool res = CharacterDatabase.PQuery("DELETE FROM player_stash_talents WHERE temp_id = '%u' AND char_guid = '%u'", uiAction, player->GetGUID());
-    if (res)
-        player->GetSession()->SendAreaTriggerMessage("Successfuly deleted");
-
-    Gossipstart_player_stash(player, gameobject, GOSSIP_SENDER_MAIN, DELETE_TALENTS);
-    player->PlayDirectSound(Click, player);
-    return true;
+    return PlayerStash::DeleteTalents(player, gameobject, uiAction);
 }
 
 bool GossipDelete_Gear(Player* player, GameObject* gameobject, uint32 uiAction)
 {
-    bool res = CharacterDatabase.PQuery("DELETE FROM player_stash_gear WHERE temp_id = '%u' AND char_guid = '%u'", uiAction, player->GetGUID());
-    if (res)
-        player->GetSession()->SendAreaTriggerMessage("Successfuly deleted");
-
-    Gossipstart_player_stash(player, gameobject, GOSSIP_SENDER_MAIN, DELETE_GEAR);
-    player->PlayDirectSound(Click, player);
-    return true;
+    return PlayerStash::DeleteGear(player, gameobject, uiAction);
 }
 
 bool GossipEquip_Gear(Player* player, GameObject* gameobject, uint32 uiAction)
 {
-    QueryResult* result = CharacterDatabase.PQuery("SELECT char_guid FROM player_stash_gear WHERE temp_id = '%u'", uiAction);
-
-    if (result)
-    {
-        StashDeleteEquippedGear(player);
-        StashEquipItemsFromDB(player, uiAction);
-        GossipHello_player_stash(player, gameobject);
-        player->CastSpell(player, COOL_VISUAL_SPELL, true);
-        player->PlayDirectSound(SpellFizzleHoly, 0);
-		delete result;
-    }
-    return true;
+    return PlayerStash::EquipGear(player, gameobject, uiAction);
 }
 
 bool GossipUse_Talents(Player* player, GameObject* gameobject, uint32 uiAction)
 {
-    QueryResult* result = CharacterDatabase.PQuery("SELECT char_guid FROM player_stash_talents WHERE temp_id = '%u'", uiAction);
-
-    if (result)
-    {
-        player->ResetTalents(true);
-        StashLearnTalentsFromDB(player, uiAction);
-        GossipHello_player_stash(player, gameobject);
-        player->CastSpell(player, COOL_VISUAL_SPELL, true);
-        player->PlayDirectSound(SpellFizzleHoly, 0);
-		delete result;
-    }
-    return true;
+    return PlayerStash::UseTalents(player, gameobject, uiAction);
 }
 
 bool GossipConfirm_Gear(Player* player, GameObject* gameobject, uint32 uiAction)
 {
-    player->PlayerTalkClass->ClearMenus();
-    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Yes.", GOSSIP_SENDER_GEAR_USE, uiAction);
-    player->SEND_GOSSIP_MENU(600007, gameobject->GetObjectGuid());
-
-    return true;
+    return PlayerStash::ConfirmGear(player, gameobject, uiAction);
 }
 
 bool GossipConfirm_Talents(Player* player, GameObject* gameobject, uint32 uiAction)
 {
-    player->PlayerTalkClass->ClearMenus();
-    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Yes.", GOSSIP_SENDER_TALENT_USE, uiAction);
-    player->SEND_GOSSIP_MENU(600021, gameobject->GetObjectGuid());
-
-    return true;
+    return PlayerStash::ConfirmTalents(player, gameobject, uiAction);
 }
 
 bool GossipSelect_player_stash(Player* player, GameObject* gameobject, uint32 uiSender, uint32 uiAction)
@@ -1033,52 +888,67 @@ bool GossipSelect_player_stash(Player* player, GameObject* gameobject, uint32 ui
     case GOSSIP_SENDER_TALENT_USE:
         GossipUse_Talents(player, gameobject, uiAction);
         break;
+    default:
+        break;
     }
+
     return true;
 }
 
 bool GossipSelectCode_player_stash(Player* player, GameObject* gameobject, uint32 sender, uint32 action, const char* code)
 {
-    std::string name = code;
+    if (!player)
+        return false;
 
-    if (name.length() > 30)
+    std::string name = code ? code : "";
+    if (name.empty())
     {
-        player->GetSession()->SendNotification("Name is too long. Max Name length: 30");
+        player->GetSession()->SendNotification("Name is empty.");
         player->CLOSE_GOSSIP_MENU();
         return false;
     }
-    else
-    {
-        CharacterDatabase.escape_string(name);
 
-        if (sender == GOSSIP_SENDER_MAIN)
-        {
-            switch (action)
-            {
-            case SAVE_GEAR:
-                ExtractGearToDB(player, name);
-                break;
-            case SAVE_TALENTS:
-                if (player->GetFreeTalentPoints() > 0)
-                {
-                    player->GetSession()->SendAreaTriggerMessage("You have unspend talent points. Please spend all your talent points.");
-                    return false;
-                }
-                std::ostringstream ss;
-                ss << name << " " << TalentsExportNameString(player);
-                ExtractTalentsToDB(player, ss.str().c_str());
-                break;
-            }
-            player->CLOSE_GOSSIP_MENU();
-        }
-        return true;
+    if (name.length() > 30)
+    {
+        player->GetSession()->SendNotification("Name is too long. Max name length: 30.");
+        player->CLOSE_GOSSIP_MENU();
+        return false;
     }
+
+    CharacterDatabase.escape_string(name);
+
+    if (sender == GOSSIP_SENDER_MAIN)
+    {
+        switch (action)
+        {
+        case SAVE_GEAR:
+            PlayerStash::ExtractGearToDB(player, name);
+            break;
+        case SAVE_TALENTS:
+        {
+            if (PlayerStash::PlayerHasUnspentTalentPoints(player))
+            {
+                player->GetSession()->SendAreaTriggerMessage("You have unspent talent points. Please spend all your talent points.");
+                return false;
+            }
+
+            std::ostringstream ss;
+            ss << name << " " << PlayerStash::TalentsExportNameString(player);
+            PlayerStash::ExtractTalentsToDB(player, ss.str());
+            break;
+        }
+        default:
+            break;
+        }
+    }
+
+    player->CLOSE_GOSSIP_MENU();
+    return true;
 }
 
 void AddSC_player_stash()
 {
-    Script* newscript;
-    newscript = new Script;
+    Script* newscript = new Script;
     newscript->Name = "player_stash";
     newscript->pGOGossipHello = &GossipHello_player_stash;
     newscript->pGOGossipSelect = &GossipSelect_player_stash;
