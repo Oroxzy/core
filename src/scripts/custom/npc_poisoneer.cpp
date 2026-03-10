@@ -3,6 +3,7 @@
 #include "Item.h"
 #include <sstream>
 #include <vector>
+#include <map>
 
 namespace
 {
@@ -14,32 +15,122 @@ namespace
     static const uint32 ACTION_CONFIRM_REMOVE_ALL   = 20;
     static const uint32 ACTION_DO_REMOVE_ALL        = 21;
 
+    enum TempEnchantFamily
+    {
+        FAMILY_NONE = 0,
+
+        FAMILY_SHARPENING_STONE,
+        FAMILY_WEIGHTSTONE,
+        FAMILY_WIZARD_OIL,
+        FAMILY_MANA_OIL,
+
+        FAMILY_INSTANT_POISON,
+        FAMILY_DEADLY_POISON,
+        FAMILY_CRIPPLING_POISON,
+        FAMILY_MIND_NUMBING_POISON,
+        FAMILY_WOUND_POISON
+    };
+
     struct TempEnchantOption
     {
         uint32 spellId;
         const char* text;
         uint8 minPatch;
+        uint8 minLevel;
         bool rogueOnly;
+        TempEnchantFamily family;
     };
 
-    // Spell IDs were selected from Classic-era temporary weapon enchant / poison spell entries.
-    // They are split so the GO remains simple and robust, while still preserving the intended feature set.
     static TempEnchantOption const kGeneralOptions[] =
     {
-        { 16138, "Dense Sharpening Stone",   0, false },
-        { 16622, "Dense Weightstone",        0, false },
-        { 22756, "Elemental Sharpening Stone", 7, false },
-        { 25122, "Brilliant Wizard Oil",    7, false },
-        { 25123, "Brilliant Mana Oil",      7, false }
+        // --------------------------------
+        // Sharpening Stones
+        // --------------------------------
+        { 2828,  "Rough Sharpening Stone",      0,  1, false, FAMILY_SHARPENING_STONE },
+        { 2829,  "Coarse Sharpening Stone",     0,  5, false, FAMILY_SHARPENING_STONE },
+        { 2830,  "Heavy Sharpening Stone",      0, 15, false, FAMILY_SHARPENING_STONE },
+        { 9900,  "Solid Sharpening Stone",      0, 25, false, FAMILY_SHARPENING_STONE },
+        { 16138, "Dense Sharpening Stone",      0, 35, false, FAMILY_SHARPENING_STONE },
+        { 22756, "Elemental Sharpening Stone",  7, 50, false, FAMILY_SHARPENING_STONE },
+    
+        // --------------------------------
+        // Weightstones
+        // --------------------------------
+        { 3112,  "Rough Weightstone",           0,  1, false, FAMILY_WEIGHTSTONE },
+        { 3113,  "Coarse Weightstone",          0,  5, false, FAMILY_WEIGHTSTONE },
+        { 3114,  "Heavy Weightstone",           0, 15, false, FAMILY_WEIGHTSTONE },
+        { 9903,  "Solid Weightstone",           0, 25, false, FAMILY_WEIGHTSTONE },
+        { 16622, "Dense Weightstone",           0, 35, false, FAMILY_WEIGHTSTONE },
+    
+        // --------------------------------
+        // Wizard Oils
+        // --------------------------------
+        { 25117, "Minor Wizard Oil",            7,  5, false, FAMILY_WIZARD_OIL },
+        { 25119, "Lesser Wizard Oil",           7, 30, false, FAMILY_WIZARD_OIL },
+        { 25121, "Wizard Oil",                  7, 40, false, FAMILY_WIZARD_OIL },
+        { 25122, "Brilliant Wizard Oil",        7, 45, false, FAMILY_WIZARD_OIL },
+    
+        // --------------------------------
+        // Mana Oils
+        // --------------------------------
+        { 25118, "Minor Mana Oil",              7, 20, false, FAMILY_MANA_OIL },
+        { 25120, "Lesser Mana Oil",             7, 40, false, FAMILY_MANA_OIL },
+        { 25123, "Brilliant Mana Oil",          7, 45, false, FAMILY_MANA_OIL },
+    
+        // --------------------------------
+        // Special Vanilla Oils
+        // --------------------------------
+        { 8017,  "Rockbiter Weapon",            0,  1, false, FAMILY_NONE }, // optional if you want class buffs
+        { 8033,  "Frostbrand Weapon",           0, 20, false, FAMILY_NONE },
+    
+        // --------------------------------
+        // Consumable Weapon Oils
+        // --------------------------------
+        { 16352, "Shadow Oil",                  0, 24, false, FAMILY_NONE },
+        { 16355, "Frost Oil",                   0, 24, false, FAMILY_NONE }
     };
 
     static TempEnchantOption const kRogueOptions[] =
     {
-        { 11343, "Instant Poison VI",       0, true  },
-        { 25351, "Deadly Poison V",         0, true  },
-        { 11202, "Crippling Poison II",     0, true  },
-        { 11399, "Mind-numbing Poison III", 0, true  },
-        { 13227, "Wound Poison IV",         0, true  }
+        // --------------------------------
+        // Instant Poison
+        // --------------------------------
+        { 8679,  "Instant Poison I",            0, 20, true,  FAMILY_INSTANT_POISON },
+        { 8686,  "Instant Poison II",           0, 28, true,  FAMILY_INSTANT_POISON },
+        { 8688,  "Instant Poison III",          0, 36, true,  FAMILY_INSTANT_POISON },
+        { 11338, "Instant Poison IV",           0, 44, true,  FAMILY_INSTANT_POISON },
+        { 11339, "Instant Poison V",            0, 52, true,  FAMILY_INSTANT_POISON },
+        { 11340, "Instant Poison VI",           0, 60, true,  FAMILY_INSTANT_POISON },
+    
+        // --------------------------------
+        // Deadly Poison
+        // --------------------------------
+        { 2823,  "Deadly Poison I",             0, 30, true,  FAMILY_DEADLY_POISON },
+        { 2824,  "Deadly Poison II",            0, 38, true,  FAMILY_DEADLY_POISON },
+        { 11355, "Deadly Poison III",           0, 46, true,  FAMILY_DEADLY_POISON },
+        { 11356, "Deadly Poison IV",            0, 54, true,  FAMILY_DEADLY_POISON },
+        { 25351, "Deadly Poison V",             0, 60, true,  FAMILY_DEADLY_POISON },
+    
+        // --------------------------------
+        // Crippling Poison
+        // --------------------------------
+        { 3408,  "Crippling Poison I",          0, 20, true,  FAMILY_CRIPPLING_POISON },
+        { 11202, "Crippling Poison II",         0, 50, true,  FAMILY_CRIPPLING_POISON },
+    
+        // --------------------------------
+        // Mind Numbing Poison
+        // --------------------------------
+        { 5761,  "Mind-numbing Poison I",       0, 24, true,  FAMILY_MIND_NUMBING_POISON },
+        { 8692,  "Mind-numbing Poison II",      0, 38, true,  FAMILY_MIND_NUMBING_POISON },
+        { 11399, "Mind-numbing Poison III",     0, 52, true,  FAMILY_MIND_NUMBING_POISON },
+    
+        // --------------------------------
+        // Wound Poison
+        // --------------------------------
+        { 13219, "Wound Poison I",              0, 32, true,  FAMILY_WOUND_POISON },
+        { 13225, "Wound Poison II",             0, 40, true,  FAMILY_WOUND_POISON },
+        { 13226, "Wound Poison III",            0, 48, true,  FAMILY_WOUND_POISON },
+        { 13227, "Wound Poison IV",             0, 56, true,  FAMILY_WOUND_POISON }
     };
 
     bool IsRogue(Player* player)
@@ -91,8 +182,6 @@ namespace
         if (!spellInfo)
             return false;
 
-        // For many temporary enchant spells the masks are already enough.
-        // If the masks are empty, keep a conservative weapon-only check.
         if (spellInfo->EquippedItemSubClassMask != 0)
         {
             if (((1 << item->GetProto()->SubClass) & spellInfo->EquippedItemSubClassMask) == 0)
@@ -137,7 +226,6 @@ namespace
             return ss.str();
         }
 
-        // Some cores expose only arrays here; use the first non-empty description slot.
         for (int i = 0; i < 3; ++i)
         {
             if (enchantEntry->description[i] && enchantEntry->description[i][0] != '\0')
@@ -210,6 +298,8 @@ namespace
 
         std::string oldName = GetTempEnchantNameFromItem(item);
         uint32 duration = (spellInfo->EffectBasePoints[0] + 1) * IN_MILLISECONDS;
+        if (duration == 0)
+            duration = 30 * MINUTE * IN_MILLISECONDS;
 
         player->ApplyEnchantment(item, TEMP_ENCHANTMENT_SLOT, false);
         item->ClearEnchantment(TEMP_ENCHANTMENT_SLOT);
@@ -258,6 +348,39 @@ namespace
         std::ostringstream header;
         header << GetSlotName(slot) << ": " << item->GetProto()->Name1;
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, header.str().c_str(), ACTION_MAIN_MENU, ACTION_MAIN_MENU);
+
+        std::ostringstream active;
+        active << "[Active] " << GetTempEnchantNameFromItem(item);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, active.str().c_str(), ACTION_MAIN_MENU, ACTION_MAIN_MENU);
+    }
+
+    void AddBestOptionsForSlot(Player* player, uint8 slot, TempEnchantOption const* options, size_t count)
+    {
+        if (!player)
+            return;
+
+        std::map<uint32, TempEnchantOption const*> bestByFamily;
+
+        for (size_t i = 0; i < count; ++i)
+        {
+            TempEnchantOption const& option = options[i];
+
+            if (player->getLevel() < option.minLevel)
+                continue;
+
+            if (sWorld.GetWowPatch() < option.minPatch)
+                continue;
+
+            if (!CanApplyToSlot(player, slot, option.spellId))
+                continue;
+
+            std::map<uint32, TempEnchantOption const*>::iterator it = bestByFamily.find(uint32(option.family));
+            if (it == bestByFamily.end() || option.minLevel > it->second->minLevel)
+                bestByFamily[uint32(option.family)] = &option;
+        }
+
+        for (std::map<uint32, TempEnchantOption const*>::const_iterator it = bestByFamily.begin(); it != bestByFamily.end(); ++it)
+            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, it->second->text, slot, it->second->spellId);
     }
 
     void ShowPoisonerMainMenu(Player* player, GameObject* go)
@@ -268,10 +391,20 @@ namespace
         player->PlayerTalkClass->ClearMenus();
 
         if (IsWeaponEquippedInSlot(player, EQUIPMENT_SLOT_MAINHAND))
-            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Main Hand", ACTION_MAINHAND_MENU, ACTION_MAINHAND_MENU);
+        {
+            Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND);
+            std::ostringstream ss;
+            ss << "Main Hand [" << GetTempEnchantNameFromItem(item) << "]";
+            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, ss.str().c_str(), ACTION_MAINHAND_MENU, ACTION_MAINHAND_MENU);
+        }
 
         if (IsWeaponEquippedInSlot(player, EQUIPMENT_SLOT_OFFHAND))
-            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Off Hand", ACTION_OFFHAND_MENU, ACTION_OFFHAND_MENU);
+        {
+            Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
+            std::ostringstream ss;
+            ss << "Off Hand [" << GetTempEnchantNameFromItem(item) << "]";
+            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, ss.str().c_str(), ACTION_OFFHAND_MENU, ACTION_OFFHAND_MENU);
+        }
 
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Remove all temporary weapon enchants", ACTION_CONFIRM_REMOVE_ALL, ACTION_CONFIRM_REMOVE_ALL);
         player->SEND_GOSSIP_MENU(600006, go->GetObjectGuid());
@@ -292,30 +425,10 @@ namespace
         player->PlayerTalkClass->ClearMenus();
 
         AddSlotHeader(player, slot);
-
-        for (size_t i = 0; i < sizeof(kGeneralOptions) / sizeof(kGeneralOptions[0]); ++i)
-        {
-            TempEnchantOption const& option = kGeneralOptions[i];
-            if (sWorld.GetWowPatch() < option.minPatch)
-                continue;
-
-            if (!CanApplyToSlot(player, slot, option.spellId))
-                continue;
-
-            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, option.text, slot, option.spellId);
-        }
+        AddBestOptionsForSlot(player, slot, kGeneralOptions, sizeof(kGeneralOptions) / sizeof(kGeneralOptions[0]));
 
         if (IsRogue(player))
-        {
-            for (size_t i = 0; i < sizeof(kRogueOptions) / sizeof(kRogueOptions[0]); ++i)
-            {
-                TempEnchantOption const& option = kRogueOptions[i];
-                if (!CanApplyToSlot(player, slot, option.spellId))
-                    continue;
-
-                player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, option.text, slot, option.spellId);
-            }
-        }
+            AddBestOptionsForSlot(player, slot, kRogueOptions, sizeof(kRogueOptions) / sizeof(kRogueOptions[0]));
 
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TALK, "<- Back", ACTION_MAIN_MENU, ACTION_MAIN_MENU);
         player->SEND_GOSSIP_MENU(600006, go->GetObjectGuid());
@@ -359,7 +472,6 @@ bool GossipSelect_npc_poisoneer(Player* player, GameObject* go, uint32 sender, u
             break;
     }
 
-    // sender is the equipment slot here, action is the temporary enchant spell.
     if (sender == EQUIPMENT_SLOT_MAINHAND || sender == EQUIPMENT_SLOT_OFFHAND)
     {
         ApplyTempEnchant(player, go, action, uint8(sender));
