@@ -48,6 +48,8 @@ set (SCRIPTS_SRCS
     custom/template_npc.cpp
     custom/npc_enchanter.cpp
 	custom/PlayerStash.cpp
+	custom/npc_poisoneer.cpp
+    custom/npc_property_manager.cpp
     eastern_kingdoms/alterac_mountains/alterac_mountains.cpp
     eastern_kingdoms/arathi_highlands/arathi_highlands.cpp
     eastern_kingdoms/blasted_lands/blasted_lands.cpp
