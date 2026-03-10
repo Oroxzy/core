@@ -365,7 +365,7 @@ namespace
         {
             TempEnchantOption const& option = options[i];
 
-            if (player->getLevel() < option.minLevel)
+            if (player->GetLevel() < option.minLevel)
                 continue;
 
             if (sWorld.GetWowPatch() < option.minPatch)
