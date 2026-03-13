@@ -1,6 +1,7 @@
 #include "scriptPCH.h"
 #include "Player.h"
 #include "Item.h"
+#include "DBCStores.h"
 
 #include <sstream>
 #include <vector>
@@ -15,13 +16,13 @@ namespace
     static const uint32 ACTION_PM_MAIN               = 1;
     static const uint32 ACTION_PM_OPEN_SLOT_BASE     = 1000;
     static const uint32 ACTION_PM_ITEM_PAGE_BASE     = 2000;
+    static const uint32 ACTION_PM_MAIN_PAGE_BASE     = 3000;
+    static const uint32 ACTION_PM_CLEAR_PROPERTY     = 4000;
     static const uint32 ACTION_PM_APPLY_BASE         = 500000;
-    static const uint32 ACTION_PM_CLEAR_PROPERTY     = 900000;
-    static const uint32 ACTION_PM_MAIN_PAGE_BASE     = 910000;
 
     static const size_t kMainItemsPerPage            = 10;
     static const size_t kChoicesPerPage              = 10;
-    static const size_t kMaxGossipLabelLength        = 95;
+    static const size_t kMaxGossipLabelLength        = 120;
 
     bool IsEligibleRandomItem(Item* item)
     {
@@ -44,11 +45,6 @@ namespace
         return 0;
     }
 
-    bool UsesRandomSuffix(Item* /*item*/)
-    {
-        return false;
-    }
-
     std::string TruncateLabel(std::string const& text, size_t maxLen)
     {
         if (text.length() <= maxLen)
@@ -60,62 +56,7 @@ namespace
         return text.substr(0, maxLen - 3) + "...";
     }
 
-    std::string GetCurrentRandomPropertyText(Item* item)
-    {
-        if (!item)
-            return std::string("None");
-
-        int32 current = item->GetItemRandomPropertyId();
-        if (current == 0)
-            return std::string("None");
-
-        std::ostringstream ss;
-        if (current > 0)
-            ss << "Property ID " << current;
-        else
-            ss << "Suffix ID " << -current;
-
-        return ss.str();
-    }
-
-    std::vector<uint32> LoadAvailableProperties(Item* item)
-    {
-        std::vector<uint32> out;
-        if (!item)
-            return out;
-    
-        uint32 entry = GetTemplateRandomEntry(item);
-        if (!entry)
-            return out;
-    
-        auto result = WorldDatabase.PQuery(
-            "SELECT ench FROM item_enchantment_template WHERE entry='%u' ORDER BY chance DESC, ench ASC",
-            entry
-        );
-        if (!result)
-            return out;
-    
-        std::set<uint32> seen;
-    
-        do
-        {
-            Field* fields = result->Fetch();
-            if (!fields)
-                continue;
-    
-            uint32 ench = fields[0].GetUInt32();
-            if (!ench)
-                continue;
-    
-            if (seen.insert(ench).second)
-                out.push_back(ench);
-        }
-        while (result->NextRow());
-    
-        return out;
-    }
-        
-    const char* GetSlotName(uint8 slot)
+    std::string GetSlotNameText(uint8 slot)
     {
         switch (slot)
         {
@@ -142,6 +83,170 @@ namespace
         }
     }
 
+    std::string GetLocalizedEnchantDescription(Player* player, SpellItemEnchantmentEntry const* enchantEntry)
+    {
+        if (!enchantEntry)
+            return "";
+
+        LocaleConstant loc = LOCALE_enUS;
+        if (player && player->GetSession())
+            loc = player->GetSession()->GetSessionDbcLocale();
+
+        std::string text;
+        if (loc < MAX_DBC_LOCALE && enchantEntry->description[loc] && enchantEntry->description[loc][0] != '\0')
+            text = enchantEntry->description[loc];
+
+        if (text.empty() && enchantEntry->description[0] && enchantEntry->description[0][0] != '\0')
+            text = enchantEntry->description[0];
+
+        return text;
+    }
+
+    std::string GetLocalizedPropertyName(Player* player, ItemRandomPropertiesEntry const* prop)
+    {
+        if (!prop)
+            return "";
+
+        LocaleConstant loc = LOCALE_enUS;
+        if (player && player->GetSession())
+            loc = player->GetSession()->GetSessionDbcLocale();
+
+        std::string text;
+        if (loc < MAX_DBC_LOCALE && prop->nameSuffix[loc] && prop->nameSuffix[loc][0] != '\0')
+            text = prop->nameSuffix[loc];
+
+        if (text.empty() && prop->internalName && prop->internalName[0] != '\0')
+            text = prop->internalName;
+
+        return text;
+    }
+
+    std::string JoinParts(std::vector<std::string> const& parts, std::string const& sep)
+    {
+        if (parts.empty())
+            return "";
+
+        std::ostringstream ss;
+        for (size_t i = 0; i < parts.size(); ++i)
+        {
+            if (i > 0)
+                ss << sep;
+            ss << parts[i];
+        }
+
+        return ss.str();
+    }
+
+    std::string DescribeRandomPropertyId(Player* player, int32 propertyId)
+    {
+        if (propertyId == 0)
+            return "None";
+
+        if (propertyId < 0)
+        {
+            std::ostringstream ss;
+            ss << "Suffix ID " << (-propertyId);
+            return ss.str();
+        }
+
+        ItemRandomPropertiesEntry const* prop = sItemRandomPropertiesStore.LookupEntry(uint32(propertyId));
+        if (!prop)
+        {
+            std::ostringstream ss;
+            ss << "Property ID " << propertyId;
+            return ss.str();
+        }
+
+        std::vector<std::string> parts;
+
+        for (uint32 i = 0; i < 3; ++i)
+        {
+            if (!prop->enchant_id[i])
+                continue;
+
+            SpellItemEnchantmentEntry const* enchantEntry = sSpellItemEnchantmentStore.LookupEntry(prop->enchant_id[i]);
+            if (!enchantEntry)
+                continue;
+
+            std::string desc = GetLocalizedEnchantDescription(player, enchantEntry);
+            if (!desc.empty())
+                parts.push_back(desc);
+        }
+
+        if (!parts.empty())
+            return JoinParts(parts, " / ");
+
+        std::string nameText = GetLocalizedPropertyName(player, prop);
+        if (!nameText.empty())
+            return nameText;
+
+        std::ostringstream ss;
+        ss << "Property ID " << propertyId;
+        return ss.str();
+    }
+
+    std::string BuildPropertyChoiceLabel(Player* player, uint32 propertyId)
+    {
+        std::ostringstream ss;
+
+        ItemRandomPropertiesEntry const* prop = sItemRandomPropertiesStore.LookupEntry(propertyId);
+        std::string propName = GetLocalizedPropertyName(player, prop);
+        std::string statText = DescribeRandomPropertyId(player, int32(propertyId));
+
+        if (!propName.empty() && propName != statText)
+            ss << propName << " | ";
+
+        ss << statText << " [" << propertyId << "]";
+        return ss.str();
+    }
+
+    std::string GetCurrentRandomPropertyText(Player* player, Item* item)
+    {
+        if (!item)
+            return "None";
+
+        int32 current = item->GetItemRandomPropertyId();
+        return DescribeRandomPropertyId(player, current);
+    }
+
+    std::vector<uint32> LoadAvailableProperties(Item* item)
+    {
+        std::vector<uint32> out;
+        if (!item)
+            return out;
+
+        uint32 entry = GetTemplateRandomEntry(item);
+        if (!entry)
+            return out;
+
+        auto result = WorldDatabase.PQuery(
+            "SELECT ench FROM item_enchantment_template WHERE ((%u >= patch_min) && (%u <= patch_max)) AND entry='%u' ORDER BY ench ASC",
+            sWorld.GetWowPatch(),
+            sWorld.GetWowPatch(),
+            entry
+        );
+        if (!result)
+            return out;
+
+        std::set<uint32> seen;
+        do
+        {
+            Field* fields = result->Fetch();
+            if (!fields)
+                continue;
+
+            uint32 ench = fields[0].GetUInt32();
+            if (!ench)
+                continue;
+
+            if (seen.insert(ench).second)
+                out.push_back(ench);
+        }
+        while (result->NextRow());
+
+        return out;
+    }
+
     std::vector<uint8> GetEligibleSlots(Player* player)
     {
         std::vector<uint8> slots;
@@ -156,6 +261,54 @@ namespace
         }
 
         return slots;
+    }
+
+    void ClearRandomProperty(Player* player, Item* item, uint8 /*slot*/)
+    {
+        if (!player || !item)
+            return;
+
+        for (uint32 i = PROP_ENCHANTMENT_SLOT_0; i < PROP_ENCHANTMENT_SLOT_0 + 3; ++i)
+            player->ApplyEnchantment(item, EnchantmentSlot(i), false);
+
+        item->SetInt32Value(ITEM_FIELD_RANDOM_PROPERTIES_ID, 0);
+        item->SetUInt32Value(ITEM_FIELD_PROPERTY_SEED, 0);
+
+        for (uint32 i = PROP_ENCHANTMENT_SLOT_0; i < PROP_ENCHANTMENT_SLOT_0 + 3; ++i)
+            item->ClearEnchantment(EnchantmentSlot(i));
+
+        item->SetState(ITEM_CHANGED, player);
+        player->CastSpell(player, kVisualSpell, true);
+        player->SaveInventoryAndGoldToDB();
+    }
+
+    void ApplyRandomProperty(Player* player, Item* item, uint8 /*slot*/, int32 propertyId)
+    {
+        if (!player || !item)
+            return;
+
+        for (uint32 i = PROP_ENCHANTMENT_SLOT_0; i < PROP_ENCHANTMENT_SLOT_0 + 3; ++i)
+            player->ApplyEnchantment(item, EnchantmentSlot(i), false);
+
+        if (propertyId > 0)
+        {
+            item->SetItemRandomProperties(propertyId);
+        }
+        else
+        {
+            item->SetInt32Value(ITEM_FIELD_RANDOM_PROPERTIES_ID, 0);
+            item->SetUInt32Value(ITEM_FIELD_PROPERTY_SEED, 0);
+
+            for (uint32 i = PROP_ENCHANTMENT_SLOT_0; i < PROP_ENCHANTMENT_SLOT_0 + 3; ++i)
+                item->ClearEnchantment(EnchantmentSlot(i));
+        }
+
+        for (uint32 i = PROP_ENCHANTMENT_SLOT_0; i < PROP_ENCHANTMENT_SLOT_0 + 3; ++i)
+            player->ApplyEnchantment(item, EnchantmentSlot(i), true);
+
+        item->SetState(ITEM_CHANGED, player);
+        player->CastSpell(player, kVisualSpell, true);
+        player->SaveInventoryAndGoldToDB();
     }
 
     void ShowPropertyMainMenu(Player* player, GameObject* go, size_t page)
@@ -189,7 +342,7 @@ namespace
                 continue;
 
             std::ostringstream label;
-            label << GetSlotName(slot) << ": " << item->GetProto()->Name1 << " [" << GetCurrentRandomPropertyText(item) << "]";
+            label << GetSlotNameText(slot) << ": " << item->GetProto()->Name1 << " [" << GetCurrentRandomPropertyText(player, item) << "]";
 
             std::string finalLabel = TruncateLabel(label.str(), kMaxGossipLabelLength);
             player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, finalLabel.c_str(), 0, ACTION_PM_OPEN_SLOT_BASE + slot);
@@ -220,7 +373,7 @@ namespace
         std::vector<uint32> choices = LoadAvailableProperties(item);
         if (choices.empty())
         {
-            player->GetSession()->SendNotification("No random property choices were found for this item in item_enchantment_template.");
+            player->GetSession()->SendNotification("No random property choices were found for this item.");
             ShowPropertyMainMenu(player, go, 0);
             return;
         }
@@ -233,26 +386,26 @@ namespace
         if (end > choices.size())
             end = choices.size();
 
+        int32 currentPropertyId = item->GetItemRandomPropertyId();
+
         player->PlayerTalkClass->ClearMenus();
 
         {
             std::ostringstream info;
-            info << item->GetProto()->Name1 << " (" << GetSlotName(slot) << ") - current: " << GetCurrentRandomPropertyText(item);
+            info << item->GetProto()->Name1 << " (" << GetSlotNameText(slot) << ") - current: " << GetCurrentRandomPropertyText(player, item);
             player->GetSession()->SendNotification("%s", info.str().c_str());
         }
 
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Clear random property / suffix", slot, ACTION_PM_CLEAR_PROPERTY);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Clear random property", slot, ACTION_PM_CLEAR_PROPERTY);
 
         for (size_t i = start; i < end; ++i)
         {
-            std::ostringstream label;
-            if (UsesRandomSuffix(item))
-                label << "Apply suffix ID " << choices[i];
-            else
-                label << "Apply property ID " << choices[i];
+            uint32 propertyId = choices[i];
+            std::string label = BuildPropertyChoiceLabel(player, propertyId);
+            std::string finalLabel = TruncateLabel(label, kMaxGossipLabelLength);
 
-            std::string finalLabel = TruncateLabel(label.str(), kMaxGossipLabelLength);
-            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, finalLabel.c_str(), slot, ACTION_PM_APPLY_BASE + choices[i]);
+            uint8 icon = (currentPropertyId == int32(propertyId)) ? GOSSIP_ICON_TAXI : GOSSIP_ICON_CHAT;
+            player->ADD_GOSSIP_ITEM(icon, finalLabel.c_str(), slot, ACTION_PM_APPLY_BASE + propertyId);
         }
 
         if (start > 0)
@@ -263,17 +416,6 @@ namespace
 
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TALK, "<- Back", 0, ACTION_PM_MAIN);
         player->SEND_GOSSIP_MENU(600006, go->GetObjectGuid());
-    }
-
-    void ApplyRandomProperty(Player* player, Item* item, int32 propertyId)
-    {
-        if (!player || !item)
-            return;
-
-        item->SetItemRandomProperties(propertyId);
-        item->SetState(ITEM_CHANGED, player);
-        player->CastSpell(player, kVisualSpell, true);
-        player->SaveInventoryAndGoldToDB();
     }
 
     void SetPropertyOnSlot(Player* player, GameObject* go, uint8 slot, uint32 choiceId)
@@ -313,17 +455,12 @@ namespace
             return;
         }
 
-        int32 appliedId = UsesRandomSuffix(item) ? -int32(choiceId) : int32(choiceId);
-        std::string oldText = GetCurrentRandomPropertyText(item);
+        std::string oldText = GetCurrentRandomPropertyText(player, item);
 
-        ApplyRandomProperty(player, item, appliedId);
+        ApplyRandomProperty(player, item, slot, int32(choiceId));
 
         std::ostringstream ss;
-        if (UsesRandomSuffix(item))
-            ss << item->GetProto()->Name1 << " on " << GetSlotName(slot) << " changed from " << oldText << " to Suffix ID " << choiceId << ".";
-        else
-            ss << item->GetProto()->Name1 << " on " << GetSlotName(slot) << " changed from " << oldText << " to Property ID " << choiceId << ".";
-
+        ss << item->GetProto()->Name1 << " on " << GetSlotNameText(slot) << " changed from " << oldText << " to " << DescribeRandomPropertyId(player, int32(choiceId)) << ".";
         player->GetSession()->SendNotification("%s", ss.str().c_str());
     }
 
@@ -345,17 +482,26 @@ namespace
             return;
         }
 
-        std::string oldText = GetCurrentRandomPropertyText(item);
-        ApplyRandomProperty(player, item, 0);
+        std::string oldText = GetCurrentRandomPropertyText(player, item);
+        ClearRandomProperty(player, item, slot);
 
         std::ostringstream ss;
-        ss << "Random property on " << item->GetProto()->Name1 << " (" << GetSlotName(slot) << ") was cleared. Previous value: " << oldText << ".";
+        ss << "Random property on " << item->GetProto()->Name1 << " (" << GetSlotNameText(slot) << ") was cleared. Previous value: " << oldText << ".";
         player->GetSession()->SendNotification("%s", ss.str().c_str());
     }
 }
 
 bool GossipHello_npc_property_manager(Player* player, GameObject* go)
 {
+    if (!player || !go)
+        return false;
+
+    if (player->IsInCombat())
+    {
+        player->GetSession()->SendNotification("You are in combat!");
+        return true;
+    }
+
     ShowPropertyMainMenu(player, go, 0);
     return true;
 }
@@ -373,7 +519,7 @@ bool GossipSelect_npc_property_manager(Player* player, GameObject* go, uint32 se
         return true;
     }
 
-    if (action >= ACTION_PM_MAIN_PAGE_BASE && action < ACTION_PM_APPLY_BASE)
+    if (action >= ACTION_PM_MAIN_PAGE_BASE && action < ACTION_PM_CLEAR_PROPERTY)
     {
         uint32 page = action - ACTION_PM_MAIN_PAGE_BASE;
         ShowPropertyMainMenu(player, go, page);
@@ -394,14 +540,14 @@ bool GossipSelect_npc_property_manager(Player* player, GameObject* go, uint32 se
         return true;
     }
 
-    if (action >= ACTION_PM_ITEM_PAGE_BASE && action < ACTION_PM_APPLY_BASE)
+    if (action >= ACTION_PM_ITEM_PAGE_BASE && action < ACTION_PM_MAIN_PAGE_BASE)
     {
         uint32 page = action - ACTION_PM_ITEM_PAGE_BASE;
         ShowPropertyItemMenu(player, go, uint8(sender), page);
         return true;
     }
 
-    if (action >= ACTION_PM_APPLY_BASE && action < ACTION_PM_CLEAR_PROPERTY)
+    if (action >= ACTION_PM_APPLY_BASE)
     {
         uint32 choiceId = action - ACTION_PM_APPLY_BASE;
         SetPropertyOnSlot(player, go, uint8(sender), choiceId);
