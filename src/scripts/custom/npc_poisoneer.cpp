@@ -3,13 +3,12 @@
 #include "Item.h"
 #include "SpellMgr.h"
 #include "DBCStores.h"
-#include "Database/DatabaseEnv.h"
+#include "ObjectMgr.h"
 
 #include <map>
 #include <vector>
 #include <sstream>
 #include <algorithm>
-#include <memory>
 #include <string>
 #include <cctype>
 
@@ -22,7 +21,7 @@ namespace
     // Visual feedback spell after apply/remove.
     static const uint32 kVisualSpell = 4319;
 
-    // Maximum number of real enchant options shown per slot page.
+    // Maximum number of real enchant options shown per page.
     // Keep this low enough so the total gossip item count stays below 32.
     static const size_t kSlotOptionsPerPage = 10;
 
@@ -32,6 +31,7 @@ namespace
     // ------------------------------------------------------------
     // Gossip actions
     // ------------------------------------------------------------
+
     static const uint32 ACTION_MAIN_MENU               = 1;
     static const uint32 ACTION_MAINHAND_MENU           = 10;
     static const uint32 ACTION_OFFHAND_MENU            = 11;
@@ -39,12 +39,10 @@ namespace
     static const uint32 ACTION_DO_REMOVE_ALL           = 21;
     static const uint32 ACTION_REMOVE_CURRENT          = 30;
 
-    // Page navigation:
     // sender = equipment slot
     // action = ACTION_SLOT_PAGE_BASE + page
     static const uint32 ACTION_SLOT_PAGE_BASE          = 1000;
 
-    // Spell apply:
     // sender = equipment slot
     // action = ACTION_APPLY_SPELL_BASE + spellId
     static const uint32 ACTION_APPLY_SPELL_BASE        = 100000;
@@ -52,12 +50,12 @@ namespace
     // ------------------------------------------------------------
     // Data structure for one available temp enchant source
     // ------------------------------------------------------------
+
     struct TempEnchantOption
     {
         uint32 itemEntry;
         uint32 spellId;
         uint32 requiredLevel;
-        uint32 patch;
         std::string itemName;
         std::string spellName;
     };
@@ -66,8 +64,9 @@ namespace
     static std::vector<TempEnchantOption> gTempEnchantOptions;
 
     // ------------------------------------------------------------
-    // Helpers
+    // String helpers
     // ------------------------------------------------------------
+
     std::string ToLowerCopy(std::string const& input)
     {
         std::string out = input;
@@ -91,6 +90,10 @@ namespace
 
         return text.substr(0, maxLen - 3) + "...";
     }
+
+    // ------------------------------------------------------------
+    // Basic slot / weapon helpers
+    // ------------------------------------------------------------
 
     const char* GetSlotName(uint8 slot)
     {
@@ -172,7 +175,12 @@ namespace
 
     // ------------------------------------------------------------
     // Family grouping
+    //
+    // Goal:
+    // - collapse multiple ranks into one family
+    // - show only the best usable option for the player's level
     // ------------------------------------------------------------
+
     std::string GetOptionFamilyKey(TempEnchantOption const& option)
     {
         std::string spell = ToLowerCopy(option.spellName);
@@ -224,8 +232,9 @@ namespace
     }
 
     // ------------------------------------------------------------
-    // Validity checks
+    // Validation
     // ------------------------------------------------------------
+
     bool CanUseTempEnchantOption(Player* player, uint8 slot, TempEnchantOption const& option)
     {
         if (!player)
@@ -234,14 +243,11 @@ namespace
         if (!IsWeaponEquippedInSlot(player, slot))
             return false;
 
-        if (option.patch > sWorld.GetWowPatch())
+        ItemPrototype const* sourceProto = sObjectMgr.GetItemPrototype(option.itemEntry);
+        if (!sourceProto)
             return false;
 
-        ItemPrototype const* itemProto = sObjectMgr.GetItemPrototype(option.itemEntry);
-        if (!itemProto)
-            return false;
-
-        if (player->CanUseItem(itemProto, false) != EQUIP_ERR_OK)
+        if (player->CanUseItem(sourceProto, false) != EQUIP_ERR_OK)
             return false;
 
         SpellEntry const* spellInfo = sSpellMgr.GetSpellEntry(option.spellId);
@@ -259,57 +265,52 @@ namespace
     }
 
     // ------------------------------------------------------------
-    // Load all temp enchant options from item_template
+    // Load all temp enchant options from the in-memory item store
+    //
+    // item_template is already loaded into ObjectMgr on startup, and
+    // GetItemPrototypeMap() exposes the full in-memory map.
     // ------------------------------------------------------------
+
     void LoadTempEnchantOptions()
     {
         if (gTempEnchantOptionsLoaded)
             return;
-
+    
         gTempEnchantOptionsLoaded = true;
         gTempEnchantOptions.clear();
-
-        std::unique_ptr<QueryResult> result(WorldDatabase.Query(
-            "SELECT `entry`, `patch`, `name`, "
-            "`required_level`, "
-            "`spellid_1`, `spelltrigger_1`, "
-            "`spellid_2`, `spelltrigger_2`, "
-            "`spellid_3`, `spelltrigger_3`, "
-            "`spellid_4`, `spelltrigger_4`, "
-            "`spellid_5`, `spelltrigger_5` "
-            "FROM `item_template`"));
-
-        if (!result)
-            return;
-
+    
         std::map<uint32, TempEnchantOption> bestBySpellId;
-
-        do
+    
+        ItemPrototypeMap const& itemMap = sObjectMgr.GetItemPrototypeMap();
+    
+        for (ItemPrototypeMap::const_iterator itr = itemMap.begin(); itr != itemMap.end(); ++itr)
         {
-            Field* fields = result->Fetch();
-            if (!fields)
+            ItemPrototype const* proto = &itr->second;
+            if (!proto)
                 continue;
-
-            uint32 itemEntry     = fields[0].GetUInt32();
-            uint32 patch         = fields[1].GetUInt32();
-            std::string itemName = fields[2].GetCppString();
-            uint32 reqLevel      = fields[3].GetUInt32();
-
-            for (uint32 i = 0; i < 5; ++i)
+    
+            if (!proto->Name1 || proto->Name1[0] == '\0')
+                continue;
+    
+            std::string itemName = proto->Name1;
+            uint32 itemEntry = proto->ItemId;
+            uint32 reqLevel = proto->RequiredLevel;
+    
+            for (int i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
             {
-                uint32 spellId = fields[4 + (i * 2)].GetUInt32();
-                uint32 trigger = fields[5 + (i * 2)].GetUInt32();
-
+                uint32 spellId = proto->Spells[i].SpellId;
+                uint32 trigger = proto->Spells[i].SpellTrigger;
+    
                 if (!spellId)
                     continue;
-
+    
                 if (trigger != ITEM_SPELLTRIGGER_ON_USE)
                     continue;
-
+    
                 SpellEntry const* spellInfo = sSpellMgr.GetSpellEntry(spellId);
                 if (!spellInfo)
                     continue;
-
+    
                 bool isTempEnchant = false;
                 for (int eff = 0; eff < 3; ++eff)
                 {
@@ -319,14 +320,14 @@ namespace
                         break;
                     }
                 }
-
+    
                 if (!isTempEnchant)
                     continue;
-
+    
                 std::string spellName = spellInfo->SpellName[0];
                 if (spellName.empty())
                     continue;
-
+    
                 if (ContainsInsensitive(spellName, "zzold") ||
                     ContainsInsensitive(spellName, "(dnd)") ||
                     ContainsInsensitive(spellName, "unused") ||
@@ -334,38 +335,38 @@ namespace
                 {
                     continue;
                 }
-
+    
                 TempEnchantOption opt;
-                opt.itemEntry      = itemEntry;
-                opt.spellId        = spellId;
-                opt.requiredLevel  = reqLevel;
-                opt.patch          = patch;
-                opt.itemName       = itemName;
-                opt.spellName      = spellName;
-
-                std::map<uint32, TempEnchantOption>::iterator itr = bestBySpellId.find(spellId);
-                if (itr == bestBySpellId.end())
+                opt.itemEntry = itemEntry;
+                opt.spellId = spellId;
+                opt.requiredLevel = reqLevel;
+                opt.itemName = itemName;
+                opt.spellName = spellName;
+    
+                std::map<uint32, TempEnchantOption>::iterator found = bestBySpellId.find(spellId);
+                if (found == bestBySpellId.end())
                 {
                     bestBySpellId[spellId] = opt;
                 }
                 else
                 {
-                    if (opt.patch > itr->second.patch)
-                        itr->second = opt;
-                    else if (opt.patch == itr->second.patch && opt.requiredLevel < itr->second.requiredLevel)
-                        itr->second = opt;
+                    if (opt.requiredLevel < found->second.requiredLevel)
+                        found->second = opt;
                 }
             }
         }
-        while (result->NextRow());
-
+    
         for (std::map<uint32, TempEnchantOption>::const_iterator itr = bestBySpellId.begin(); itr != bestBySpellId.end(); ++itr)
             gTempEnchantOptions.push_back(itr->second);
     }
 
     // ------------------------------------------------------------
-    // Build filtered menu list
+    // Build the final list shown to the player:
+    // - valid for slot/weapon
+    // - valid for player level
+    // - best option per family
     // ------------------------------------------------------------
+
     std::vector<TempEnchantOption> GetBestOptionsForPlayerLevel(Player* player, uint8 slot)
     {
         std::vector<TempEnchantOption> filtered;
@@ -389,8 +390,8 @@ namespace
 
             std::string family = GetOptionFamilyKey(opt);
 
-            std::map<std::string, TempEnchantOption>::iterator itr = bestByFamily.find(family);
-            if (itr == bestByFamily.end())
+            std::map<std::string, TempEnchantOption>::iterator found = bestByFamily.find(family);
+            if (found == bestByFamily.end())
             {
                 bestByFamily[family] = opt;
             }
@@ -398,15 +399,13 @@ namespace
             {
                 bool replace = false;
 
-                if (opt.requiredLevel > itr->second.requiredLevel)
+                if (opt.requiredLevel > found->second.requiredLevel)
                     replace = true;
-                else if (opt.requiredLevel == itr->second.requiredLevel && opt.patch > itr->second.patch)
-                    replace = true;
-                else if (opt.requiredLevel == itr->second.requiredLevel && opt.patch == itr->second.patch && opt.spellId > itr->second.spellId)
+                else if (opt.requiredLevel == found->second.requiredLevel && opt.spellId > found->second.spellId)
                     replace = true;
 
                 if (replace)
-                    itr->second = opt;
+                    found->second = opt;
             }
         }
 
@@ -431,6 +430,7 @@ namespace
     // ------------------------------------------------------------
     // Apply one temp enchant
     // ------------------------------------------------------------
+
     void ApplyTempEnchant(Player* player, uint32 spellId, uint8 slot)
     {
         if (!player)
@@ -502,6 +502,7 @@ namespace
     // ------------------------------------------------------------
     // Remove temp enchant from one slot
     // ------------------------------------------------------------
+
     void RemoveTempEnchantFromSlot(Player* player, uint8 slot)
     {
         if (!player)
@@ -539,6 +540,7 @@ namespace
     // ------------------------------------------------------------
     // Remove temp enchants from all equipped items
     // ------------------------------------------------------------
+
     void RemoveAllTempEnchants(Player* player)
     {
         if (!player)
@@ -573,6 +575,7 @@ namespace
     // ------------------------------------------------------------
     // Main menu
     // ------------------------------------------------------------
+
     void ShowPoisonerMainMenu(Player* player, GameObject* go)
     {
         if (!player || !go)
@@ -605,6 +608,7 @@ namespace
     // ------------------------------------------------------------
     // Slot submenu with real pagination
     // ------------------------------------------------------------
+
     void ShowSlotMenu(Player* player, GameObject* go, uint8 slot, size_t page)
     {
         if (!player || !go)
