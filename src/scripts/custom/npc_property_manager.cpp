@@ -2,35 +2,60 @@
 #include "Player.h"
 #include "Item.h"
 #include "DBCStores.h"
+#include "Database/DatabaseEnv.h"
+#include "World.h"
 
 #include <sstream>
 #include <vector>
 #include <set>
+#include <map>
 #include <string>
 #include <algorithm>
 
 namespace
 {
-    static const uint32 kVisualSpell = 4319;
+    // ------------------------------------------------------------
+    // Visual / menu constants
+    // ------------------------------------------------------------
+    static const uint32 kVisualSpell               = 4319;
 
-    static const uint32 ACTION_PM_MAIN               = 1;
-    static const uint32 ACTION_PM_OPEN_SLOT_BASE     = 1000;
-    static const uint32 ACTION_PM_ITEM_PAGE_BASE     = 2000;
-    static const uint32 ACTION_PM_MAIN_PAGE_BASE     = 3000;
-    static const uint32 ACTION_PM_CLEAR_PROPERTY     = 4000;
-    static const uint32 ACTION_PM_APPLY_BASE         = 500000;
+    static const uint32 ACTION_PM_MAIN            = 1;
+    static const uint32 ACTION_PM_OPEN_SLOT_BASE  = 1000;
+    static const uint32 ACTION_PM_ITEM_PAGE_BASE  = 2000;
+    static const uint32 ACTION_PM_MAIN_PAGE_BASE  = 3000;
+    static const uint32 ACTION_PM_CLEAR_PROPERTY  = 4000;
+    static const uint32 ACTION_PM_APPLY_BASE      = 500000;
 
-    static const size_t kMainItemsPerPage            = 10;
-    static const size_t kChoicesPerPage              = 10;
-    static const size_t kMaxGossipLabelLength        = 120;
+    static const size_t kMainItemsPerPage         = 10;
+    static const size_t kChoicesPerPage           = 10;
+    static const size_t kMaxGossipLabelLength     = 120;
 
+    // ------------------------------------------------------------
+    // Local script-side cache for item_enchantment_template.
+    // This avoids repeated DB queries while keeping the core untouched.
+    //
+    // Key:
+    //   item_template.RandomProperty entry
+    //
+    // Value:
+    //   sorted unique list of valid ItemRandomProperties IDs
+    // ------------------------------------------------------------
+    static std::map<uint32, std::vector<uint32> > gPropertyTemplateCache;
+    static std::set<uint32> gPropertyTemplateCacheLoadedEntries;
+
+    // ------------------------------------------------------------
+    // Basic item helpers
+    // ------------------------------------------------------------
     bool IsEligibleRandomItem(Item* item)
     {
         if (!item || !item->GetProto())
             return false;
 
         ItemPrototype const* proto = item->GetProto();
-        return proto->RandomProperty != 0;
+
+        // This script only supports positive RandomProperty template IDs.
+        // Negative values are random suffix references and are intentionally ignored.
+        return proto->RandomProperty > 0;
     }
 
     uint32 GetTemplateRandomEntry(Item* item)
@@ -83,6 +108,9 @@ namespace
         }
     }
 
+    // ------------------------------------------------------------
+    // Localization / description helpers
+    // ------------------------------------------------------------
     std::string GetLocalizedEnchantDescription(Player* player, SpellItemEnchantmentEntry const* enchantEntry)
     {
         if (!enchantEntry)
@@ -93,7 +121,8 @@ namespace
             loc = player->GetSession()->GetSessionDbcLocale();
 
         std::string text;
-        if (loc < MAX_DBC_LOCALE && enchantEntry->description[loc] && enchantEntry->description[loc][0] != '\0')
+
+        if (loc < MAX_LOCALE && enchantEntry->description[loc] && enchantEntry->description[loc][0] != '\0')
             text = enchantEntry->description[loc];
 
         if (text.empty() && enchantEntry->description[0] && enchantEntry->description[0][0] != '\0')
@@ -112,7 +141,8 @@ namespace
             loc = player->GetSession()->GetSessionDbcLocale();
 
         std::string text;
-        if (loc < MAX_DBC_LOCALE && prop->nameSuffix[loc] && prop->nameSuffix[loc][0] != '\0')
+
+        if (loc < MAX_LOCALE && prop->nameSuffix[loc] && prop->nameSuffix[loc][0] != '\0')
             text = prop->nameSuffix[loc];
 
         if (text.empty() && prop->internalName && prop->internalName[0] != '\0')
@@ -131,6 +161,7 @@ namespace
         {
             if (i > 0)
                 ss << sep;
+
             ss << parts[i];
         }
 
@@ -205,13 +236,70 @@ namespace
         if (!item)
             return "None";
 
-        int32 current = item->GetItemRandomPropertyId();
-        return DescribeRandomPropertyId(player, current);
+        return DescribeRandomPropertyId(player, item->GetItemRandomPropertyId());
+    }
+
+    // ------------------------------------------------------------
+    // DB-backed lazy cache loader.
+    // This runs only once per RandomProperty template entry.
+    // ------------------------------------------------------------
+    void LoadPropertyTemplateEntryFromDb(uint32 entry)
+    {
+        if (!entry)
+            return;
+
+        if (gPropertyTemplateCacheLoadedEntries.find(entry) != gPropertyTemplateCacheLoadedEntries.end())
+            return;
+
+        gPropertyTemplateCacheLoadedEntries.insert(entry);
+
+        std::vector<uint32>& cached = gPropertyTemplateCache[entry];
+        cached.clear();
+
+        std::unique_ptr<QueryResult> result(WorldDatabase.PQuery(
+            "SELECT `ench` FROM `item_enchantment_template` "
+            "WHERE ((%u >= `patch_min`) && (%u <= `patch_max`)) "
+            "AND `entry` = '%u' "
+            "ORDER BY `ench` ASC",
+            sWorld.GetWowPatch(),
+            sWorld.GetWowPatch(),
+            entry
+        ));
+
+        if (!result)
+            return;
+
+        std::set<uint32> uniqueIds;
+
+        do
+        {
+            Field* fields = result->Fetch();
+            if (!fields)
+                continue;
+
+            uint32 propertyId = fields[0].GetUInt32();
+            if (!propertyId)
+                continue;
+
+            if (!sItemRandomPropertiesStore.LookupEntry(propertyId))
+                continue;
+
+            uniqueIds.insert(propertyId);
+        }
+        while (result->NextRow());
+
+        if (uniqueIds.empty())
+            return;
+
+        cached.reserve(uniqueIds.size());
+        for (std::set<uint32>::const_iterator itr = uniqueIds.begin(); itr != uniqueIds.end(); ++itr)
+            cached.push_back(*itr);
     }
 
     std::vector<uint32> LoadAvailableProperties(Item* item)
     {
         std::vector<uint32> out;
+
         if (!item)
             return out;
 
@@ -219,37 +307,31 @@ namespace
         if (!entry)
             return out;
 
-        auto result = WorldDatabase.PQuery(
-            "SELECT ench FROM item_enchantment_template WHERE ((%u >= patch_min) && (%u <= patch_max)) AND entry='%u' ORDER BY ench ASC",
-            sWorld.GetWowPatch(),
-            sWorld.GetWowPatch(),
-            entry
-        );
-        if (!result)
+        LoadPropertyTemplateEntryFromDb(entry);
+
+        std::map<uint32, std::vector<uint32> >::const_iterator itr = gPropertyTemplateCache.find(entry);
+        if (itr == gPropertyTemplateCache.end())
             return out;
 
-        std::set<uint32> seen;
-        do
-        {
-            Field* fields = result->Fetch();
-            if (!fields)
-                continue;
-
-            uint32 ench = fields[0].GetUInt32();
-            if (!ench)
-                continue;
-
-            if (seen.insert(ench).second)
-                out.push_back(ench);
-        }
-        while (result->NextRow());
-
+        out = itr->second;
         return out;
+    }
+
+    bool HasPropertyChoice(std::vector<uint32> const& choices, uint32 choiceId)
+    {
+        for (size_t i = 0; i < choices.size(); ++i)
+        {
+            if (choices[i] == choiceId)
+                return true;
+        }
+
+        return false;
     }
 
     std::vector<uint8> GetEligibleSlots(Player* player)
     {
         std::vector<uint8> slots;
+
         if (!player)
             return slots;
 
@@ -263,7 +345,10 @@ namespace
         return slots;
     }
 
-    void ClearRandomProperty(Player* player, Item* item, uint8 /*slot*/)
+    // ------------------------------------------------------------
+    // Apply / clear helpers
+    // ------------------------------------------------------------
+    void ClearRandomProperty(Player* player, Item* item)
     {
         if (!player || !item)
             return;
@@ -282,7 +367,7 @@ namespace
         player->SaveInventoryAndGoldToDB();
     }
 
-    void ApplyRandomProperty(Player* player, Item* item, uint8 /*slot*/, int32 propertyId)
+    void ApplyRandomProperty(Player* player, Item* item, int32 propertyId)
     {
         if (!player || !item)
             return;
@@ -311,6 +396,9 @@ namespace
         player->SaveInventoryAndGoldToDB();
     }
 
+    // ------------------------------------------------------------
+    // Gossip menus
+    // ------------------------------------------------------------
     void ShowPropertyMainMenu(Player* player, GameObject* go, size_t page)
     {
         if (!player || !go)
@@ -321,7 +409,7 @@ namespace
         std::vector<uint8> slots = GetEligibleSlots(player);
         if (slots.empty())
         {
-            player->GetSession()->SendNotification("No equipped items with random property template found.");
+            player->GetSession()->SendNotification("No equipped items with a supported random property template were found.");
             player->SEND_GOSSIP_MENU(600005, go->GetObjectGuid());
             return;
         }
@@ -342,7 +430,11 @@ namespace
                 continue;
 
             std::ostringstream label;
-            label << GetSlotNameText(slot) << ": " << item->GetProto()->Name1 << " [" << GetCurrentRandomPropertyText(player, item) << "]";
+            label << GetSlotNameText(slot) << ": "
+                  << item->GetProto()->Name1
+                  << " ["
+                  << GetCurrentRandomPropertyText(player, item)
+                  << "]";
 
             std::string finalLabel = TruncateLabel(label.str(), kMaxGossipLabelLength);
             player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, finalLabel.c_str(), 0, ACTION_PM_OPEN_SLOT_BASE + slot);
@@ -365,7 +457,7 @@ namespace
         Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
         if (!IsEligibleRandomItem(item))
         {
-            player->GetSession()->SendNotification("This equipped item has no random property template.");
+            player->GetSession()->SendNotification("This equipped item has no supported random property template.");
             ShowPropertyMainMenu(player, go, 0);
             return;
         }
@@ -390,12 +482,6 @@ namespace
 
         player->PlayerTalkClass->ClearMenus();
 
-        {
-            std::ostringstream info;
-            info << item->GetProto()->Name1 << " (" << GetSlotNameText(slot) << ") - current: " << GetCurrentRandomPropertyText(player, item);
-            player->GetSession()->SendNotification("%s", info.str().c_str());
-        }
-
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Clear random property", slot, ACTION_PM_CLEAR_PROPERTY);
 
         for (size_t i = start; i < end; ++i)
@@ -418,6 +504,9 @@ namespace
         player->SEND_GOSSIP_MENU(600006, go->GetObjectGuid());
     }
 
+    // ------------------------------------------------------------
+    // Action handlers
+    // ------------------------------------------------------------
     void SetPropertyOnSlot(Player* player, GameObject* go, uint8 slot, uint32 choiceId)
     {
         if (!player || !go)
@@ -438,29 +527,35 @@ namespace
         }
 
         std::vector<uint32> choices = LoadAvailableProperties(item);
-        bool found = false;
-        for (size_t i = 0; i < choices.size(); ++i)
-        {
-            if (choices[i] == choiceId)
-            {
-                found = true;
-                break;
-            }
-        }
-
-        if (!found)
+        if (!HasPropertyChoice(choices, choiceId))
         {
             player->GetSession()->SendNotification("That random property is not valid for this item.");
             ShowPropertyItemMenu(player, go, slot, 0);
             return;
         }
 
+        int32 oldPropertyId = item->GetItemRandomPropertyId();
         std::string oldText = GetCurrentRandomPropertyText(player, item);
 
-        ApplyRandomProperty(player, item, slot, int32(choiceId));
+        if (oldPropertyId == int32(choiceId))
+        {
+            player->GetSession()->SendNotification("That random property is already active on this item.");
+            ShowPropertyItemMenu(player, go, slot, 0);
+            return;
+        }
+
+        ApplyRandomProperty(player, item, int32(choiceId));
 
         std::ostringstream ss;
-        ss << item->GetProto()->Name1 << " on " << GetSlotNameText(slot) << " changed from " << oldText << " to " << DescribeRandomPropertyId(player, int32(choiceId)) << ".";
+        ss << item->GetProto()->Name1
+           << " on "
+           << GetSlotNameText(slot)
+           << " changed from "
+           << oldText
+           << " to "
+           << DescribeRandomPropertyId(player, int32(choiceId))
+           << ".";
+
         player->GetSession()->SendNotification("%s", ss.str().c_str());
     }
 
@@ -482,11 +577,26 @@ namespace
             return;
         }
 
+        int32 currentPropertyId = item->GetItemRandomPropertyId();
+        if (currentPropertyId == 0)
+        {
+            player->GetSession()->SendNotification("This item does not currently have a random property.");
+            ShowPropertyItemMenu(player, go, slot, 0);
+            return;
+        }
+
         std::string oldText = GetCurrentRandomPropertyText(player, item);
-        ClearRandomProperty(player, item, slot);
+        ClearRandomProperty(player, item);
 
         std::ostringstream ss;
-        ss << "Random property on " << item->GetProto()->Name1 << " (" << GetSlotNameText(slot) << ") was cleared. Previous value: " << oldText << ".";
+        ss << "Random property on "
+           << item->GetProto()->Name1
+           << " ("
+           << GetSlotNameText(slot)
+           << ") was cleared. Previous value: "
+           << oldText
+           << ".";
+
         player->GetSession()->SendNotification("%s", ss.str().c_str());
     }
 }
@@ -498,7 +608,7 @@ bool GossipHello_npc_property_manager(Player* player, GameObject* go)
 
     if (player->IsInCombat())
     {
-        player->GetSession()->SendNotification("You are in combat!");
+        player->GetSession()->SendNotification("You are in combat.");
         return true;
     }
 

@@ -811,6 +811,22 @@ void Spell::EffectDummy(SpellEffectIndex effIdx)
                     ((Creature*)unitTarget)->ForcedDespawn();
                     return;
                 }
+                case 7077: // Teleport
+                    {
+                        Player* pPlayer = m_caster->ToPlayer();
+                        if (!pPlayer)
+                            return;
+
+                        if (pPlayer->IsInCombat())
+                            return;
+
+                        uint64 m_playerGUID = m_caster->GetObjectGuid();
+
+                        if (Player* pPlayer = m_caster->GetMap()->GetPlayer(m_playerGUID))
+                            pPlayer->TeleportTo(1, -11814.1f, -4769.13f, 6.25296f, 3.7204f);
+
+                        return;
+                    }
                 case 17251:                                 // Spirit Healer Res
                 {
                     if (!unitTarget)
