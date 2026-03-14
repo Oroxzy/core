@@ -8,17 +8,50 @@
 #include <vector>
 #include <sstream>
 #include <algorithm>
+#include <memory>
 
 namespace
 {
+    // ------------------------------------------------------------
+    // Visual feedback spell
+    // ------------------------------------------------------------
     static const uint32 kVisualSpell = 4319;
 
-    static const uint32 ACTION_MAIN_MENU          = 1;
-    static const uint32 ACTION_MAINHAND_MENU      = 10;
-    static const uint32 ACTION_OFFHAND_MENU       = 11;
-    static const uint32 ACTION_CONFIRM_REMOVE_ALL = 20;
-    static const uint32 ACTION_DO_REMOVE_ALL      = 21;
+    // ------------------------------------------------------------
+    // Gossip actions
+    // ------------------------------------------------------------
+    static const uint32 ACTION_MAIN_MENU              = 1;
+    static const uint32 ACTION_MAINHAND_MENU          = 10;
+    static const uint32 ACTION_OFFHAND_MENU           = 11;
+    static const uint32 ACTION_CONFIRM_REMOVE_ALL     = 20;
+    static const uint32 ACTION_DO_REMOVE_ALL          = 21;
 
+    static const uint32 ACTION_SLOT_REMOVE_CURRENT    = 30;
+
+    // Page action base for slot menus
+    // sender = equipment slot, action = ACTION_SLOT_PAGE_BASE + page
+    static const uint32 ACTION_SLOT_PAGE_BASE         = 1000;
+
+    // ------------------------------------------------------------
+    // Gossip safety limit
+    //
+    // WoW / vMaNGOS asserts if a single gossip menu exceeds 32 items.
+    // We keep this well below that limit.
+    //
+    // Slot menu contains:
+    // - optional "remove current enchant"
+    // - up to kOptionsPerPage enchant choices
+    // - optional prev page
+    // - optional next page
+    // - back
+    //
+    // So 20 is safe and leaves enough room.
+    // ------------------------------------------------------------
+    static const size_t kOptionsPerPage               = 20;
+
+    // ------------------------------------------------------------
+    // Temporary enchant source option
+    // ------------------------------------------------------------
     struct TempEnchantOption
     {
         uint32 itemEntry;
@@ -32,6 +65,9 @@ namespace
     static bool gTempEnchantOptionsLoaded = false;
     static std::vector<TempEnchantOption> gTempEnchantOptions;
 
+    // ------------------------------------------------------------
+    // Returns true if the player has a valid weapon in the slot
+    // ------------------------------------------------------------
     bool IsWeaponEquippedInSlot(Player* player, uint8 slot)
     {
         if (!player)
@@ -57,6 +93,9 @@ namespace
         }
     }
 
+    // ------------------------------------------------------------
+    // Returns the current temporary enchant name on the weapon
+    // ------------------------------------------------------------
     std::string GetTempEnchantNameFromItem(Item* item)
     {
         if (!item)
@@ -85,6 +124,9 @@ namespace
         return ss.str();
     }
 
+    // ------------------------------------------------------------
+    // Returns the display name for a weapon slot
+    // ------------------------------------------------------------
     const char* GetSlotName(uint8 slot)
     {
         switch (slot)
@@ -95,6 +137,27 @@ namespace
         }
     }
 
+    // ------------------------------------------------------------
+    // Returns the enchant ID created by a temporary enchant spell
+    // ------------------------------------------------------------
+    uint32 GetTempEnchantIdFromSpell(uint32 spellId)
+    {
+        SpellEntry const* spellInfo = sSpellMgr.GetSpellEntry(spellId);
+        if (!spellInfo)
+            return 0;
+
+        for (int eff = 0; eff < 3; ++eff)
+        {
+            if (spellInfo->Effect[eff] == SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY)
+                return spellInfo->EffectMiscValue[eff];
+        }
+
+        return 0;
+    }
+
+    // ------------------------------------------------------------
+    // Sends a message after a successful apply
+    // ------------------------------------------------------------
     void SendApplyMessage(Player* player, Item* item, uint8 slot, const std::string& oldName, const std::string& newName)
     {
         if (!player || !item || !item->GetProto())
@@ -109,6 +172,9 @@ namespace
         player->GetSession()->SendNotification("%s", ss.str().c_str());
     }
 
+    // ------------------------------------------------------------
+    // Checks if a temporary enchant option can be used on the given slot
+    // ------------------------------------------------------------
     bool CanUseTempEnchantOption(Player* player, uint8 slot, TempEnchantOption const& option)
     {
         if (!player)
@@ -141,6 +207,13 @@ namespace
         return true;
     }
 
+    // ------------------------------------------------------------
+    // Loads all usable temporary enchant spells from item_template
+    //
+    // We keep the best representative per spellId:
+    // - prefer higher patch
+    // - if patch is equal, prefer lower required level
+    // ------------------------------------------------------------
     void LoadTempEnchantOptions()
     {
         if (gTempEnchantOptionsLoaded)
@@ -207,7 +280,8 @@ namespace
                 std::string spellName = spellInfo->SpellName[0];
                 if (spellName.empty())
                     continue;
-                
+
+                // Filter obvious garbage / debug / legacy entries
                 if (spellName.find("zzOLD") != std::string::npos ||
                     spellName.find("(DND)") != std::string::npos ||
                     spellName.find("UNUSED") != std::string::npos ||
@@ -215,7 +289,7 @@ namespace
                 {
                     continue;
                 }
-                
+
                 TempEnchantOption option;
                 option.itemEntry      = itemEntry;
                 option.spellId        = spellId;
@@ -249,6 +323,9 @@ namespace
                 if (a.requiredLevel != b.requiredLevel)
                     return a.requiredLevel < b.requiredLevel;
 
+                if (a.spellName != b.spellName)
+                    return a.spellName < b.spellName;
+
                 if (a.itemName != b.itemName)
                     return a.itemName < b.itemName;
 
@@ -256,6 +333,28 @@ namespace
             });
     }
 
+    // ------------------------------------------------------------
+    // Builds the filtered list of valid enchant options for the slot
+    // ------------------------------------------------------------
+    std::vector<TempEnchantOption> GetValidTempEnchantOptions(Player* player, uint8 slot)
+    {
+        std::vector<TempEnchantOption> out;
+
+        LoadTempEnchantOptions();
+
+        for (size_t i = 0; i < gTempEnchantOptions.size(); ++i)
+        {
+            TempEnchantOption const& option = gTempEnchantOptions[i];
+            if (CanUseTempEnchantOption(player, slot, option))
+                out.push_back(option);
+        }
+
+        return out;
+    }
+
+    // ------------------------------------------------------------
+    // Applies a temporary enchant spell to the selected weapon
+    // ------------------------------------------------------------
     void ApplyTempEnchant(Player* player, GameObject* go, uint32 spellId, uint8 slot)
     {
         if (!player || !go)
@@ -314,12 +413,53 @@ namespace
         item->SetEnchantment(TEMP_ENCHANTMENT_SLOT, enchantId, duration, 0, player->GetObjectGuid());
         player->ApplyEnchantment(item, TEMP_ENCHANTMENT_SLOT, true);
 
+        item->SetState(ITEM_CHANGED, player);
         player->CastSpell(player, kVisualSpell, true);
         player->SaveInventoryAndGoldToDB();
 
         SendApplyMessage(player, item, slot, oldName, newName);
     }
 
+    // ------------------------------------------------------------
+    // Removes the temporary enchant from one weapon slot
+    // ------------------------------------------------------------
+    void RemoveTempEnchantFromSlot(Player* player, uint8 slot)
+    {
+        if (!player)
+            return;
+
+        if (player->IsInCombat())
+        {
+            player->GetSession()->SendNotification("You cannot remove temporary weapon enchants while in combat.");
+            return;
+        }
+
+        Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!item)
+            return;
+
+        if (!item->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT))
+        {
+            player->GetSession()->SendNotification("No temporary weapon enchant is active on that slot.");
+            return;
+        }
+
+        player->ApplyEnchantment(item, TEMP_ENCHANTMENT_SLOT, false);
+        item->ClearEnchantment(TEMP_ENCHANTMENT_SLOT);
+        player->ApplyEnchantment(item, TEMP_ENCHANTMENT_SLOT, true);
+
+        item->SetState(ITEM_CHANGED, player);
+        player->CastSpell(player, kVisualSpell, true);
+        player->SaveInventoryAndGoldToDB();
+
+        std::ostringstream ss;
+        ss << "Removed temporary weapon enchant from " << GetSlotName(slot) << ".";
+        player->GetSession()->SendNotification("%s", ss.str().c_str());
+    }
+
+    // ------------------------------------------------------------
+    // Removes all temporary enchants from equipped items
+    // ------------------------------------------------------------
     void RemoveAllTempEnchants(Player* player)
     {
         if (!player)
@@ -337,6 +477,7 @@ namespace
             player->ApplyEnchantment(item, TEMP_ENCHANTMENT_SLOT, false);
             item->ClearEnchantment(TEMP_ENCHANTMENT_SLOT);
             player->ApplyEnchantment(item, TEMP_ENCHANTMENT_SLOT, true);
+            item->SetState(ITEM_CHANGED, player);
         }
 
         player->CastSpell(player, kVisualSpell, true);
@@ -344,6 +485,9 @@ namespace
         player->GetSession()->SendNotification("All temporary weapon enchants were removed.");
     }
 
+    // ------------------------------------------------------------
+    // Main menu
+    // ------------------------------------------------------------
     void ShowPoisonerMainMenu(Player* player, GameObject* go)
     {
         if (!player || !go)
@@ -373,7 +517,14 @@ namespace
         player->SEND_GOSSIP_MENU(600006, go->GetObjectGuid());
     }
 
-    void ShowSlotMenu(Player* player, GameObject* go, uint8 slot)
+    // ------------------------------------------------------------
+    // Slot menu with pagination
+    //
+    // This is the critical bug fix:
+    // the old version added all valid enchant options at once and could
+    // exceed 32 gossip items, causing a core assert / crash.
+    // ------------------------------------------------------------
+    void ShowSlotMenu(Player* player, GameObject* go, uint8 slot, size_t page)
     {
         if (!player || !go)
             return;
@@ -385,44 +536,61 @@ namespace
             return;
         }
 
-        LoadTempEnchantOptions();
+        Item* weapon = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        std::vector<TempEnchantOption> validOptions = GetValidTempEnchantOptions(player, slot);
+
+        if (validOptions.empty())
+        {
+            player->GetSession()->SendNotification("No valid temporary enchant options were found for that weapon.");
+            ShowPoisonerMainMenu(player, go);
+            return;
+        }
+
+        size_t totalOptions = validOptions.size();
+        size_t start = page * kOptionsPerPage;
+        if (start >= totalOptions)
+            start = 0;
+
+        size_t end = start + kOptionsPerPage;
+        if (end > totalOptions)
+            end = totalOptions;
 
         player->PlayerTalkClass->ClearMenus();
 
-        Item* weapon = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
-        std::ostringstream header;
-        header << GetSlotName(slot) << ": " << (weapon && weapon->GetProto() ? weapon->GetProto()->Name1 : "Unknown");
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, header.str().c_str(), ACTION_MAIN_MENU, ACTION_MAIN_MENU);
+        // Use a notification instead of spending one extra gossip line on a header.
+        {
+            std::ostringstream ss;
+            ss << GetSlotName(slot) << ": "
+               << (weapon && weapon->GetProto() ? weapon->GetProto()->Name1 : "Unknown")
+               << " - current: " << GetTempEnchantNameFromItem(weapon)
+               << " - page " << (page + 1) << "/" << ((totalOptions + kOptionsPerPage - 1) / kOptionsPerPage);
+            player->GetSession()->SendNotification("%s", ss.str().c_str());
+        }
 
         uint32 currentEnchantId = weapon ? weapon->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT) : 0;
 
-        for (size_t i = 0; i < gTempEnchantOptions.size(); ++i)
+        // Optional single-slot remove entry
+        if (currentEnchantId)
+            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Remove current temporary enchant", slot, ACTION_SLOT_REMOVE_CURRENT);
+
+        for (size_t i = start; i < end; ++i)
         {
-            TempEnchantOption const& option = gTempEnchantOptions[i];
+            TempEnchantOption const& option = validOptions[i];
 
-            if (!CanUseTempEnchantOption(player, slot, option))
-                continue;
-
-            SpellEntry const* spellInfo = sSpellMgr.GetSpellEntry(option.spellId);
-            if (!spellInfo)
-                continue;
-
-            uint32 optionEnchantId = 0;
-            for (int eff = 0; eff < 3; ++eff)
-            {
-                if (spellInfo->Effect[eff] == SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY)
-                {
-                    optionEnchantId = spellInfo->EffectMiscValue[eff];
-                    break;
-                }
-            }
+            uint32 optionEnchantId = GetTempEnchantIdFromSpell(option.spellId);
 
             std::ostringstream label;
-            label << option.itemName << " (Lvl " << option.requiredLevel << ")";
+            label << option.spellName << " - " << option.itemName << " (Lvl " << option.requiredLevel << ")";
 
             uint8 gossipIcon = (optionEnchantId && currentEnchantId == optionEnchantId) ? GOSSIP_ICON_INTERACT_1 : GOSSIP_ICON_CHAT;
             player->ADD_GOSSIP_ITEM(gossipIcon, label.str().c_str(), uint32(slot), option.spellId);
         }
+
+        if (start > 0)
+            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TALK, "<- Previous page", uint32(slot), ACTION_SLOT_PAGE_BASE + uint32(page - 1));
+
+        if (end < totalOptions)
+            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TALK, "Next page ->", uint32(slot), ACTION_SLOT_PAGE_BASE + uint32(page + 1));
 
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TALK, "<- Back", ACTION_MAIN_MENU, ACTION_MAIN_MENU);
         player->SEND_GOSSIP_MENU(600006, go->GetObjectGuid());
@@ -447,29 +615,53 @@ bool GossipSelect_npc_poisoneer(Player* player, GameObject* go, uint32 sender, u
         case ACTION_MAIN_MENU:
             ShowPoisonerMainMenu(player, go);
             return true;
+
         case ACTION_MAINHAND_MENU:
-            ShowSlotMenu(player, go, EQUIPMENT_SLOT_MAINHAND);
+            ShowSlotMenu(player, go, EQUIPMENT_SLOT_MAINHAND, 0);
             return true;
+
         case ACTION_OFFHAND_MENU:
-            ShowSlotMenu(player, go, EQUIPMENT_SLOT_OFFHAND);
+            ShowSlotMenu(player, go, EQUIPMENT_SLOT_OFFHAND, 0);
             return true;
+
         case ACTION_CONFIRM_REMOVE_ALL:
             player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Yes, remove all temporary weapon enchants.", ACTION_DO_REMOVE_ALL, ACTION_DO_REMOVE_ALL);
             player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TALK, "<- Back", ACTION_MAIN_MENU, ACTION_MAIN_MENU);
             player->SEND_GOSSIP_MENU(600007, go->GetObjectGuid());
             return true;
+
         case ACTION_DO_REMOVE_ALL:
             RemoveAllTempEnchants(player);
             ShowPoisonerMainMenu(player, go);
             return true;
+
+        case ACTION_SLOT_REMOVE_CURRENT:
+            if (sender == EQUIPMENT_SLOT_MAINHAND || sender == EQUIPMENT_SLOT_OFFHAND)
+            {
+                RemoveTempEnchantFromSlot(player, uint8(sender));
+                ShowSlotMenu(player, go, uint8(sender), 0);
+                return true;
+            }
+            break;
+
         default:
             break;
     }
 
+    // Slot page navigation
+    if ((sender == EQUIPMENT_SLOT_MAINHAND || sender == EQUIPMENT_SLOT_OFFHAND) &&
+        action >= ACTION_SLOT_PAGE_BASE)
+    {
+        uint32 page = action - ACTION_SLOT_PAGE_BASE;
+        ShowSlotMenu(player, go, uint8(sender), page);
+        return true;
+    }
+
+    // Spell apply from slot menu
     if (sender == EQUIPMENT_SLOT_MAINHAND || sender == EQUIPMENT_SLOT_OFFHAND)
     {
         ApplyTempEnchant(player, go, action, uint8(sender));
-        ShowSlotMenu(player, go, uint8(sender));
+        ShowSlotMenu(player, go, uint8(sender), 0);
         return true;
     }
 
