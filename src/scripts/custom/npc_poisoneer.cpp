@@ -28,6 +28,11 @@ namespace
     // Maximum label length for cleaner gossip rendering.
     static const size_t kMaxGossipLabelLength = 100;
 
+    // If true, source item usability is checked as well.
+    // For a strict "player can really use this source item" behavior, keep true.
+    // For a more GM/dev-oriented utility behavior, set false.
+    static const bool kRequireSourceItemUsable = true;
+
     // ------------------------------------------------------------
     // Gossip actions
     // ------------------------------------------------------------
@@ -62,6 +67,16 @@ namespace
 
     static bool gTempEnchantOptionsLoaded = false;
     static std::vector<TempEnchantOption> gTempEnchantOptions;
+
+    // ------------------------------------------------------------
+    // Cache helpers
+    // ------------------------------------------------------------
+
+    void ResetTempEnchantCache()
+    {
+        gTempEnchantOptionsLoaded = false;
+        gTempEnchantOptions.clear();
+    }
 
     // ------------------------------------------------------------
     // String helpers
@@ -130,6 +145,24 @@ namespace
         }
     }
 
+    bool HasAnyTempEnchant(Player* player)
+    {
+        if (!player)
+            return false;
+
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        {
+            Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+            if (!item)
+                continue;
+
+            if (item->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT))
+                return true;
+        }
+
+        return false;
+    }
+
     uint32 GetTempEnchantIdFromSpell(uint32 spellId)
     {
         SpellEntry const* spellInfo = sSpellMgr.GetSpellEntry(spellId);
@@ -179,6 +212,9 @@ namespace
     // Goal:
     // - collapse multiple ranks into one family
     // - show only the best usable option for the player's level
+    //
+    // The final fallback groups by enchant ID if possible, which makes
+    // the grouping more robust for custom names / weird data.
     // ------------------------------------------------------------
 
     std::string GetOptionFamilyKey(TempEnchantOption const& option)
@@ -228,6 +264,14 @@ namespace
         if (spell.find("flametongue") != std::string::npos || item.find("flametongue") != std::string::npos)
             return "flametongue_weapon";
 
+        uint32 enchantId = GetTempEnchantIdFromSpell(option.spellId);
+        if (enchantId)
+        {
+            std::ostringstream ss;
+            ss << "enchant_" << enchantId;
+            return ss.str();
+        }
+
         return "spell_" + ToLowerCopy(option.spellName);
     }
 
@@ -243,20 +287,23 @@ namespace
         if (!IsWeaponEquippedInSlot(player, slot))
             return false;
 
-        ItemPrototype const* sourceProto = sObjectMgr.GetItemPrototype(option.itemEntry);
-        if (!sourceProto)
-            return false;
-
-        if (player->CanUseItem(sourceProto, false) != EQUIP_ERR_OK)
+        Item* weapon = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!weapon || !weapon->GetProto())
             return false;
 
         SpellEntry const* spellInfo = sSpellMgr.GetSpellEntry(option.spellId);
         if (!spellInfo)
             return false;
 
-        Item* weapon = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
-        if (!weapon || !weapon->GetProto())
-            return false;
+        if (kRequireSourceItemUsable)
+        {
+            ItemPrototype const* sourceProto = sObjectMgr.GetItemPrototype(option.itemEntry);
+            if (!sourceProto)
+                return false;
+
+            if (player->CanUseItem(sourceProto, false) != EQUIP_ERR_OK)
+                return false;
+        }
 
         if (!weapon->IsFitToSpellRequirements(spellInfo))
             return false;
@@ -275,42 +322,41 @@ namespace
     {
         if (gTempEnchantOptionsLoaded)
             return;
-    
+
         gTempEnchantOptionsLoaded = true;
         gTempEnchantOptions.clear();
-    
+
         std::map<uint32, TempEnchantOption> bestBySpellId;
-    
         ItemPrototypeMap const& itemMap = sObjectMgr.GetItemPrototypeMap();
-    
+
         for (ItemPrototypeMap::const_iterator itr = itemMap.begin(); itr != itemMap.end(); ++itr)
         {
             ItemPrototype const* proto = &itr->second;
             if (!proto)
                 continue;
-    
+
             if (!proto->Name1 || proto->Name1[0] == '\0')
                 continue;
-    
+
             std::string itemName = proto->Name1;
             uint32 itemEntry = proto->ItemId;
             uint32 reqLevel = proto->RequiredLevel;
-    
+
             for (int i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
             {
                 uint32 spellId = proto->Spells[i].SpellId;
                 uint32 trigger = proto->Spells[i].SpellTrigger;
-    
+
                 if (!spellId)
                     continue;
-    
+
                 if (trigger != ITEM_SPELLTRIGGER_ON_USE)
                     continue;
-    
+
                 SpellEntry const* spellInfo = sSpellMgr.GetSpellEntry(spellId);
                 if (!spellInfo)
                     continue;
-    
+
                 bool isTempEnchant = false;
                 for (int eff = 0; eff < 3; ++eff)
                 {
@@ -320,14 +366,15 @@ namespace
                         break;
                     }
                 }
-    
+
                 if (!isTempEnchant)
                     continue;
-    
+
                 std::string spellName = spellInfo->SpellName[0];
                 if (spellName.empty())
                     continue;
-    
+
+                // Filter obvious junk / legacy / debug entries
                 if (ContainsInsensitive(spellName, "zzold") ||
                     ContainsInsensitive(spellName, "(dnd)") ||
                     ContainsInsensitive(spellName, "unused") ||
@@ -335,14 +382,14 @@ namespace
                 {
                     continue;
                 }
-    
+
                 TempEnchantOption opt;
-                opt.itemEntry = itemEntry;
-                opt.spellId = spellId;
-                opt.requiredLevel = reqLevel;
-                opt.itemName = itemName;
-                opt.spellName = spellName;
-    
+                opt.itemEntry      = itemEntry;
+                opt.spellId        = spellId;
+                opt.requiredLevel  = reqLevel;
+                opt.itemName       = itemName;
+                opt.spellName      = spellName;
+
                 std::map<uint32, TempEnchantOption>::iterator found = bestBySpellId.find(spellId);
                 if (found == bestBySpellId.end())
                 {
@@ -350,14 +397,27 @@ namespace
                 }
                 else
                 {
+                    // Prefer the lower required level source item for the same spell.
                     if (opt.requiredLevel < found->second.requiredLevel)
                         found->second = opt;
                 }
             }
         }
-    
+
         for (std::map<uint32, TempEnchantOption>::const_iterator itr = bestBySpellId.begin(); itr != bestBySpellId.end(); ++itr)
             gTempEnchantOptions.push_back(itr->second);
+
+        std::sort(gTempEnchantOptions.begin(), gTempEnchantOptions.end(),
+            [](TempEnchantOption const& a, TempEnchantOption const& b) -> bool
+            {
+                if (a.requiredLevel != b.requiredLevel)
+                    return a.requiredLevel < b.requiredLevel;
+
+                if (a.spellName != b.spellName)
+                    return a.spellName < b.spellName;
+
+                return a.spellId < b.spellId;
+            });
     }
 
     // ------------------------------------------------------------
@@ -399,9 +459,10 @@ namespace
             {
                 bool replace = false;
 
+                // Prefer the highest requirement still usable for the player's level.
                 if (opt.requiredLevel > found->second.requiredLevel)
                     replace = true;
-                else if (opt.requiredLevel == found->second.requiredLevel && opt.spellId > found->second.spellId)
+                else if (opt.requiredLevel == found->second.requiredLevel && opt.spellName < found->second.spellName)
                     replace = true;
 
                 if (replace)
@@ -444,7 +505,10 @@ namespace
 
         Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
         if (!item || !item->GetProto())
+        {
+            player->GetSession()->SendNotification("No valid weapon was found in that slot.");
             return;
+        }
 
         SpellEntry const* spellInfo = sSpellMgr.GetSpellEntry(spellId);
         if (!spellInfo)
@@ -516,7 +580,10 @@ namespace
 
         Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
         if (!item)
+        {
+            player->GetSession()->SendNotification("No valid weapon was found in that slot.");
             return;
+        }
 
         if (!item->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT))
         {
@@ -552,6 +619,8 @@ namespace
             return;
         }
 
+        bool removedAny = false;
+
         for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
         {
             Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
@@ -565,6 +634,14 @@ namespace
             item->ClearEnchantment(TEMP_ENCHANTMENT_SLOT);
             player->ApplyEnchantment(item, TEMP_ENCHANTMENT_SLOT, true);
             item->SetState(ITEM_CHANGED, player);
+
+            removedAny = true;
+        }
+
+        if (!removedAny)
+        {
+            player->GetSession()->SendNotification("No temporary weapon enchants were active.");
+            return;
         }
 
         player->CastSpell(player, kVisualSpell, true);
@@ -601,7 +678,9 @@ namespace
             player->ADD_GOSSIP_ITEM(icon, ss.str().c_str(), ACTION_OFFHAND_MENU, ACTION_OFFHAND_MENU);
         }
 
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Remove all temporary weapon enchants", ACTION_CONFIRM_REMOVE_ALL, ACTION_CONFIRM_REMOVE_ALL);
+        if (HasAnyTempEnchant(player))
+            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Remove all temporary weapon enchants", ACTION_CONFIRM_REMOVE_ALL, ACTION_CONFIRM_REMOVE_ALL);
+
         player->SEND_GOSSIP_MENU(600006, go->GetObjectGuid());
     }
 
@@ -758,6 +837,8 @@ bool GossipSelect_npc_poisoneer(Player* player, GameObject* go, uint32 sender, u
 
 void AddSC_npc_poisoneer()
 {
+    ResetTempEnchantCache();
+
     Script* newscript = new Script;
     newscript->Name = "npc_poisoneer";
     newscript->pGOGossipHello = &GossipHello_npc_poisoneer;
