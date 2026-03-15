@@ -10,7 +10,7 @@ namespace
     // Configuration
     // -------------------------------------------------------------------------
     static const uint32 kBuffNpcEntry       = 80000;
-    static const float  kTriggerDistance    = 0.20f;
+    static const float  kTriggerDistance    = 20.0f;
     static const uint32 kBuffDurationMs     = 2 * HOUR * IN_MILLISECONDS;
 
     // -------------------------------------------------------------------------
@@ -19,6 +19,7 @@ namespace
     static const uint32 SPELL_VISUAL_RED_LIGHTNING  = 24240;
     static const uint32 SPELL_KNOCKBACK_VISUAL      = 10689;
     static const uint32 SPELL_BUFF_COOLDOWN         = 8000;
+    static const bool   kUseCooldownAura     = false;
     static const uint32 SPELL_REMOVE_OLD_DUMMY_AURA = 15007;
     static const uint32 SPELL_HAPPY_PET             = 24716;
 
@@ -350,6 +351,68 @@ namespace
     bool IsShamanElemental(Player* pPlayer)
     {
         return pPlayer && !IsShamanEnhancement(pPlayer) && !IsShamanRestoration(pPlayer);
+    }
+
+
+    std::string GetDetectedSpecName(Player* pPlayer)
+    {
+        if (!pPlayer)
+            return "Unknown";
+
+        switch (pPlayer->GetClass())
+        {
+            case CLASS_WARRIOR:
+                if (IsWarriorProtection(pPlayer))
+                    return "Warrior Protection";
+                if (IsWarriorArms(pPlayer))
+                    return "Warrior Arms";
+                if (IsWarriorFury(pPlayer))
+                    return "Warrior Fury";
+                return "Warrior Unknown";
+
+            case CLASS_PALADIN:
+                if (IsPaladinProtection(pPlayer))
+                    return "Paladin Protection";
+                if (IsPaladinHoly(pPlayer))
+                    return "Paladin Holy";
+                return "Paladin Retribution";
+
+            case CLASS_HUNTER:
+                return "Hunter";
+
+            case CLASS_ROGUE:
+                return "Rogue";
+
+            case CLASS_PRIEST:
+                return IsPriestShadow(pPlayer) ? "Priest Shadow" : "Priest Healer";
+
+            case CLASS_MAGE:
+                if (IsMageFire(pPlayer))
+                    return "Mage Fire";
+                if (IsMageFrost(pPlayer))
+                    return "Mage Frost";
+                return "Mage Arcane";
+
+            case CLASS_WARLOCK:
+                return "Warlock";
+
+            case CLASS_SHAMAN:
+                if (IsShamanEnhancement(pPlayer))
+                    return "Shaman Enhancement";
+                if (IsShamanRestoration(pPlayer))
+                    return "Shaman Restoration";
+                return "Shaman Elemental";
+
+            case CLASS_DRUID:
+                if (IsDruidRestoration(pPlayer))
+                    return "Druid Restoration";
+                if (IsDruidBalance(pPlayer))
+                    return "Druid Balance";
+                return IsLikelyDruidBearTank(pPlayer) ? "Druid Feral Bear" : "Druid Feral Cat";
+
+            default:
+                return "Unknown";
+        }
     }
 
     PlayerRole GetPlayerRole(Player* pPlayer)
@@ -819,12 +882,16 @@ struct npc_buff_machineAI : public ScriptedAI
         if (pWho->GetTypeId() != TYPEID_PLAYER)
             return;
 
-        if (!m_creature->IsWithinDistInMap(pWho, kTriggerDistance))
-            return;
-
         Player* pPlayer = pWho->ToPlayer();
         if (!pPlayer || !pPlayer->IsAlive())
             return;
+
+        if (!m_creature->IsWithinDistInMap(pWho, kTriggerDistance))
+            return;
+
+        std::string detectedSpec = GetDetectedSpecName(pPlayer);
+        std::string enterMessage = "DEBUG: MoveInLineOfSight fired. Spec = " + detectedSpec;
+        m_creature->MonsterWhisper(enterMessage.c_str(), pPlayer);
 
         if (pPlayer->IsInCombat())
         {
@@ -833,15 +900,22 @@ struct npc_buff_machineAI : public ScriptedAI
             return;
         }
 
-        if (pPlayer->HasAura(SPELL_BUFF_COOLDOWN))
+        if (kUseCooldownAura && pPlayer->HasAura(SPELL_BUFF_COOLDOWN))
+        {
+            m_creature->MonsterWhisper("DEBUG: Cooldown aura already active.", pPlayer);
             return;
+        }
 
         pPlayer->DuelComplete(DUEL_INTERRUPTED);
 
         FullBuffPlayer(pPlayer);
 
         pPlayer->CastSpell(pPlayer, SPELL_VISUAL_RED_LIGHTNING, true);
-        pPlayer->AddAura(SPELL_BUFF_COOLDOWN);
+
+        if (kUseCooldownAura)
+            pPlayer->AddAura(SPELL_BUFF_COOLDOWN);
+
+        m_creature->MonsterWhisper("DEBUG: Buff sequence finished.", pPlayer);
     }
 };
 
