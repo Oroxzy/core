@@ -47,6 +47,25 @@ namespace
     static const uint32 SPELL_BEAR_FORM              = 5487;
     static const uint32 SPELL_DIRE_BEAR_FORM         = 9634;
 
+    // Talent signature spells used instead of GetTalentTabID().
+    static const uint32 SPELL_MORTAL_STRIKE          = 12294;
+    static const uint32 SPELL_BLOODTHIRST            = 23881;
+    static const uint32 SPELL_SHIELD_SLAM            = 23922;
+    static const uint32 SPELL_LAST_STAND             = 12975;
+    static const uint32 SPELL_HOLY_SHOCK             = 20473;
+    static const uint32 SPELL_HOLY_SHIELD            = 20925;
+    static const uint32 SPELL_BLESSING_OF_SANCTUARY  = 20911;
+    static const uint32 SPELL_SHADOWFORM             = 15473;
+    static const uint32 SPELL_STORMSTRIKE            = 17364;
+    static const uint32 SPELL_MANA_TIDE_TOTEM        = 16190;
+    static const uint32 SPELL_NATURES_SWIFTNESS_SHM  = 16188;
+    static const uint32 SPELL_MOONKIN_FORM           = 24858;
+    static const uint32 SPELL_SWIFTMEND              = 18562;
+    static const uint32 SPELL_NATURES_SWIFTNESS_DRU  = 17116;
+    static const uint32 SPELL_COMBUSTION             = 11129;
+    static const uint32 SPELL_ICE_BARRIER            = 11426;
+    static const uint32 SPELL_COLD_SNAP              = 11958;
+
     enum BuffSpells
     {
         // ---------------------------------------------------------------------
@@ -243,9 +262,6 @@ namespace
         if (pPlayer->GetClass() != CLASS_DRUID)
             return false;
 
-        if (pPlayer->GetTalentTabID() != DruidFeralCombat)
-            return false;
-
         // Current form is the strongest signal if the player walks into range while shifted.
         if (pPlayer->HasAura(SPELL_BEAR_FORM) || pPlayer->HasAura(SPELL_DIRE_BEAR_FORM))
             return true;
@@ -253,11 +269,9 @@ namespace
         if (pPlayer->HasAura(SPELL_CAT_FORM))
             return false;
 
-        // Feral Charge is a very strong bear indicator in Vanilla.
         if (pPlayer->HasSpell(SPELL_FERAL_CHARGE))
             return true;
 
-        // Use a small score model instead of a single talent check.
         int32 bearScore = 0;
         int32 catScore  = 0;
 
@@ -273,6 +287,71 @@ namespace
         return bearScore > catScore;
     }
 
+    bool IsWarriorProtection(Player* pPlayer)
+    {
+        return pPlayer && (pPlayer->HasSpell(SPELL_SHIELD_SLAM) || pPlayer->HasSpell(SPELL_LAST_STAND));
+    }
+
+    bool IsWarriorArms(Player* pPlayer)
+    {
+        return pPlayer && pPlayer->HasSpell(SPELL_MORTAL_STRIKE);
+    }
+
+    bool IsWarriorFury(Player* pPlayer)
+    {
+        return pPlayer && pPlayer->HasSpell(SPELL_BLOODTHIRST);
+    }
+
+    bool IsPaladinProtection(Player* pPlayer)
+    {
+        return pPlayer && (pPlayer->HasSpell(SPELL_HOLY_SHIELD) || pPlayer->HasSpell(SPELL_BLESSING_OF_SANCTUARY));
+    }
+
+    bool IsPaladinHoly(Player* pPlayer)
+    {
+        return pPlayer && pPlayer->HasSpell(SPELL_HOLY_SHOCK);
+    }
+
+    bool IsPriestShadow(Player* pPlayer)
+    {
+        return pPlayer && pPlayer->HasSpell(SPELL_SHADOWFORM);
+    }
+
+    bool IsShamanEnhancement(Player* pPlayer)
+    {
+        return pPlayer && pPlayer->HasSpell(SPELL_STORMSTRIKE);
+    }
+
+    bool IsShamanRestoration(Player* pPlayer)
+    {
+        return pPlayer && (pPlayer->HasSpell(SPELL_MANA_TIDE_TOTEM) || pPlayer->HasSpell(SPELL_NATURES_SWIFTNESS_SHM));
+    }
+
+    bool IsDruidRestoration(Player* pPlayer)
+    {
+        return pPlayer && (pPlayer->HasSpell(SPELL_SWIFTMEND) || pPlayer->HasSpell(SPELL_NATURES_SWIFTNESS_DRU));
+    }
+
+    bool IsDruidBalance(Player* pPlayer)
+    {
+        return pPlayer && pPlayer->HasSpell(SPELL_MOONKIN_FORM);
+    }
+
+    bool IsMageFire(Player* pPlayer)
+    {
+        return pPlayer && pPlayer->HasSpell(SPELL_COMBUSTION);
+    }
+
+    bool IsMageFrost(Player* pPlayer)
+    {
+        return pPlayer && (pPlayer->HasSpell(SPELL_ICE_BARRIER) || pPlayer->HasSpell(SPELL_COLD_SNAP));
+    }
+
+    bool IsShamanElemental(Player* pPlayer)
+    {
+        return pPlayer && !IsShamanEnhancement(pPlayer) && !IsShamanRestoration(pPlayer);
+    }
+
     PlayerRole GetPlayerRole(Player* pPlayer)
     {
         if (!pPlayer)
@@ -281,12 +360,12 @@ namespace
         switch (pPlayer->GetClass())
         {
             case CLASS_WARRIOR:
-                return (pPlayer->GetTalentTabID() == WarriorProtection) ? ROLE_TANK : ROLE_MELEE_DPS;
+                return IsWarriorProtection(pPlayer) ? ROLE_TANK : ROLE_MELEE_DPS;
 
             case CLASS_PALADIN:
-                if (pPlayer->GetTalentTabID() == PaladinProtection)
+                if (IsPaladinProtection(pPlayer))
                     return ROLE_TANK;
-                if (pPlayer->GetTalentTabID() == PaladinHoly)
+                if (IsPaladinHoly(pPlayer))
                     return ROLE_HEALER;
                 return ROLE_MELEE_DPS;
 
@@ -295,27 +374,25 @@ namespace
                 return ROLE_MELEE_DPS;
 
             case CLASS_PRIEST:
-                return (pPlayer->GetTalentTabID() == PriestShadow) ? ROLE_CASTER_DPS : ROLE_HEALER;
+                return IsPriestShadow(pPlayer) ? ROLE_CASTER_DPS : ROLE_HEALER;
 
             case CLASS_MAGE:
             case CLASS_WARLOCK:
                 return ROLE_CASTER_DPS;
 
             case CLASS_SHAMAN:
-                if (pPlayer->GetTalentTabID() == ShamanEnhancement)
+                if (IsShamanEnhancement(pPlayer))
                     return ROLE_MELEE_DPS;
-                if (pPlayer->GetTalentTabID() == ShamanRestoration)
+                if (IsShamanRestoration(pPlayer))
                     return ROLE_HEALER;
                 return ROLE_CASTER_DPS;
 
             case CLASS_DRUID:
-                if (pPlayer->GetTalentTabID() == DruidRestoration)
+                if (IsDruidRestoration(pPlayer))
                     return ROLE_HEALER;
-                if (pPlayer->GetTalentTabID() == DruidBalance)
+                if (IsDruidBalance(pPlayer))
                     return ROLE_CASTER_DPS;
-                if (pPlayer->GetTalentTabID() == DruidFeralCombat)
-                    return IsLikelyDruidBearTank(pPlayer) ? ROLE_TANK : ROLE_MELEE_DPS;
-                return ROLE_CASTER_DPS;
+                return IsLikelyDruidBearTank(pPlayer) ? ROLE_TANK : ROLE_MELEE_DPS;
 
             default:
                 break;
@@ -608,9 +685,9 @@ namespace
 
                 if (pPlayer->GetClass() == CLASS_WARRIOR)
                 {
-                    if (pPlayer->GetTalentTabID() == WarriorArms)
+                    if (IsWarriorArms(pPlayer))
                         ApplyTimedBuff(pPlayer, SPELL_SAYGES_DARK_FORTUNE_OF_STRENGTH);
-                    else if (pPlayer->GetTalentTabID() == WarriorFury)
+                    else if (IsWarriorFury(pPlayer))
                         ApplyTimedBuff(pPlayer, SPELL_SAYGES_DARK_FORTUNE_OF_DAMAGE);
                 }
                 else if (pPlayer->GetClass() == CLASS_HUNTER)
@@ -637,9 +714,9 @@ namespace
                 // School-specific bonuses are only applied when they are actually correct.
                 if (pPlayer->GetClass() == CLASS_MAGE)
                 {
-                    if (pPlayer->GetTalentTabID() == MageFire)
+                    if (IsMageFire(pPlayer))
                         ApplyTimedBuff(pPlayer, SPELL_ELIXIR_OF_GREATER_FIREPOWER);
-                    else if (pPlayer->GetTalentTabID() == MageFrost)
+                    else if (IsMageFrost(pPlayer))
                         ApplyTimedBuff(pPlayer, SPELL_ELIXIR_OF_FROST_POWER);
                     // Arcane mages intentionally do not receive a wrong frost bonus.
                 }
@@ -652,12 +729,12 @@ namespace
                     // Elemental shaman uses mostly nature and fire damage.
                     // There is no strong general nature elixir here, so use the generic
                     // spellpower package and only add firepower as an extra bonus.
-                    if (pPlayer->GetTalentTabID() == ShamanElementalCombat)
+                    if (IsShamanElemental(pPlayer))
                         ApplyTimedBuff(pPlayer, SPELL_ELIXIR_OF_GREATER_FIREPOWER);
                 }
                 else if (pPlayer->GetClass() == CLASS_PRIEST)
                 {
-                    if (pPlayer->GetTalentTabID() == PriestShadow)
+                    if (IsPriestShadow(pPlayer))
                         ApplyTimedBuff(pPlayer, SPELL_ELIXIR_OF_SHADOW_POWER);
                 }
                 break;
@@ -677,10 +754,7 @@ namespace
         if (!pPet)
             return;
 
-        if (!pPet->isControlled())
-            return;
-
-        if (pPet->getPetType() != HUNTER_PET)
+        if (!pPet->IsAlive())
             return;
 
         if (pPlayer->GetTeam() == ALLIANCE)
@@ -727,6 +801,10 @@ struct npc_buff_machineAI : public ScriptedAI
 {
     explicit npc_buff_machineAI(Creature* pCreature) : ScriptedAI(pCreature) { }
 
+    void Reset() override
+    {
+    }
+
     void MoveInLineOfSight(Unit* pWho) override
     {
         if (!pWho)
@@ -759,8 +837,6 @@ struct npc_buff_machineAI : public ScriptedAI
             return;
 
         pPlayer->DuelComplete(DUEL_INTERRUPTED);
-        pPlayer->RemoveAllSpellCooldown();
-        pPlayer->ResetCharges();
 
         FullBuffPlayer(pPlayer);
 

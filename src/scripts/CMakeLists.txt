@@ -50,6 +50,7 @@ set (SCRIPTS_SRCS
 	custom/PlayerStash.cpp
 	custom/npc_poisoneer.cpp
     custom/npc_property_manager.cpp
+	custom/npc_buff_machine.cpp
     eastern_kingdoms/alterac_mountains/alterac_mountains.cpp
     eastern_kingdoms/arathi_highlands/arathi_highlands.cpp
     eastern_kingdoms/blasted_lands/blasted_lands.cpp

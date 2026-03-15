@@ -21,7 +21,7 @@ void AddSC_npc_enchanter();
 void AddSC_PlayerStash();
 void AddSC_npc_poisoneer();
 void AddSC_npc_property_manager();
-
+void AddSC_npc_buff_machine();
 //void AddSC_gmisland();
 //void AddSC_boss_arena_hardog(); // EVENT de TORKIN
 
@@ -277,6 +277,7 @@ void AddScripts()
     AddSC_PlayerStash();
 	AddSC_npc_poisoneer();
     AddSC_npc_property_manager();
+	AddSC_npc_buff_machine();
     //AddSC_gmisland();
 
     //AddSC_gmisland();
