@@ -3,6 +3,8 @@
 #include "Pet.h"
 
 #include <vector>
+#include <map>
+#include <string>
 
 namespace
 {
@@ -12,6 +14,8 @@ namespace
     static const uint32 kBuffNpcEntry       = 80000;
     static const float  kTriggerDistance    = 20.0f;
     static const uint32 kBuffDurationMs     = 2 * HOUR * IN_MILLISECONDS;
+    static const uint32 kScanIntervalMs     = 1000;
+    static const uint32 kPerPlayerLockMs    = 5000;
 
     // -------------------------------------------------------------------------
     // Visual and control spells
@@ -19,7 +23,7 @@ namespace
     static const uint32 SPELL_VISUAL_RED_LIGHTNING  = 24240;
     static const uint32 SPELL_KNOCKBACK_VISUAL      = 10689;
     static const uint32 SPELL_BUFF_COOLDOWN         = 8000;
-    static const bool   kUseCooldownAura     = false;
+    static const bool   kUseCooldownAura            = false;
     static const uint32 SPELL_REMOVE_OLD_DUMMY_AURA = 15007;
     static const uint32 SPELL_HAPPY_PET             = 24716;
 
@@ -263,7 +267,6 @@ namespace
         if (pPlayer->GetClass() != CLASS_DRUID)
             return false;
 
-        // Current form is the strongest signal if the player walks into range while shifted.
         if (pPlayer->HasAura(SPELL_BEAR_FORM) || pPlayer->HasAura(SPELL_DIRE_BEAR_FORM))
             return true;
 
@@ -352,7 +355,6 @@ namespace
     {
         return pPlayer && !IsShamanEnhancement(pPlayer) && !IsShamanRestoration(pPlayer);
     }
-
 
     std::string GetDetectedSpecName(Player* pPlayer)
     {
@@ -611,7 +613,6 @@ namespace
                 break;
         }
 
-        // Special case: non-holy paladins still benefit from some caster-style support.
         if (pPlayer->GetClass() == CLASS_PALADIN && role != ROLE_HEALER)
             ApplyTimedBuff(pPlayer, SPELL_PRAYER_OF_SPIRIT);
     }
@@ -774,14 +775,12 @@ namespace
             case ROLE_CASTER_DPS:
                 ApplyCasterConsumes(pPlayer);
 
-                // School-specific bonuses are only applied when they are actually correct.
                 if (pPlayer->GetClass() == CLASS_MAGE)
                 {
                     if (IsMageFire(pPlayer))
                         ApplyTimedBuff(pPlayer, SPELL_ELIXIR_OF_GREATER_FIREPOWER);
                     else if (IsMageFrost(pPlayer))
                         ApplyTimedBuff(pPlayer, SPELL_ELIXIR_OF_FROST_POWER);
-                    // Arcane mages intentionally do not receive a wrong frost bonus.
                 }
                 else if (pPlayer->GetClass() == CLASS_WARLOCK)
                 {
@@ -789,9 +788,6 @@ namespace
                 }
                 else if (pPlayer->GetClass() == CLASS_SHAMAN)
                 {
-                    // Elemental shaman uses mostly nature and fire damage.
-                    // There is no strong general nature elixir here, so use the generic
-                    // spellpower package and only add firepower as an extra bonus.
                     if (IsShamanElemental(pPlayer))
                         ApplyTimedBuff(pPlayer, SPELL_ELIXIR_OF_GREATER_FIREPOWER);
                 }
@@ -862,10 +858,92 @@ namespace
 
 struct npc_buff_machineAI : public ScriptedAI
 {
-    explicit npc_buff_machineAI(Creature* pCreature) : ScriptedAI(pCreature) { }
+    explicit npc_buff_machineAI(Creature* pCreature)
+        : ScriptedAI(pCreature), m_uiScanTimer(kScanIntervalMs)
+    {
+    }
+
+    std::map<uint32, uint32> m_playerLockouts;
+    uint32 m_uiScanTimer;
 
     void Reset() override
     {
+        m_uiScanTimer = kScanIntervalMs;
+        m_playerLockouts.clear();
+    }
+
+    void UpdatePlayerLockouts(uint32 diff)
+    {
+        for (std::map<uint32, uint32>::iterator itr = m_playerLockouts.begin(); itr != m_playerLockouts.end();)
+        {
+            if (itr->second <= diff)
+                m_playerLockouts.erase(itr++);
+            else
+            {
+                itr->second -= diff;
+                ++itr;
+            }
+        }
+    }
+
+    bool IsPlayerLocked(Player* pPlayer) const
+    {
+        if (!pPlayer)
+            return true;
+
+        return m_playerLockouts.find(pPlayer->GetGUIDLow()) != m_playerLockouts.end();
+    }
+
+    void LockPlayer(Player* pPlayer)
+    {
+        if (!pPlayer)
+            return;
+
+        m_playerLockouts[pPlayer->GetGUIDLow()] = kPerPlayerLockMs;
+    }
+
+    void ProcessPlayer(Player* pPlayer, bool whisperDebug)
+    {
+        if (!pPlayer || !pPlayer->IsAlive())
+            return;
+
+        if (!m_creature->IsWithinDistInMap(pPlayer, kTriggerDistance))
+            return;
+
+        if (IsPlayerLocked(pPlayer))
+            return;
+
+        LockPlayer(pPlayer);
+
+        if (whisperDebug)
+        {
+            std::string detectedSpec = GetDetectedSpecName(pPlayer);
+            std::string enterMessage = "DEBUG: NPC poll reached player. Spec = " + detectedSpec;
+            m_creature->MonsterWhisper(enterMessage.c_str(), pPlayer);
+        }
+
+        if (pPlayer->IsInCombat())
+        {
+            pPlayer->CastSpell(pPlayer, SPELL_KNOCKBACK_VISUAL, true);
+            m_creature->MonsterWhisper("ERROR CODE 404 (YOU ARE IN COMBAT).", pPlayer);
+            return;
+        }
+
+        if (kUseCooldownAura && pPlayer->HasAura(SPELL_BUFF_COOLDOWN))
+        {
+            m_creature->MonsterWhisper("DEBUG: Cooldown aura already active.", pPlayer);
+            return;
+        }
+
+        pPlayer->DuelComplete(DUEL_INTERRUPTED);
+        FullBuffPlayer(pPlayer);
+        pPlayer->CastSpell(pPlayer, SPELL_VISUAL_RED_LIGHTNING, true);
+
+        if (kUseCooldownAura)
+            pPlayer->AddAura(SPELL_BUFF_COOLDOWN);
+
+        if (whisperDebug)
+            m_creature->MonsterWhisper("DEBUG: Buff sequence finished.", pPlayer);
     }
 
     void MoveInLineOfSight(Unit* pWho) override
@@ -883,39 +961,43 @@ struct npc_buff_machineAI : public ScriptedAI
             return;
 
         Player* pPlayer = pWho->ToPlayer();
-        if (!pPlayer || !pPlayer->IsAlive())
+        if (!pPlayer)
             return;
 
-        if (!m_creature->IsWithinDistInMap(pWho, kTriggerDistance))
+        ProcessPlayer(pPlayer, true);
+    }
+
+    void UpdateAI(const uint32 diff) override
+    {
+        if (m_creature->GetEntry() != kBuffNpcEntry)
             return;
 
-        std::string detectedSpec = GetDetectedSpecName(pPlayer);
-        std::string enterMessage = "DEBUG: MoveInLineOfSight fired. Spec = " + detectedSpec;
-        m_creature->MonsterWhisper(enterMessage.c_str(), pPlayer);
+        UpdatePlayerLockouts(diff);
 
-        if (pPlayer->IsInCombat())
+        if (m_uiScanTimer > diff)
         {
-            pPlayer->CastSpell(pPlayer, SPELL_KNOCKBACK_VISUAL, true);
-            m_creature->MonsterWhisper("ERROR CODE 404 (YOU ARE IN COMBAT).", pPlayer);
+            m_uiScanTimer -= diff;
             return;
         }
 
-        if (kUseCooldownAura && pPlayer->HasAura(SPELL_BUFF_COOLDOWN))
-        {
-            m_creature->MonsterWhisper("DEBUG: Cooldown aura already active.", pPlayer);
+        m_uiScanTimer = kScanIntervalMs;
+
+        Map* pMap = m_creature->GetMap();
+        if (!pMap)
             return;
+
+        Map::PlayerList const& playerList = pMap->GetPlayers();
+        if (playerList.isEmpty())
+            return;
+
+        for (Map::PlayerList::const_iterator itr = playerList.begin(); itr != playerList.end(); ++itr)
+        {
+            Player* pPlayer = itr->getSource();
+            if (!pPlayer)
+                continue;
+
+            ProcessPlayer(pPlayer, true);
         }
-
-        pPlayer->DuelComplete(DUEL_INTERRUPTED);
-
-        FullBuffPlayer(pPlayer);
-
-        pPlayer->CastSpell(pPlayer, SPELL_VISUAL_RED_LIGHTNING, true);
-
-        if (kUseCooldownAura)
-            pPlayer->AddAura(SPELL_BUFF_COOLDOWN);
-
-        m_creature->MonsterWhisper("DEBUG: Buff sequence finished.", pPlayer);
     }
 };
 
