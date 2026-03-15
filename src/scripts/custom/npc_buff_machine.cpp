@@ -6,21 +6,27 @@
 
 namespace
 {
-    // ------------------------------------------------------------
-    // Konfiguration
-    // ------------------------------------------------------------
-    static const uint32 kBuffNpcEntry                = 80000;
-    static const float  kTriggerDistance             = 0.20f;
-    static const uint32 kBuffDurationMs              = 2 * HOUR * IN_MILLISECONDS;
+    // -------------------------------------------------------------------------
+    // Configuration
+    // -------------------------------------------------------------------------
+    static const uint32 kBuffNpcEntry       = 80000;
+    static const float  kTriggerDistance    = 0.20f;
+    static const uint32 kBuffDurationMs     = 2 * HOUR * IN_MILLISECONDS;
 
-    // Visuell / Logik
-    static const uint32 SPELL_VISUAL_RED_LIGHTNING   = 24240;
-    static const uint32 SPELL_KNOCKBACK_VISUAL       = 10689;
-    static const uint32 SPELL_BUFF_COOLDOWN          = 8000;
-    static const uint32 SPELL_REMOVE_OLD_DUMMY_AURA  = 15007;
-    static const uint32 SPELL_HAPPY_PET              = 24716;
+    // -------------------------------------------------------------------------
+    // Visual and control spells
+    // -------------------------------------------------------------------------
+    static const uint32 SPELL_VISUAL_RED_LIGHTNING  = 24240;
+    static const uint32 SPELL_KNOCKBACK_VISUAL      = 10689;
+    static const uint32 SPELL_BUFF_COOLDOWN         = 8000;
+    static const uint32 SPELL_REMOVE_OLD_DUMMY_AURA = 15007;
+    static const uint32 SPELL_HAPPY_PET             = 24716;
 
-    // Talent-Hilfsauras, damit verbesserte Gruppenbuffs mit den richtigen Rängen laufen.
+    // -------------------------------------------------------------------------
+    // Temporary support talents
+    // These auras are applied for a moment so the generated raid buffs use the
+    // strongest improved ranks without requiring an actual buffing raid setup.
+    // -------------------------------------------------------------------------
     static const uint32 TALENT_IMPROVED_BATTLE_SHOUT_R5       = 12861;
     static const uint32 TALENT_RESTORATIVE_TOTEMS_R5          = 16208;
     static const uint32 TALENT_ENHANCING_TOTEMS_R2            = 16295;
@@ -30,94 +36,114 @@ namespace
     static const uint32 TALENT_IMPROVED_DEVOTION_AURA_R5      = 20142;
     static const uint32 TALENT_IMPROVED_IMP_R3                = 18696;
 
+    // -------------------------------------------------------------------------
+    // Talent signature spells used for better role detection
+    // -------------------------------------------------------------------------
+    static const uint32 SPELL_THICK_HIDE_R5          = 16933;
+    static const uint32 SPELL_FERAL_CHARGE           = 16979;
+    static const uint32 SPELL_BLOOD_FRENZY_R2        = 16954;
+    static const uint32 SPELL_SHARPENED_CLAWS_R3     = 16942;
+    static const uint32 SPELL_CAT_FORM               = 768;
+    static const uint32 SPELL_BEAR_FORM              = 5487;
+    static const uint32 SPELL_DIRE_BEAR_FORM         = 9634;
+
     enum BuffSpells
     {
-        // ------------------------------------------------------------
-        // World buffs
-        // ------------------------------------------------------------
-        SPELL_ECHOES_OF_LORDAERON_ALLIANCE     = 1386,
-        SPELL_ECHOES_OF_LORDAERON_HORDE        = 29520,
-        SPELL_WARCHIEFS_BLESSING               = 16609,
-        SPELL_RALLYING_CRY_OF_THE_DRAGONSLAYER = 22888,
-        SPELL_SPIRIT_OF_ZANDALAR               = 24425,
-        SPELL_SONGFLOWER_SERENADE              = 15366,
-        SPELL_SLIPKIKS_SAVVY                   = 22820,
-        SPELL_FENGUS_FEROCITY                  = 22817,
-        SPELL_MOLDARS_MOXIE                    = 22818,
-        SPELL_TRACES_OF_SILITHYST              = 29534,
-        SPELL_SOUL_REVIVAL                     = 28681,
-        SPELL_ELUNES_BLESSING                  = 26393,
-        SPELL_SAYGES_DARK_FORTUNE_OF_DAMAGE     = 23768,
-        SPELL_SAYGES_DARK_FORTUNE_OF_STRENGTH   = 23735,
-        SPELL_SAYGES_DARK_FORTUNE_OF_AGILITY    = 23736,
-        SPELL_SAYGES_DARK_FORTUNE_OF_SPIRIT     = 23738,
-        SPELL_SAYGES_DARK_FORTUNE_OF_STAMINA    = 23737,
-        SPELL_SAYGES_DARK_FORTUNE_OF_INTELLIGENCE = 23766,
+        // ---------------------------------------------------------------------
+        // Major world buffs
+        // ---------------------------------------------------------------------
+        SPELL_ECHOES_OF_LORDAERON_ALLIANCE       = 1386,
+        SPELL_ECHOES_OF_LORDAERON_HORDE          = 29520,
+        SPELL_WARCHIEFS_BLESSING                 = 16609,
+        SPELL_RALLYING_CRY_OF_THE_DRAGONSLAYER   = 22888,
+        SPELL_SPIRIT_OF_ZANDALAR                 = 24425,
+        SPELL_SONGFLOWER_SERENADE                = 15366,
+        SPELL_SLIPKIKS_SAVVY                     = 22820,
+        SPELL_FENGUS_FEROCITY                    = 22817,
+        SPELL_MOLDARS_MOXIE                      = 22818,
+        SPELL_TRACES_OF_SILITHYST                = 29534,
+        SPELL_SOUL_REVIVAL                       = 28681,
+        SPELL_ELUNES_BLESSING                    = 26393,
+        SPELL_SAYGES_DARK_FORTUNE_OF_DAMAGE      = 23768,
+        SPELL_SAYGES_DARK_FORTUNE_OF_STRENGTH    = 23735,
+        SPELL_SAYGES_DARK_FORTUNE_OF_AGILITY     = 23736,
+        SPELL_SAYGES_DARK_FORTUNE_OF_SPIRIT      = 23738,
+        SPELL_SAYGES_DARK_FORTUNE_OF_STAMINA     = 23737,
+        SPELL_SAYGES_DARK_FORTUNE_OF_INTELLECT   = 23766,
 
-        // ------------------------------------------------------------
-        // Klassen-/Raidbuffs
-        // ------------------------------------------------------------
-        SPELL_ARCANE_BRILLIANCE                = 23028,
-        SPELL_PRAYER_OF_FORTITUDE              = 21564,
-        SPELL_PRAYER_OF_SPIRIT                 = 27681,
-        SPELL_MOONKIN_AURA                     = 24907,
-        SPELL_TRUESHOT_AURA                    = 20906,
-        SPELL_LEADER_OF_THE_PACK               = 24932,
-        SPELL_GREATER_BLESSING_OF_KINGS        = 25898,
-        SPELL_GREATER_BLESSING_OF_MIGHT        = 25916,
-        SPELL_GREATER_BLESSING_OF_WISDOM       = 25918,
-        SPELL_MARK_OF_THE_WILD                 = 9885,
-        SPELL_BATTLE_SHOUT                     = 25289,
-        SPELL_GRACE_OF_AIR                     = 25360,
-        SPELL_STRENGTH_OF_EARTH                = 25362,
-        SPELL_MANA_SPRING                      = 10494,
-        SPELL_BLOOD_PACT                       = 11767,
-        SPELL_DEVOTION_AURA                    = 10293,
+        // ---------------------------------------------------------------------
+        // Raid and class buffs
+        // ---------------------------------------------------------------------
+        SPELL_ARCANE_BRILLIANCE                  = 23028,
+        SPELL_PRAYER_OF_FORTITUDE                = 21564,
+        SPELL_PRAYER_OF_SPIRIT                   = 27681,
+        SPELL_MOONKIN_AURA                       = 24907,
+        SPELL_TRUESHOT_AURA                      = 20906,
+        SPELL_LEADER_OF_THE_PACK                 = 24932,
+        SPELL_GREATER_BLESSING_OF_KINGS          = 25898,
+        SPELL_GREATER_BLESSING_OF_MIGHT          = 25916,
+        SPELL_GREATER_BLESSING_OF_WISDOM         = 25918,
+        SPELL_MARK_OF_THE_WILD                   = 9885,
+        SPELL_BATTLE_SHOUT                       = 25289,
+        SPELL_GRACE_OF_AIR                       = 25360,
+        SPELL_STRENGTH_OF_EARTH                  = 25362,
+        SPELL_MANA_SPRING                        = 10494,
+        SPELL_BLOOD_PACT                         = 11767,
+        SPELL_DEVOTION_AURA                      = 10293,
 
-        // ------------------------------------------------------------
-        // Spezielle Event-/Consume-Buffs
-        // ------------------------------------------------------------
-        SPELL_HOLY_MIGHTSTONE                  = 24833,
-        SPELL_BUTTERMILK_DELIGHT               = 27720,
-        SPELL_SWEET_SURPRISE                   = 27722,
-        SPELL_VERY_BERRY_CREAM                 = 27721,
-        SPELL_DARK_DESIRE                      = 27723,
-        SPELL_HEADMASTERS_CHARGE               = 18264,
-        SPELL_BLESSING_OF_BLACKFATHOM          = 8733,
-        SPELL_GROUND_SCORPOK_ASSAY             = 10669,
-        SPELL_FURY_OF_THE_BOGLING              = 5665,
-        SPELL_FLASK_OF_THE_TITANS              = 17626,
-        SPELL_FLASK_OF_DISTILLED_WISDOM        = 17627,
-        SPELL_FLASK_OF_SUPREME_POWER           = 17628,
-        SPELL_GREATER_ARCANE_ELIXIR            = 17539,
-        SPELL_GREATER_STONESHIELD_POTION       = 17540,
-        SPELL_ELIXIR_OF_THE_MONGOOSE           = 17538,
-        SPELL_ELIXIR_OF_THE_SAGES              = 17535,
-        SPELL_ELIXIR_OF_SUPERIOR_DEFENSE       = 11348,
-        SPELL_ELIXIR_OF_SHADOW_POWER           = 11474,
-        SPELL_MAGEBLOOD_POTION                 = 24363,
-        SPELL_ELIXIR_OF_GREATER_FIREPOWER      = 26276,
-        SPELL_ELIXIR_OF_FROST_POWER            = 21920,
-        SPELL_ELIXIR_OF_FORTITUDE              = 3593,
-        SPELL_WINTERFALL_FIREWATER             = 17038,
-        SPELL_JUJU_MIGHT                       = 16329,
-        SPELL_JUJU_POWER                       = 16323,
-        SPELL_SMOKED_DESERT_DUMPLINGS          = 24799,
-        SPELL_BLESSED_SUNFRUIT                 = 18125,
-        SPELL_GRILLED_SQUID                    = 18192,
-        SPELL_ROIDS                            = 10667,
-        SPELL_RUNN_TUM_TUBER_SURPRISE          = 22730,
-        SPELL_SWIFTNESS_OF_ZANZA               = 24383,
-        SPELL_CEREBRAL_CORTEX_COMPOUND         = 10692,
-        SPELL_BLOODKELP_ELIXIR_OF_DODGING      = 27653,
-        SPELL_RUMSEY_RUM_BLACK_LABEL           = 25804,
-        SPELL_NIGHTFIN_SOUP                    = 18194,
+        // ---------------------------------------------------------------------
+        // Consumables and event buffs
+        // ---------------------------------------------------------------------
+        SPELL_HOLY_MIGHTSTONE                    = 24833,
+        SPELL_BUTTERMILK_DELIGHT                 = 27720,
+        SPELL_SWEET_SURPRISE                     = 27722,
+        SPELL_VERY_BERRY_CREAM                   = 27721,
+        SPELL_DARK_DESIRE                        = 27723,
+        SPELL_HEADMASTERS_CHARGE                 = 18264,
+        SPELL_BLESSING_OF_BLACKFATHOM            = 8733,
+        SPELL_GROUND_SCORPOK_ASSAY               = 10669,
+        SPELL_FURY_OF_THE_BOGLING                = 5665,
+        SPELL_FLASK_OF_THE_TITANS                = 17626,
+        SPELL_FLASK_OF_DISTILLED_WISDOM          = 17627,
+        SPELL_FLASK_OF_SUPREME_POWER             = 17628,
+        SPELL_GREATER_ARCANE_ELIXIR              = 17539,
+        SPELL_GREATER_STONESHIELD_POTION         = 17540,
+        SPELL_ELIXIR_OF_THE_MONGOOSE             = 17538,
+        SPELL_ELIXIR_OF_THE_SAGES                = 17535,
+        SPELL_ELIXIR_OF_SUPERIOR_DEFENSE         = 11348,
+        SPELL_ELIXIR_OF_SHADOW_POWER             = 11474,
+        SPELL_MAGEBLOOD_POTION                   = 24363,
+        SPELL_ELIXIR_OF_GREATER_FIREPOWER        = 26276,
+        SPELL_ELIXIR_OF_FROST_POWER              = 21920,
+        SPELL_ELIXIR_OF_FORTITUDE                = 3593,
+        SPELL_WINTERFALL_FIREWATER               = 17038,
+        SPELL_JUJU_MIGHT                         = 16329,
+        SPELL_JUJU_POWER                         = 16323,
+        SPELL_SMOKED_DESERT_DUMPLINGS            = 24799,
+        SPELL_BLESSED_SUNFRUIT                   = 18125,
+        SPELL_GRILLED_SQUID                      = 18192,
+        SPELL_ROIDS                              = 10667,
+        SPELL_RUNN_TUM_TUBER_SURPRISE            = 22730,
+        SPELL_SWIFTNESS_OF_ZANZA                 = 24383,
+        SPELL_CEREBRAL_CORTEX_COMPOUND           = 10692,
+        SPELL_BLOODKELP_ELIXIR_OF_DODGING        = 27653,
+        SPELL_RUMSEY_RUM_BLACK_LABEL             = 25804,
+        SPELL_NIGHTFIN_SOUP                      = 18194,
 
-        // ------------------------------------------------------------
-        // Un'Goro Crystals
-        // ------------------------------------------------------------
-        SPELL_CRYSTAL_WARD                     = 15233,
-        SPELL_CRYSTAL_FORCE                    = 15231,
+        // ---------------------------------------------------------------------
+        // Un'Goro crystal buffs
+        // ---------------------------------------------------------------------
+        SPELL_CRYSTAL_WARD                       = 15233,
+        SPELL_CRYSTAL_FORCE                      = 15231,
+        SPELL_CRYSTAL_SPIRE                      = 15279
+    };
+
+    enum PlayerRole
+    {
+        ROLE_TANK = 0,
+        ROLE_MELEE_DPS,
+        ROLE_CASTER_DPS,
+        ROLE_HEALER
     };
 
     static const uint32 kTemporaryBuffTalents[] =
@@ -198,16 +224,123 @@ namespace
             ApplyTimedBuff(pUnit, *itr);
     }
 
-    void ApplyAllianceBlessings(Player* pPlayer, bool includeWisdom)
+    void FillHealthAndMana(Player* pPlayer)
+    {
+        if (!pPlayer)
+            return;
+
+        pPlayer->SetHealth(pPlayer->GetMaxHealth());
+
+        if (pPlayer->GetMaxPower(POWER_MANA) > 0)
+            pPlayer->SetPower(POWER_MANA, pPlayer->GetMaxPower(POWER_MANA));
+    }
+
+    bool IsLikelyDruidBearTank(Player* pPlayer)
+    {
+        if (!pPlayer)
+            return false;
+
+        if (pPlayer->GetClass() != CLASS_DRUID)
+            return false;
+
+        if (pPlayer->GetTalentTabID() != DruidFeralCombat)
+            return false;
+
+        // Current form is the strongest signal if the player walks into range while shifted.
+        if (pPlayer->HasAura(SPELL_BEAR_FORM) || pPlayer->HasAura(SPELL_DIRE_BEAR_FORM))
+            return true;
+
+        if (pPlayer->HasAura(SPELL_CAT_FORM))
+            return false;
+
+        // Feral Charge is a very strong bear indicator in Vanilla.
+        if (pPlayer->HasSpell(SPELL_FERAL_CHARGE))
+            return true;
+
+        // Use a small score model instead of a single talent check.
+        int32 bearScore = 0;
+        int32 catScore  = 0;
+
+        if (pPlayer->HasSpell(SPELL_THICK_HIDE_R5))
+            bearScore += 2;
+
+        if (pPlayer->HasSpell(SPELL_BLOOD_FRENZY_R2))
+            catScore += 2;
+
+        if (pPlayer->HasSpell(SPELL_SHARPENED_CLAWS_R3))
+            catScore += 1;
+
+        return bearScore > catScore;
+    }
+
+    PlayerRole GetPlayerRole(Player* pPlayer)
+    {
+        if (!pPlayer)
+            return ROLE_MELEE_DPS;
+
+        switch (pPlayer->GetClass())
+        {
+            case CLASS_WARRIOR:
+                return (pPlayer->GetTalentTabID() == WarriorProtection) ? ROLE_TANK : ROLE_MELEE_DPS;
+
+            case CLASS_PALADIN:
+                if (pPlayer->GetTalentTabID() == PaladinProtection)
+                    return ROLE_TANK;
+                if (pPlayer->GetTalentTabID() == PaladinHoly)
+                    return ROLE_HEALER;
+                return ROLE_MELEE_DPS;
+
+            case CLASS_HUNTER:
+            case CLASS_ROGUE:
+                return ROLE_MELEE_DPS;
+
+            case CLASS_PRIEST:
+                return (pPlayer->GetTalentTabID() == PriestShadow) ? ROLE_CASTER_DPS : ROLE_HEALER;
+
+            case CLASS_MAGE:
+            case CLASS_WARLOCK:
+                return ROLE_CASTER_DPS;
+
+            case CLASS_SHAMAN:
+                if (pPlayer->GetTalentTabID() == ShamanEnhancement)
+                    return ROLE_MELEE_DPS;
+                if (pPlayer->GetTalentTabID() == ShamanRestoration)
+                    return ROLE_HEALER;
+                return ROLE_CASTER_DPS;
+
+            case CLASS_DRUID:
+                if (pPlayer->GetTalentTabID() == DruidRestoration)
+                    return ROLE_HEALER;
+                if (pPlayer->GetTalentTabID() == DruidBalance)
+                    return ROLE_CASTER_DPS;
+                if (pPlayer->GetTalentTabID() == DruidFeralCombat)
+                    return IsLikelyDruidBearTank(pPlayer) ? ROLE_TANK : ROLE_MELEE_DPS;
+                return ROLE_CASTER_DPS;
+
+            default:
+                break;
+        }
+
+        return ROLE_MELEE_DPS;
+    }
+
+    void ApplyAllianceMeleeBlessings(Player* pPlayer)
     {
         if (!pPlayer || pPlayer->GetTeam() != ALLIANCE)
             return;
 
         ApplyTimedBuff(pPlayer, SPELL_GREATER_BLESSING_OF_KINGS);
         ApplyTimedBuff(pPlayer, SPELL_GREATER_BLESSING_OF_MIGHT);
+    }
 
-        if (includeWisdom)
-            ApplyTimedBuff(pPlayer, SPELL_GREATER_BLESSING_OF_WISDOM);
+    void ApplyAllianceHunterBlessings(Player* pPlayer)
+    {
+        if (!pPlayer || pPlayer->GetTeam() != ALLIANCE)
+            return;
+
+        ApplyTimedBuff(pPlayer, SPELL_GREATER_BLESSING_OF_KINGS);
+        ApplyTimedBuff(pPlayer, SPELL_GREATER_BLESSING_OF_MIGHT);
+        ApplyTimedBuff(pPlayer, SPELL_GREATER_BLESSING_OF_WISDOM);
     }
 
     void ApplyAllianceCasterBlessings(Player* pPlayer)
@@ -219,7 +352,7 @@ namespace
         ApplyTimedBuff(pPlayer, SPELL_GREATER_BLESSING_OF_WISDOM);
     }
 
-    void ApplySharedWorldBuffs(Player* pPlayer)
+    void ApplyCoreWorldBuffs(Player* pPlayer)
     {
         if (!pPlayer)
             return;
@@ -239,19 +372,300 @@ namespace
             SPELL_RALLYING_CRY_OF_THE_DRAGONSLAYER,
             SPELL_SPIRIT_OF_ZANDALAR,
             SPELL_SONGFLOWER_SERENADE,
-            SPELL_ELUNES_BLESSING
+            SPELL_ELUNES_BLESSING,
+            SPELL_TRACES_OF_SILITHYST,
+            SPELL_SOUL_REVIVAL
         });
     }
 
-    void FillHealthAndMana(Player* pPlayer)
+    void ApplyRoleRaidBuffs(Player* pPlayer)
     {
         if (!pPlayer)
             return;
 
-        pPlayer->SetHealth(pPlayer->GetMaxHealth());
+        const PlayerRole role = GetPlayerRole(pPlayer);
 
-        if (pPlayer->GetMaxPower(POWER_MANA) > 0)
-            pPlayer->SetPower(POWER_MANA, pPlayer->GetMaxPower(POWER_MANA));
+        switch (role)
+        {
+            case ROLE_TANK:
+                ApplyBuffList(pPlayer,
+                {
+                    SPELL_MOLDARS_MOXIE,
+                    SPELL_PRAYER_OF_FORTITUDE,
+                    SPELL_MARK_OF_THE_WILD,
+                    SPELL_BATTLE_SHOUT,
+                    SPELL_BLOOD_PACT
+                });
+
+                if (pPlayer->GetTeam() == HORDE)
+                    ApplyTimedBuff(pPlayer, SPELL_STRENGTH_OF_EARTH);
+                else
+                    ApplyAllianceMeleeBlessings(pPlayer);
+                break;
+
+            case ROLE_MELEE_DPS:
+                ApplyBuffList(pPlayer,
+                {
+                    SPELL_FENGUS_FEROCITY,
+                    SPELL_MARK_OF_THE_WILD,
+                    SPELL_LEADER_OF_THE_PACK,
+                    SPELL_TRUESHOT_AURA,
+                    SPELL_BATTLE_SHOUT
+                });
+
+                if (pPlayer->GetClass() == CLASS_HUNTER)
+                {
+                    if (pPlayer->GetTeam() == HORDE)
+                    {
+                        ApplyTimedBuff(pPlayer, SPELL_STRENGTH_OF_EARTH);
+                        ApplyTimedBuff(pPlayer, SPELL_GRACE_OF_AIR);
+                    }
+                    else
+                    {
+                        ApplyAllianceHunterBlessings(pPlayer);
+                    }
+                }
+                else
+                {
+                    if (pPlayer->GetTeam() == HORDE)
+                    {
+                        ApplyTimedBuff(pPlayer, SPELL_STRENGTH_OF_EARTH);
+                        ApplyTimedBuff(pPlayer, SPELL_GRACE_OF_AIR);
+                    }
+                    else
+                    {
+                        ApplyAllianceMeleeBlessings(pPlayer);
+                    }
+                }
+                break;
+
+            case ROLE_CASTER_DPS:
+                ApplyBuffList(pPlayer,
+                {
+                    SPELL_SLIPKIKS_SAVVY,
+                    SPELL_ARCANE_BRILLIANCE,
+                    SPELL_PRAYER_OF_SPIRIT,
+                    SPELL_MOONKIN_AURA,
+                    SPELL_MARK_OF_THE_WILD
+                });
+
+                if (pPlayer->GetTeam() == HORDE)
+                    ApplyTimedBuff(pPlayer, SPELL_MANA_SPRING);
+                else
+                    ApplyAllianceCasterBlessings(pPlayer);
+                break;
+
+            case ROLE_HEALER:
+                ApplyBuffList(pPlayer,
+                {
+                    SPELL_SLIPKIKS_SAVVY,
+                    SPELL_ARCANE_BRILLIANCE,
+                    SPELL_PRAYER_OF_SPIRIT,
+                    SPELL_MARK_OF_THE_WILD
+                });
+
+                if (pPlayer->GetTeam() == HORDE)
+                    ApplyTimedBuff(pPlayer, SPELL_MANA_SPRING);
+                else
+                    ApplyAllianceCasterBlessings(pPlayer);
+                break;
+        }
+
+        // Special case: non-holy paladins still benefit from some caster-style support.
+        if (pPlayer->GetClass() == CLASS_PALADIN && role != ROLE_HEALER)
+            ApplyTimedBuff(pPlayer, SPELL_PRAYER_OF_SPIRIT);
+    }
+
+    void ApplyUniversalManaConsumes(Player* pPlayer)
+    {
+        if (!pPlayer)
+            return;
+
+        ApplyBuffList(pPlayer,
+        {
+            SPELL_HEADMASTERS_CHARGE,
+            SPELL_CEREBRAL_CORTEX_COMPOUND,
+            SPELL_RUNN_TUM_TUBER_SURPRISE,
+            SPELL_BLESSING_OF_BLACKFATHOM
+        });
+    }
+
+    void ApplyTankConsumes(Player* pPlayer)
+    {
+        if (!pPlayer)
+            return;
+
+        ApplyBuffList(pPlayer,
+        {
+            SPELL_SAYGES_DARK_FORTUNE_OF_STAMINA,
+            SPELL_FLASK_OF_THE_TITANS,
+            SPELL_ELIXIR_OF_FORTITUDE,
+            SPELL_ELIXIR_OF_SUPERIOR_DEFENSE,
+            SPELL_GREATER_STONESHIELD_POTION,
+            SPELL_ELIXIR_OF_THE_MONGOOSE,
+            SPELL_ROIDS,
+            SPELL_BLOODKELP_ELIXIR_OF_DODGING,
+            SPELL_RUMSEY_RUM_BLACK_LABEL,
+            SPELL_CRYSTAL_WARD,
+            SPELL_CRYSTAL_SPIRE,
+            SPELL_BUTTERMILK_DELIGHT
+        });
+    }
+
+    void ApplyMeleeConsumes(Player* pPlayer)
+    {
+        if (!pPlayer)
+            return;
+
+        ApplyBuffList(pPlayer,
+        {
+            SPELL_SAYGES_DARK_FORTUNE_OF_DAMAGE,
+            SPELL_FURY_OF_THE_BOGLING,
+            SPELL_ELIXIR_OF_THE_MONGOOSE,
+            SPELL_WINTERFALL_FIREWATER,
+            SPELL_JUJU_MIGHT,
+            SPELL_JUJU_POWER,
+            SPELL_ROIDS,
+            SPELL_GROUND_SCORPOK_ASSAY,
+            SPELL_BLESSED_SUNFRUIT,
+            SPELL_SMOKED_DESERT_DUMPLINGS,
+            SPELL_GRILLED_SQUID,
+            SPELL_DARK_DESIRE
+        });
+    }
+
+    void ApplyCasterConsumes(Player* pPlayer)
+    {
+        if (!pPlayer)
+            return;
+
+        ApplyBuffList(pPlayer,
+        {
+            SPELL_SAYGES_DARK_FORTUNE_OF_DAMAGE,
+            SPELL_FLASK_OF_SUPREME_POWER,
+            SPELL_GREATER_ARCANE_ELIXIR,
+            SPELL_MAGEBLOOD_POTION,
+            SPELL_CRYSTAL_FORCE,
+            SPELL_NIGHTFIN_SOUP,
+            SPELL_VERY_BERRY_CREAM
+        });
+
+        ApplyUniversalManaConsumes(pPlayer);
+    }
+
+    void ApplyHealerConsumes(Player* pPlayer)
+    {
+        if (!pPlayer)
+            return;
+
+        ApplyBuffList(pPlayer,
+        {
+            SPELL_SAYGES_DARK_FORTUNE_OF_INTELLECT,
+            SPELL_FLASK_OF_DISTILLED_WISDOM,
+            SPELL_ELIXIR_OF_THE_SAGES,
+            SPELL_MAGEBLOOD_POTION,
+            SPELL_CRYSTAL_FORCE,
+            SPELL_NIGHTFIN_SOUP,
+            SPELL_SWEET_SURPRISE
+        });
+
+        ApplyUniversalManaConsumes(pPlayer);
+    }
+
+    void ApplyClassSpecificConsumes(Player* pPlayer)
+    {
+        if (!pPlayer)
+            return;
+
+        const PlayerRole role = GetPlayerRole(pPlayer);
+
+        switch (role)
+        {
+            case ROLE_TANK:
+                ApplyTankConsumes(pPlayer);
+
+                if (pPlayer->GetClass() == CLASS_WARRIOR)
+                {
+                    ApplyTimedBuff(pPlayer, SPELL_MOLDARS_MOXIE);
+                    ApplyTimedBuff(pPlayer, SPELL_SAYGES_DARK_FORTUNE_OF_STAMINA);
+                }
+                else if (pPlayer->GetClass() == CLASS_PALADIN)
+                {
+                    ApplyTimedBuff(pPlayer, SPELL_MOLDARS_MOXIE);
+                    ApplyTimedBuff(pPlayer, SPELL_SAYGES_DARK_FORTUNE_OF_STAMINA);
+                    ApplyTimedBuff(pPlayer, SPELL_DEVOTION_AURA);
+                }
+                else if (pPlayer->GetClass() == CLASS_DRUID)
+                {
+                    ApplyTimedBuff(pPlayer, SPELL_MOLDARS_MOXIE);
+                    if (pPlayer->GetTeam() == ALLIANCE)
+                        ApplyTimedBuff(pPlayer, SPELL_DEVOTION_AURA);
+                }
+                break;
+
+            case ROLE_MELEE_DPS:
+                ApplyMeleeConsumes(pPlayer);
+
+                if (pPlayer->GetClass() == CLASS_WARRIOR)
+                {
+                    if (pPlayer->GetTalentTabID() == WarriorArms)
+                        ApplyTimedBuff(pPlayer, SPELL_SAYGES_DARK_FORTUNE_OF_STRENGTH);
+                    else if (pPlayer->GetTalentTabID() == WarriorFury)
+                        ApplyTimedBuff(pPlayer, SPELL_SAYGES_DARK_FORTUNE_OF_DAMAGE);
+                }
+                else if (pPlayer->GetClass() == CLASS_HUNTER)
+                {
+                    ApplyTimedBuff(pPlayer, SPELL_SWIFTNESS_OF_ZANZA);
+                }
+                else if (pPlayer->GetClass() == CLASS_PALADIN)
+                {
+                    ApplyTimedBuff(pPlayer, SPELL_VERY_BERRY_CREAM);
+                }
+                else if (pPlayer->GetClass() == CLASS_SHAMAN)
+                {
+                    ApplyTimedBuff(pPlayer, SPELL_VERY_BERRY_CREAM);
+                }
+                else if (pPlayer->GetClass() == CLASS_DRUID && pPlayer->GetTeam() == ALLIANCE)
+                {
+                    ApplyTimedBuff(pPlayer, SPELL_DEVOTION_AURA);
+                }
+                break;
+
+            case ROLE_CASTER_DPS:
+                ApplyCasterConsumes(pPlayer);
+
+                // School-specific bonuses are only applied when they are actually correct.
+                if (pPlayer->GetClass() == CLASS_MAGE)
+                {
+                    if (pPlayer->GetTalentTabID() == MageFire)
+                        ApplyTimedBuff(pPlayer, SPELL_ELIXIR_OF_GREATER_FIREPOWER);
+                    else if (pPlayer->GetTalentTabID() == MageFrost)
+                        ApplyTimedBuff(pPlayer, SPELL_ELIXIR_OF_FROST_POWER);
+                    // Arcane mages intentionally do not receive a wrong frost bonus.
+                }
+                else if (pPlayer->GetClass() == CLASS_WARLOCK)
+                {
+                    ApplyTimedBuff(pPlayer, SPELL_ELIXIR_OF_SHADOW_POWER);
+                }
+                else if (pPlayer->GetClass() == CLASS_SHAMAN)
+                {
+                    // Elemental shaman uses mostly nature and fire damage.
+                    // There is no strong general nature elixir here, so use the generic
+                    // spellpower package and only add firepower as an extra bonus.
+                    if (pPlayer->GetTalentTabID() == ShamanElementalCombat)
+                        ApplyTimedBuff(pPlayer, SPELL_ELIXIR_OF_GREATER_FIREPOWER);
+                }
+                else if (pPlayer->GetClass() == CLASS_PRIEST)
+                {
+                    if (pPlayer->GetTalentTabID() == PriestShadow)
+                        ApplyTimedBuff(pPlayer, SPELL_ELIXIR_OF_SHADOW_POWER);
+                }
+                break;
+
+            case ROLE_HEALER:
+                ApplyHealerConsumes(pPlayer);
+                break;
+        }
     }
 
     void ApplyHunterPetBuffs(Player* pPlayer)
@@ -296,580 +710,16 @@ namespace
         ApplyTimedBuff(pPlayer, SPELL_HAPPY_PET);
     }
 
-    void ApplySharedClassBuffs(Player* pPlayer)
-    {
-        if (!pPlayer)
-            return;
-
-        switch (pPlayer->GetClass())
-        {
-            case CLASS_WARRIOR:
-            case CLASS_ROGUE:
-            case CLASS_HUNTER:
-                if (pPlayer->GetTeam() == HORDE)
-                {
-                    ApplyTimedBuff(pPlayer, SPELL_GRACE_OF_AIR);
-                    ApplyTimedBuff(pPlayer, SPELL_STRENGTH_OF_EARTH);
-                }
-                ApplyBuffList(pPlayer,
-                {
-                    SPELL_FENGUS_FEROCITY,
-                    SPELL_TRACES_OF_SILITHYST,
-                    SPELL_SOUL_REVIVAL,
-                    SPELL_LEADER_OF_THE_PACK,
-                    SPELL_MARK_OF_THE_WILD,
-                    SPELL_TRUESHOT_AURA,
-                    SPELL_BATTLE_SHOUT
-                });
-                break;
-
-            case CLASS_MAGE:
-            case CLASS_PRIEST:
-            case CLASS_WARLOCK:
-                if (pPlayer->GetTeam() == HORDE)
-                    ApplyTimedBuff(pPlayer, SPELL_MANA_SPRING);
-
-                ApplyBuffList(pPlayer,
-                {
-                    SPELL_SLIPKIKS_SAVVY,
-                    SPELL_TRACES_OF_SILITHYST,
-                    SPELL_SOUL_REVIVAL,
-                    SPELL_PRAYER_OF_SPIRIT,
-                    SPELL_MOONKIN_AURA,
-                    SPELL_ARCANE_BRILLIANCE,
-                    SPELL_MARK_OF_THE_WILD
-                });
-                break;
-
-            case CLASS_PALADIN:
-            {
-                const uint32 talentTabId = pPlayer->GetTalentTabID();
-
-                if (talentTabId == PaladinHoly)
-                {
-                    ApplyBuffList(pPlayer,
-                    {
-                        SPELL_SLIPKIKS_SAVVY,
-                        SPELL_TRACES_OF_SILITHYST,
-                        SPELL_SOUL_REVIVAL,
-                        SPELL_PRAYER_OF_SPIRIT,
-                        SPELL_MOONKIN_AURA,
-                        SPELL_ARCANE_BRILLIANCE,
-                        SPELL_MARK_OF_THE_WILD
-                    });
-                }
-                else
-                {
-                    ApplyBuffList(pPlayer,
-                    {
-                        SPELL_SLIPKIKS_SAVVY,
-                        SPELL_FENGUS_FEROCITY,
-                        SPELL_TRACES_OF_SILITHYST,
-                        SPELL_SOUL_REVIVAL,
-                        SPELL_LEADER_OF_THE_PACK,
-                        SPELL_PRAYER_OF_SPIRIT,
-                        SPELL_MOONKIN_AURA,
-                        SPELL_ARCANE_BRILLIANCE,
-                        SPELL_MARK_OF_THE_WILD,
-                        SPELL_TRUESHOT_AURA,
-                        SPELL_BATTLE_SHOUT
-                    });
-                }
-                break;
-            }
-
-            case CLASS_SHAMAN:
-            {
-                const uint32 talentTabId = pPlayer->GetTalentTabID();
-
-                if (pPlayer->GetTeam() == HORDE)
-                    ApplyTimedBuff(pPlayer, SPELL_MANA_SPRING);
-
-                if (talentTabId == ShamanEnhancement)
-                {
-                    if (pPlayer->GetTeam() == HORDE)
-                    {
-                        ApplyTimedBuff(pPlayer, SPELL_STRENGTH_OF_EARTH);
-                        ApplyTimedBuff(pPlayer, SPELL_GRACE_OF_AIR);
-                    }
-
-                    ApplyBuffList(pPlayer,
-                    {
-                        SPELL_SLIPKIKS_SAVVY,
-                        SPELL_FENGUS_FEROCITY,
-                        SPELL_TRACES_OF_SILITHYST,
-                        SPELL_SOUL_REVIVAL,
-                        SPELL_LEADER_OF_THE_PACK,
-                        SPELL_MOONKIN_AURA,
-                        SPELL_TRUESHOT_AURA,
-                        SPELL_BATTLE_SHOUT
-                    });
-                }
-                else
-                {
-                    ApplyBuffList(pPlayer,
-                    {
-                        SPELL_SLIPKIKS_SAVVY,
-                        SPELL_TRACES_OF_SILITHYST,
-                        SPELL_SOUL_REVIVAL,
-                        SPELL_PRAYER_OF_SPIRIT,
-                        SPELL_MOONKIN_AURA,
-                        SPELL_ARCANE_BRILLIANCE,
-                        SPELL_MARK_OF_THE_WILD
-                    });
-                }
-                break;
-            }
-
-            case CLASS_DRUID:
-            {
-                const uint32 talentTabId = pPlayer->GetTalentTabID();
-
-                if (talentTabId == DruidFeralCombat)
-                {
-                    if (pPlayer->GetTeam() == HORDE)
-                    {
-                        ApplyTimedBuff(pPlayer, SPELL_MANA_SPRING);
-                        ApplyTimedBuff(pPlayer, SPELL_STRENGTH_OF_EARTH);
-                        ApplyTimedBuff(pPlayer, SPELL_GRACE_OF_AIR);
-                    }
-
-                    ApplyBuffList(pPlayer,
-                    {
-                        SPELL_FENGUS_FEROCITY,
-                        SPELL_TRACES_OF_SILITHYST,
-                        SPELL_SOUL_REVIVAL,
-                        SPELL_LEADER_OF_THE_PACK,
-                        SPELL_MARK_OF_THE_WILD,
-                        SPELL_TRUESHOT_AURA,
-                        SPELL_BATTLE_SHOUT
-                    });
-                }
-                else
-                {
-                    if (pPlayer->GetTeam() == HORDE)
-                        ApplyTimedBuff(pPlayer, SPELL_MANA_SPRING);
-
-                    ApplyBuffList(pPlayer,
-                    {
-                        SPELL_SLIPKIKS_SAVVY,
-                        SPELL_TRACES_OF_SILITHYST,
-                        SPELL_SOUL_REVIVAL,
-                        SPELL_PRAYER_OF_SPIRIT,
-                        SPELL_MOONKIN_AURA,
-                        SPELL_ARCANE_BRILLIANCE,
-                        SPELL_MARK_OF_THE_WILD
-                    });
-                }
-                break;
-            }
-
-            default:
-                break;
-        }
-
-        switch (pPlayer->GetClass())
-        {
-            case CLASS_WARRIOR:
-            case CLASS_ROGUE:
-            case CLASS_HUNTER:
-            {
-                ApplyAllianceBlessings(pPlayer, pPlayer->GetClass() == CLASS_HUNTER);
-                break;
-            }
-
-            case CLASS_MAGE:
-            case CLASS_PRIEST:
-            case CLASS_WARLOCK:
-            {
-                ApplyAllianceCasterBlessings(pPlayer);
-                break;
-            }
-
-            case CLASS_PALADIN:
-            {
-                if (pPlayer->GetTalentTabID() == PaladinHoly)
-                    ApplyAllianceCasterBlessings(pPlayer);
-                else
-                    ApplyAllianceBlessings(pPlayer, true);
-                break;
-            }
-
-            case CLASS_SHAMAN:
-            {
-                if (pPlayer->GetTalentTabID() == ShamanEnhancement)
-                    ApplyAllianceBlessings(pPlayer, true);
-                else
-                    ApplyAllianceCasterBlessings(pPlayer);
-                break;
-            }
-
-            case CLASS_DRUID:
-            {
-                if (pPlayer->GetTalentTabID() == DruidFeralCombat)
-                    ApplyAllianceBlessings(pPlayer, false);
-                else
-                    ApplyAllianceCasterBlessings(pPlayer);
-                break;
-            }
-
-            default:
-                break;
-        }
-    }
-
-    void ApplySpecConsumes(Player* pPlayer)
-    {
-        if (!pPlayer)
-            return;
-
-        switch (pPlayer->GetClass())
-        {
-            case CLASS_WARRIOR:
-                if (pPlayer->GetTalentTabID() == WarriorProtection)
-                {
-                    ApplyBuffList(pPlayer,
-                    {
-                        SPELL_SAYGES_DARK_FORTUNE_OF_STAMINA,
-                        SPELL_MOLDARS_MOXIE,
-                        SPELL_PRAYER_OF_FORTITUDE,
-                        SPELL_FLASK_OF_THE_TITANS,
-                        SPELL_ELIXIR_OF_FORTITUDE,
-                        SPELL_ELIXIR_OF_THE_MONGOOSE,
-                        SPELL_ELIXIR_OF_SUPERIOR_DEFENSE,
-                        SPELL_BLOOD_PACT,
-                        SPELL_GREATER_STONESHIELD_POTION,
-                        SPELL_CRYSTAL_WARD,
-                        SPELL_ROIDS,
-                        SPELL_BLOODKELP_ELIXIR_OF_DODGING,
-                        SPELL_RUMSEY_RUM_BLACK_LABEL,
-                        SPELL_BUTTERMILK_DELIGHT
-                    });
-
-                    if (pPlayer->GetTeam() == ALLIANCE)
-                        ApplyTimedBuff(pPlayer, SPELL_DEVOTION_AURA);
-                }
-                else
-                {
-                    ApplyBuffList(pPlayer,
-                    {
-                        SPELL_SAYGES_DARK_FORTUNE_OF_DAMAGE,
-                        SPELL_FURY_OF_THE_BOGLING,
-                        SPELL_ELIXIR_OF_THE_MONGOOSE,
-                        SPELL_WINTERFALL_FIREWATER,
-                        SPELL_JUJU_MIGHT,
-                        SPELL_JUJU_POWER,
-                        SPELL_GROUND_SCORPOK_ASSAY,
-                        SPELL_ROIDS,
-                        SPELL_GRILLED_SQUID,
-                        SPELL_BLESSED_SUNFRUIT,
-                        SPELL_SMOKED_DESERT_DUMPLINGS,
-                        SPELL_DARK_DESIRE
-                    });
-                }
-                break;
-
-            case CLASS_PRIEST:
-                if (pPlayer->GetTalentTabID() == PriestShadow)
-                {
-                    ApplyBuffList(pPlayer,
-                    {
-                        SPELL_SAYGES_DARK_FORTUNE_OF_DAMAGE,
-                        SPELL_FLASK_OF_SUPREME_POWER,
-                        SPELL_GREATER_ARCANE_ELIXIR,
-                        SPELL_ELIXIR_OF_SHADOW_POWER,
-                        SPELL_MAGEBLOOD_POTION,
-                        SPELL_CRYSTAL_FORCE,
-                        SPELL_NIGHTFIN_SOUP,
-                        SPELL_VERY_BERRY_CREAM
-                    });
-                }
-                else
-                {
-                    ApplyBuffList(pPlayer,
-                    {
-                        SPELL_SAYGES_DARK_FORTUNE_OF_INTELLIGENCE,
-                        SPELL_FLASK_OF_DISTILLED_WISDOM,
-                        SPELL_ELIXIR_OF_THE_SAGES,
-                        SPELL_MAGEBLOOD_POTION,
-                        SPELL_NIGHTFIN_SOUP,
-                        SPELL_CRYSTAL_FORCE,
-                        SPELL_SWEET_SURPRISE
-                    });
-                }
-                break;
-
-            case CLASS_PALADIN:
-                if (pPlayer->GetTalentTabID() == PaladinProtection)
-                {
-                    ApplyBuffList(pPlayer,
-                    {
-                        SPELL_SAYGES_DARK_FORTUNE_OF_STAMINA,
-                        SPELL_MOLDARS_MOXIE,
-                        SPELL_PRAYER_OF_FORTITUDE,
-                        SPELL_FLASK_OF_THE_TITANS,
-                        SPELL_ELIXIR_OF_FORTITUDE,
-                        SPELL_ELIXIR_OF_THE_MONGOOSE,
-                        SPELL_ELIXIR_OF_SUPERIOR_DEFENSE,
-                        SPELL_BLOOD_PACT,
-                        SPELL_GREATER_STONESHIELD_POTION,
-                        SPELL_CRYSTAL_WARD,
-                        SPELL_ROIDS,
-                        SPELL_BLOODKELP_ELIXIR_OF_DODGING,
-                        SPELL_RUMSEY_RUM_BLACK_LABEL,
-                        SPELL_DEVOTION_AURA,
-                        SPELL_VERY_BERRY_CREAM,
-                        SPELL_BUTTERMILK_DELIGHT
-                    });
-                }
-                else if (pPlayer->GetTalentTabID() == PaladinRetribution)
-                {
-                    ApplyBuffList(pPlayer,
-                    {
-                        SPELL_SAYGES_DARK_FORTUNE_OF_DAMAGE,
-                        SPELL_ELIXIR_OF_THE_MONGOOSE,
-                        SPELL_JUJU_MIGHT,
-                        SPELL_ROIDS,
-                        SPELL_WINTERFALL_FIREWATER,
-                        SPELL_SMOKED_DESERT_DUMPLINGS,
-                        SPELL_VERY_BERRY_CREAM,
-                        SPELL_DARK_DESIRE
-                    });
-                }
-                else
-                {
-                    ApplyBuffList(pPlayer,
-                    {
-                        SPELL_SAYGES_DARK_FORTUNE_OF_INTELLIGENCE,
-                        SPELL_FLASK_OF_DISTILLED_WISDOM,
-                        SPELL_ELIXIR_OF_THE_SAGES,
-                        SPELL_MAGEBLOOD_POTION,
-                        SPELL_NIGHTFIN_SOUP,
-                        SPELL_CRYSTAL_FORCE,
-                        SPELL_SWEET_SURPRISE
-                    });
-                }
-                break;
-
-            case CLASS_ROGUE:
-                ApplyBuffList(pPlayer,
-                {
-                    SPELL_SAYGES_DARK_FORTUNE_OF_DAMAGE,
-                    SPELL_FURY_OF_THE_BOGLING,
-                    SPELL_ELIXIR_OF_THE_MONGOOSE,
-                    SPELL_WINTERFALL_FIREWATER,
-                    SPELL_JUJU_MIGHT,
-                    SPELL_JUJU_POWER,
-                    SPELL_ROIDS,
-                    SPELL_GROUND_SCORPOK_ASSAY,
-                    SPELL_BLESSED_SUNFRUIT,
-                    SPELL_SMOKED_DESERT_DUMPLINGS,
-                    SPELL_GRILLED_SQUID,
-                    SPELL_DARK_DESIRE
-                });
-                break;
-
-            case CLASS_MAGE:
-                ApplyBuffList(pPlayer,
-                {
-                    SPELL_SAYGES_DARK_FORTUNE_OF_DAMAGE,
-                    SPELL_FLASK_OF_SUPREME_POWER,
-                    SPELL_GREATER_ARCANE_ELIXIR,
-                    SPELL_MAGEBLOOD_POTION,
-                    SPELL_CRYSTAL_FORCE,
-                    SPELL_HEADMASTERS_CHARGE,
-                    SPELL_BLESSING_OF_BLACKFATHOM,
-                    SPELL_CEREBRAL_CORTEX_COMPOUND,
-                    SPELL_RUNN_TUM_TUBER_SURPRISE,
-                    SPELL_VERY_BERRY_CREAM
-                });
-
-                if (pPlayer->GetTalentTabID() == MageFire)
-                    ApplyTimedBuff(pPlayer, SPELL_ELIXIR_OF_GREATER_FIREPOWER);
-                else
-                    ApplyTimedBuff(pPlayer, SPELL_ELIXIR_OF_FROST_POWER);
-                break;
-
-            case CLASS_SHAMAN:
-                if (pPlayer->GetTalentTabID() == ShamanElementalCombat)
-                {
-                    ApplyBuffList(pPlayer,
-                    {
-                        SPELL_SAYGES_DARK_FORTUNE_OF_DAMAGE,
-                        SPELL_FLASK_OF_SUPREME_POWER,
-                        SPELL_GREATER_ARCANE_ELIXIR,
-                        SPELL_MAGEBLOOD_POTION,
-                        SPELL_CRYSTAL_FORCE,
-                        SPELL_HEADMASTERS_CHARGE,
-                        SPELL_BLESSING_OF_BLACKFATHOM,
-                        SPELL_CEREBRAL_CORTEX_COMPOUND,
-                        SPELL_RUNN_TUM_TUBER_SURPRISE,
-                        SPELL_ELIXIR_OF_GREATER_FIREPOWER,
-                        SPELL_VERY_BERRY_CREAM
-                    });
-                }
-                else if (pPlayer->GetTalentTabID() == ShamanEnhancement)
-                {
-                    ApplyBuffList(pPlayer,
-                    {
-                        SPELL_SAYGES_DARK_FORTUNE_OF_DAMAGE,
-                        SPELL_FLASK_OF_DISTILLED_WISDOM,
-                        SPELL_FURY_OF_THE_BOGLING,
-                        SPELL_ELIXIR_OF_THE_MONGOOSE,
-                        SPELL_WINTERFALL_FIREWATER,
-                        SPELL_JUJU_MIGHT,
-                        SPELL_ROIDS,
-                        SPELL_GROUND_SCORPOK_ASSAY,
-                        SPELL_JUJU_POWER,
-                        SPELL_VERY_BERRY_CREAM,
-                        SPELL_SMOKED_DESERT_DUMPLINGS,
-                        SPELL_DARK_DESIRE
-                    });
-                }
-                else
-                {
-                    ApplyBuffList(pPlayer,
-                    {
-                        SPELL_SAYGES_DARK_FORTUNE_OF_INTELLIGENCE,
-                        SPELL_FLASK_OF_DISTILLED_WISDOM,
-                        SPELL_ELIXIR_OF_THE_SAGES,
-                        SPELL_MAGEBLOOD_POTION,
-                        SPELL_NIGHTFIN_SOUP,
-                        SPELL_CRYSTAL_FORCE,
-                        SPELL_SWEET_SURPRISE
-                    });
-                }
-                break;
-
-            case CLASS_HUNTER:
-                ApplyBuffList(pPlayer,
-                {
-                    SPELL_SAYGES_DARK_FORTUNE_OF_DAMAGE,
-                    SPELL_FLASK_OF_DISTILLED_WISDOM,
-                    SPELL_ELIXIR_OF_THE_MONGOOSE,
-                    SPELL_WINTERFALL_FIREWATER,
-                    SPELL_JUJU_MIGHT,
-                    SPELL_ROIDS,
-                    SPELL_GROUND_SCORPOK_ASSAY,
-                    SPELL_JUJU_POWER,
-                    SPELL_BLESSED_SUNFRUIT,
-                    SPELL_SMOKED_DESERT_DUMPLINGS,
-                    SPELL_GRILLED_SQUID,
-                    SPELL_DARK_DESIRE,
-                    SPELL_SWIFTNESS_OF_ZANZA
-                });
-                break;
-
-            case CLASS_DRUID:
-                if (pPlayer->GetTalentTabID() == DruidBalance)
-                {
-                    ApplyBuffList(pPlayer,
-                    {
-                        SPELL_SAYGES_DARK_FORTUNE_OF_DAMAGE,
-                        SPELL_FLASK_OF_SUPREME_POWER,
-                        SPELL_GREATER_ARCANE_ELIXIR,
-                        SPELL_ELIXIR_OF_SHADOW_POWER,
-                        SPELL_MAGEBLOOD_POTION,
-                        SPELL_CRYSTAL_FORCE,
-                        SPELL_NIGHTFIN_SOUP,
-                        SPELL_VERY_BERRY_CREAM
-                    });
-                }
-                else if (pPlayer->GetTalentTabID() == DruidFeralCombat)
-                {
-                    if (pPlayer->HasSpell(16933))
-                    {
-                        ApplyBuffList(pPlayer,
-                        {
-                            SPELL_SAYGES_DARK_FORTUNE_OF_STAMINA,
-                            SPELL_MOLDARS_MOXIE,
-                            SPELL_PRAYER_OF_FORTITUDE,
-                            SPELL_FLASK_OF_THE_TITANS,
-                            SPELL_ELIXIR_OF_FORTITUDE,
-                            SPELL_ELIXIR_OF_THE_MONGOOSE,
-                            SPELL_ELIXIR_OF_SUPERIOR_DEFENSE,
-                            SPELL_BLOOD_PACT,
-                            SPELL_GREATER_STONESHIELD_POTION,
-                            SPELL_CRYSTAL_WARD,
-                            SPELL_ROIDS,
-                            SPELL_BLOODKELP_ELIXIR_OF_DODGING,
-                            SPELL_RUMSEY_RUM_BLACK_LABEL,
-                            SPELL_DARK_DESIRE,
-                            SPELL_BUTTERMILK_DELIGHT
-                        });
-
-                        if (pPlayer->GetTeam() == ALLIANCE)
-                            ApplyTimedBuff(pPlayer, SPELL_DEVOTION_AURA);
-                    }
-                    else
-                    {
-                        ApplyBuffList(pPlayer,
-                        {
-                            SPELL_SAYGES_DARK_FORTUNE_OF_DAMAGE,
-                            SPELL_FLASK_OF_DISTILLED_WISDOM,
-                            SPELL_FURY_OF_THE_BOGLING,
-                            SPELL_MAGEBLOOD_POTION,
-                            SPELL_ELIXIR_OF_THE_MONGOOSE,
-                            SPELL_WINTERFALL_FIREWATER,
-                            SPELL_JUJU_MIGHT,
-                            SPELL_ROIDS,
-                            SPELL_GROUND_SCORPOK_ASSAY,
-                            SPELL_JUJU_POWER,
-                            SPELL_BLESSED_SUNFRUIT,
-                            SPELL_SMOKED_DESERT_DUMPLINGS,
-                            SPELL_GRILLED_SQUID,
-                            SPELL_DARK_DESIRE
-                        });
-
-                        if (pPlayer->GetTeam() == ALLIANCE)
-                            ApplyTimedBuff(pPlayer, SPELL_DEVOTION_AURA);
-                    }
-                }
-                else
-                {
-                    ApplyBuffList(pPlayer,
-                    {
-                        SPELL_SAYGES_DARK_FORTUNE_OF_INTELLIGENCE,
-                        SPELL_FLASK_OF_DISTILLED_WISDOM,
-                        SPELL_ELIXIR_OF_THE_SAGES,
-                        SPELL_MAGEBLOOD_POTION,
-                        SPELL_NIGHTFIN_SOUP,
-                        SPELL_CRYSTAL_FORCE,
-                        SPELL_SWEET_SURPRISE
-                    });
-                }
-                break;
-
-            case CLASS_WARLOCK:
-                ApplyBuffList(pPlayer,
-                {
-                    SPELL_SAYGES_DARK_FORTUNE_OF_DAMAGE,
-                    SPELL_FLASK_OF_SUPREME_POWER,
-                    SPELL_GREATER_ARCANE_ELIXIR,
-                    SPELL_ELIXIR_OF_SHADOW_POWER,
-                    SPELL_MAGEBLOOD_POTION,
-                    SPELL_CRYSTAL_FORCE,
-                    SPELL_HEADMASTERS_CHARGE,
-                    SPELL_BLESSING_OF_BLACKFATHOM,
-                    SPELL_RUNN_TUM_TUBER_SURPRISE,
-                    SPELL_VERY_BERRY_CREAM
-                });
-                break;
-
-            default:
-                break;
-        }
-    }
-
     void FullBuffPlayer(Player* pPlayer)
     {
         if (!pPlayer)
             return;
 
-        ApplySharedWorldBuffs(pPlayer);
-        ApplySharedClassBuffs(pPlayer);
-        ApplySpecConsumes(pPlayer);
+        ApplyCoreWorldBuffs(pPlayer);
+        ApplyRoleRaidBuffs(pPlayer);
+        ApplyClassSpecificConsumes(pPlayer);
         ApplyHunterPetBuffs(pPlayer);
+        FillHealthAndMana(pPlayer);
     }
 }
 
@@ -913,7 +763,6 @@ struct npc_buff_machineAI : public ScriptedAI
         pPlayer->ResetCharges();
 
         FullBuffPlayer(pPlayer);
-        FillHealthAndMana(pPlayer);
 
         pPlayer->CastSpell(pPlayer, SPELL_VISUAL_RED_LIGHTNING, true);
         pPlayer->AddAura(SPELL_BUFF_COOLDOWN);
