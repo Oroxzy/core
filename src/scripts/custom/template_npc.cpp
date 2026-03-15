@@ -3842,8 +3842,10 @@ void LearnPetSpellsFromDB(Player* player)
 
     std::string petname = cInfo->name;
 
-    auto select = CharacterDatabase.PQuery("SELECT spell FROM template_pet_spell WHERE entry = '%u' AND active = 1;", petname.c_str());
-
+	auto select = CharacterDatabase.PQuery(
+		"SELECT spell FROM template_pet_spell WHERE entry = '%u' AND active = 1;",
+		petentry);
+	
     if (select)
     {
         do
@@ -3902,7 +3904,7 @@ void CreateHunterPet(Player *player, Creature * m_creature, uint32 entry)
         }
 
         pet->SetOwnerGuid(player->GetObjectGuid());
-    pet->setFaction(player->getFaction());
+        pet->SetFactionTemplateId(player->GetFactionTemplateId());
         pet->SetCreatorGuid(player->GetObjectGuid());
         //pet->SetUInt32Value(UNIT_CREATED_BY_SPELL, m_spellInfo->Id);
 
