@@ -2156,8 +2156,8 @@ uint16 GetSpecIDByTalentPoints(Player* player)
     {
         return 282;
     }
-	
-	return 0;
+    
+    return 0;
 }
 
 enum QuestSpellsProficiencies
@@ -3842,7 +3842,7 @@ void LearnPetSpellsFromDB(Player* player)
 
     std::string petname = cInfo->name;
 
-    auto select = CharacterDatabase.PQuery("SELECT spell FROM template_pet_spell WHERE name = '%s';", petname.c_str());
+    auto select = CharacterDatabase.PQuery("SELECT spell FROM template_pet_spell WHERE entry = '%u' AND active = 1;", petname.c_str());
 
     if (select)
     {
@@ -3902,6 +3902,7 @@ void CreateHunterPet(Player *player, Creature * m_creature, uint32 entry)
         }
 
         pet->SetOwnerGuid(player->GetObjectGuid());
+    pet->setFaction(player->getFaction());
         pet->SetCreatorGuid(player->GetObjectGuid());
         //pet->SetUInt32Value(UNIT_CREATED_BY_SPELL, m_spellInfo->Id);
 
@@ -4408,6 +4409,17 @@ bool GossipHello_TemplateNPC(Player* player, Creature* creature)
         //player->ADD_GOSSIP_ITEM_EXTENDED(GOSSIP_ICON_CHAT,        "Delete my Equipped Gear.", GOSSIP_SENDER_MAIN, DELETE_GEAR, "Are you sure?", false);
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Buff me please.", GOSSIP_SENDER_MAIN, ALL_BUFFS);
 
+        if (TemplateNpc_GetPlayerClassId(player) == CLASS_HUNTER)
+        {
+            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, "Choose a Hunter Pet", GOSSIP_SENDER_MAIN, SHOW_PETS);
+        
+            if (player->GetPet() && player->GetPet()->IsControlled() && player->GetPet()->GetPetType() == HUNTER_PET)
+            {
+                player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Make my pet happy", GOSSIP_SENDER_MAIN, MAKE_PET_HAPPY);
+                player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Save my current pet", GOSSIP_SENDER_MAIN, SAVE_PET);
+            }
+        }
+        
     player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Professions & Recipes", GOSSIP_SENDER_MAIN, SHOW_PROF_MENU);
         bool hasTemplates = TemplateNpcCache::HasAnyForClass(player);
 
