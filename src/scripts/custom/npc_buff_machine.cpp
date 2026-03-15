@@ -14,7 +14,6 @@ namespace
     static const uint32 kBuffNpcEntry            = 80000;
     static const float  kTriggerDistance         = 0.20f;
     static const uint32 kBuffDurationMs          = 2 * HOUR * IN_MILLISECONDS;
-    static const uint32 kScanIntervalMs          = 1000;
     static const uint32 kPerPlayerBuffCooldownMs = 5000;
     static const bool   kUseCooldownAura         = false;
 
@@ -42,7 +41,7 @@ namespace
     static const uint32 TALENT_IMPROVED_IMP_R3                = 18696;
 
     // -------------------------------------------------------------------------
-    // Talent signature spells used for better role detection
+    // Talent signature spells used for role and spec detection.
     // -------------------------------------------------------------------------
     static const uint32 SPELL_THICK_HIDE_R5          = 16933;
     static const uint32 SPELL_FERAL_CHARGE           = 16979;
@@ -701,6 +700,7 @@ namespace
                 }
                 else if (pPlayer->GetClass() == CLASS_SHAMAN)
                 {
+                    // Keep the original behaviour from your working version.
                     ApplyTimedBuff(pPlayer, SPELL_VERY_BERRY_CREAM);
                 }
                 else if (pPlayer->GetClass() == CLASS_DRUID && pPlayer->GetTeam() == ALLIANCE)
@@ -793,18 +793,18 @@ namespace
 struct npc_buff_machineAI : public ScriptedAI
 {
     explicit npc_buff_machineAI(Creature* pCreature)
-        : ScriptedAI(pCreature), m_scanTimer(kScanIntervalMs)
+        : ScriptedAI(pCreature)
     {
+        // Explicitly enable MoveInLineOfSight processing for this passive NPC.
         m_creature->EnableMoveInLosEvent();
     }
 
     std::map<uint32, uint32> m_playerCooldowns;
-    uint32 m_scanTimer;
 
     void Reset() override
     {
+        // Re-enable LoS processing after resets and clear the short anti-spam map.
         m_playerCooldowns.clear();
-        m_scanTimer = kScanIntervalMs;
         m_creature->EnableMoveInLosEvent();
     }
 
@@ -903,10 +903,11 @@ struct npc_buff_machineAI : public ScriptedAI
     {
         if (m_creature->GetEntry() != kBuffNpcEntry)
             return;
-    
+
+        // Only maintain the short per-player cooldowns.
+        // Buffing itself is handled directly by MoveInLineOfSight.
         UpdateCooldowns(diff);
     }
-    
 };
 
 CreatureAI* GetAI_npc_buff_machine(Creature* pCreature)
