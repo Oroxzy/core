@@ -2,20 +2,21 @@
 #include "Player.h"
 #include "Pet.h"
 
-#include <vector>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace
 {
     // -------------------------------------------------------------------------
     // Configuration
     // -------------------------------------------------------------------------
-    static const uint32 kBuffNpcEntry       = 80000;
-    static const float  kTriggerDistance    = 20.0f;
-    static const uint32 kBuffDurationMs     = 2 * HOUR * IN_MILLISECONDS;
-    static const uint32 kScanIntervalMs     = 1000;
-    static const uint32 kPerPlayerLockMs    = 5000;
+    static const uint32 kBuffNpcEntry            = 80000;
+    static const float  kTriggerDistance         = 0.20f;
+    static const uint32 kBuffDurationMs          = 2 * HOUR * IN_MILLISECONDS;
+    static const uint32 kScanIntervalMs          = 1000;
+    static const uint32 kPerPlayerBuffCooldownMs = 5000;
+    static const bool   kUseCooldownAura         = false;
 
     // -------------------------------------------------------------------------
     // Visual and control spells
@@ -23,7 +24,6 @@ namespace
     static const uint32 SPELL_VISUAL_RED_LIGHTNING  = 24240;
     static const uint32 SPELL_KNOCKBACK_VISUAL      = 10689;
     static const uint32 SPELL_BUFF_COOLDOWN         = 8000;
-    static const bool   kUseCooldownAura            = false;
     static const uint32 SPELL_REMOVE_OLD_DUMMY_AURA = 15007;
     static const uint32 SPELL_HAPPY_PET             = 24716;
 
@@ -52,7 +52,6 @@ namespace
     static const uint32 SPELL_BEAR_FORM              = 5487;
     static const uint32 SPELL_DIRE_BEAR_FORM         = 9634;
 
-    // Talent signature spells used instead of GetTalentTabID().
     static const uint32 SPELL_MORTAL_STRIKE          = 12294;
     static const uint32 SPELL_BLOODTHIRST            = 23881;
     static const uint32 SPELL_SHIELD_SLAM            = 23922;
@@ -73,9 +72,7 @@ namespace
 
     enum BuffSpells
     {
-        // ---------------------------------------------------------------------
         // Major world buffs
-        // ---------------------------------------------------------------------
         SPELL_ECHOES_OF_LORDAERON_ALLIANCE       = 1386,
         SPELL_ECHOES_OF_LORDAERON_HORDE          = 29520,
         SPELL_WARCHIEFS_BLESSING                 = 16609,
@@ -95,9 +92,7 @@ namespace
         SPELL_SAYGES_DARK_FORTUNE_OF_STAMINA     = 23737,
         SPELL_SAYGES_DARK_FORTUNE_OF_INTELLECT   = 23766,
 
-        // ---------------------------------------------------------------------
         // Raid and class buffs
-        // ---------------------------------------------------------------------
         SPELL_ARCANE_BRILLIANCE                  = 23028,
         SPELL_PRAYER_OF_FORTITUDE                = 21564,
         SPELL_PRAYER_OF_SPIRIT                   = 27681,
@@ -115,9 +110,7 @@ namespace
         SPELL_BLOOD_PACT                         = 11767,
         SPELL_DEVOTION_AURA                      = 10293,
 
-        // ---------------------------------------------------------------------
         // Consumables and event buffs
-        // ---------------------------------------------------------------------
         SPELL_HOLY_MIGHTSTONE                    = 24833,
         SPELL_BUTTERMILK_DELIGHT                 = 27720,
         SPELL_SWEET_SURPRISE                     = 27722,
@@ -154,9 +147,7 @@ namespace
         SPELL_RUMSEY_RUM_BLACK_LABEL             = 25804,
         SPELL_NIGHTFIN_SOUP                      = 18194,
 
-        // ---------------------------------------------------------------------
         // Un'Goro crystal buffs
-        // ---------------------------------------------------------------------
         SPELL_CRYSTAL_WARD                       = 15233,
         SPELL_CRYSTAL_FORCE                      = 15231,
         SPELL_CRYSTAL_SPIRE                      = 15279
@@ -261,10 +252,7 @@ namespace
 
     bool IsLikelyDruidBearTank(Player* pPlayer)
     {
-        if (!pPlayer)
-            return false;
-
-        if (pPlayer->GetClass() != CLASS_DRUID)
+        if (!pPlayer || pPlayer->GetClass() != CLASS_DRUID)
             return false;
 
         if (pPlayer->HasAura(SPELL_BEAR_FORM) || pPlayer->HasAura(SPELL_DIRE_BEAR_FORM))
@@ -291,70 +279,19 @@ namespace
         return bearScore > catScore;
     }
 
-    bool IsWarriorProtection(Player* pPlayer)
-    {
-        return pPlayer && (pPlayer->HasSpell(SPELL_SHIELD_SLAM) || pPlayer->HasSpell(SPELL_LAST_STAND));
-    }
-
-    bool IsWarriorArms(Player* pPlayer)
-    {
-        return pPlayer && pPlayer->HasSpell(SPELL_MORTAL_STRIKE);
-    }
-
-    bool IsWarriorFury(Player* pPlayer)
-    {
-        return pPlayer && pPlayer->HasSpell(SPELL_BLOODTHIRST);
-    }
-
-    bool IsPaladinProtection(Player* pPlayer)
-    {
-        return pPlayer && (pPlayer->HasSpell(SPELL_HOLY_SHIELD) || pPlayer->HasSpell(SPELL_BLESSING_OF_SANCTUARY));
-    }
-
-    bool IsPaladinHoly(Player* pPlayer)
-    {
-        return pPlayer && pPlayer->HasSpell(SPELL_HOLY_SHOCK);
-    }
-
-    bool IsPriestShadow(Player* pPlayer)
-    {
-        return pPlayer && pPlayer->HasSpell(SPELL_SHADOWFORM);
-    }
-
-    bool IsShamanEnhancement(Player* pPlayer)
-    {
-        return pPlayer && pPlayer->HasSpell(SPELL_STORMSTRIKE);
-    }
-
-    bool IsShamanRestoration(Player* pPlayer)
-    {
-        return pPlayer && (pPlayer->HasSpell(SPELL_MANA_TIDE_TOTEM) || pPlayer->HasSpell(SPELL_NATURES_SWIFTNESS_SHM));
-    }
-
-    bool IsDruidRestoration(Player* pPlayer)
-    {
-        return pPlayer && (pPlayer->HasSpell(SPELL_SWIFTMEND) || pPlayer->HasSpell(SPELL_NATURES_SWIFTNESS_DRU));
-    }
-
-    bool IsDruidBalance(Player* pPlayer)
-    {
-        return pPlayer && pPlayer->HasSpell(SPELL_MOONKIN_FORM);
-    }
-
-    bool IsMageFire(Player* pPlayer)
-    {
-        return pPlayer && pPlayer->HasSpell(SPELL_COMBUSTION);
-    }
-
-    bool IsMageFrost(Player* pPlayer)
-    {
-        return pPlayer && (pPlayer->HasSpell(SPELL_ICE_BARRIER) || pPlayer->HasSpell(SPELL_COLD_SNAP));
-    }
-
-    bool IsShamanElemental(Player* pPlayer)
-    {
-        return pPlayer && !IsShamanEnhancement(pPlayer) && !IsShamanRestoration(pPlayer);
-    }
+    bool IsWarriorProtection(Player* pPlayer) { return pPlayer && (pPlayer->HasSpell(SPELL_SHIELD_SLAM) || pPlayer->HasSpell(SPELL_LAST_STAND)); }
+    bool IsWarriorArms(Player* pPlayer)       { return pPlayer && pPlayer->HasSpell(SPELL_MORTAL_STRIKE); }
+    bool IsWarriorFury(Player* pPlayer)       { return pPlayer && pPlayer->HasSpell(SPELL_BLOODTHIRST); }
+    bool IsPaladinProtection(Player* pPlayer) { return pPlayer && (pPlayer->HasSpell(SPELL_HOLY_SHIELD) || pPlayer->HasSpell(SPELL_BLESSING_OF_SANCTUARY)); }
+    bool IsPaladinHoly(Player* pPlayer)       { return pPlayer && pPlayer->HasSpell(SPELL_HOLY_SHOCK); }
+    bool IsPriestShadow(Player* pPlayer)      { return pPlayer && pPlayer->HasSpell(SPELL_SHADOWFORM); }
+    bool IsShamanEnhancement(Player* pPlayer) { return pPlayer && pPlayer->HasSpell(SPELL_STORMSTRIKE); }
+    bool IsShamanRestoration(Player* pPlayer) { return pPlayer && (pPlayer->HasSpell(SPELL_MANA_TIDE_TOTEM) || pPlayer->HasSpell(SPELL_NATURES_SWIFTNESS_SHM)); }
+    bool IsDruidRestoration(Player* pPlayer)  { return pPlayer && (pPlayer->HasSpell(SPELL_SWIFTMEND) || pPlayer->HasSpell(SPELL_NATURES_SWIFTNESS_DRU)); }
+    bool IsDruidBalance(Player* pPlayer)      { return pPlayer && pPlayer->HasSpell(SPELL_MOONKIN_FORM); }
+    bool IsMageFire(Player* pPlayer)          { return pPlayer && pPlayer->HasSpell(SPELL_COMBUSTION); }
+    bool IsMageFrost(Player* pPlayer)         { return pPlayer && (pPlayer->HasSpell(SPELL_ICE_BARRIER) || pPlayer->HasSpell(SPELL_COLD_SNAP)); }
+    bool IsShamanElemental(Player* pPlayer)   { return pPlayer && !IsShamanEnhancement(pPlayer) && !IsShamanRestoration(pPlayer); }
 
     std::string GetDetectedSpecName(Player* pPlayer)
     {
@@ -810,10 +747,7 @@ namespace
             return;
 
         Pet* pPet = pPlayer->GetPet();
-        if (!pPet)
-            return;
-
-        if (!pPet->IsAlive())
+        if (!pPet || !pPet->IsAlive())
             return;
 
         if (pPlayer->GetTeam() == ALLIANCE)
@@ -859,25 +793,25 @@ namespace
 struct npc_buff_machineAI : public ScriptedAI
 {
     explicit npc_buff_machineAI(Creature* pCreature)
-        : ScriptedAI(pCreature), m_uiScanTimer(kScanIntervalMs)
+        : ScriptedAI(pCreature), m_scanTimer(kScanIntervalMs)
     {
     }
 
-    std::map<uint32, uint32> m_playerLockouts;
-    uint32 m_uiScanTimer;
+    std::map<uint32, uint32> m_playerCooldowns;
+    uint32 m_scanTimer;
 
     void Reset() override
     {
-        m_uiScanTimer = kScanIntervalMs;
-        m_playerLockouts.clear();
+        m_playerCooldowns.clear();
+        m_scanTimer = kScanIntervalMs;
     }
 
-    void UpdatePlayerLockouts(uint32 diff)
+    void UpdateCooldowns(uint32 diff)
     {
-        for (std::map<uint32, uint32>::iterator itr = m_playerLockouts.begin(); itr != m_playerLockouts.end();)
+        for (std::map<uint32, uint32>::iterator itr = m_playerCooldowns.begin(); itr != m_playerCooldowns.end(); )
         {
             if (itr->second <= diff)
-                m_playerLockouts.erase(itr++);
+                m_playerCooldowns.erase(itr++);
             else
             {
                 itr->second -= diff;
@@ -886,54 +820,52 @@ struct npc_buff_machineAI : public ScriptedAI
         }
     }
 
-    bool IsPlayerLocked(Player* pPlayer) const
+    bool IsRecentlyProcessed(Player* pPlayer) const
     {
         if (!pPlayer)
             return true;
 
-        return m_playerLockouts.find(pPlayer->GetGUIDLow()) != m_playerLockouts.end();
+        return m_playerCooldowns.find(pPlayer->GetGUIDLow()) != m_playerCooldowns.end();
     }
 
-    void LockPlayer(Player* pPlayer)
+    void MarkProcessed(Player* pPlayer)
     {
         if (!pPlayer)
             return;
 
-        m_playerLockouts[pPlayer->GetGUIDLow()] = kPerPlayerLockMs;
+        m_playerCooldowns[pPlayer->GetGUIDLow()] = kPerPlayerBuffCooldownMs;
     }
 
-    void ProcessPlayer(Player* pPlayer, bool whisperDebug)
+    bool CanProcessPlayer(Player* pPlayer)
     {
         if (!pPlayer || !pPlayer->IsAlive())
-            return;
+            return false;
 
         if (!m_creature->IsWithinDistInMap(pPlayer, kTriggerDistance))
+            return false;
+
+        if (IsRecentlyProcessed(pPlayer))
+            return false;
+
+        return true;
+    }
+
+    void ProcessPlayer(Player* pPlayer)
+    {
+        if (!CanProcessPlayer(pPlayer))
             return;
 
-        if (IsPlayerLocked(pPlayer))
-            return;
-
-        LockPlayer(pPlayer);
-
-        if (whisperDebug)
-        {
-            std::string detectedSpec = GetDetectedSpecName(pPlayer);
-            std::string enterMessage = "DEBUG: NPC poll reached player. Spec = " + detectedSpec;
-            m_creature->MonsterWhisper(enterMessage.c_str(), pPlayer);
-        }
+        MarkProcessed(pPlayer);
 
         if (pPlayer->IsInCombat())
         {
             pPlayer->CastSpell(pPlayer, SPELL_KNOCKBACK_VISUAL, true);
-            m_creature->MonsterWhisper("ERROR CODE 404 (YOU ARE IN COMBAT).", pPlayer);
+            m_creature->MonsterWhisper("Buff Machine: You are in combat.", pPlayer);
             return;
         }
 
         if (kUseCooldownAura && pPlayer->HasAura(SPELL_BUFF_COOLDOWN))
-        {
-            m_creature->MonsterWhisper("DEBUG: Cooldown aura already active.", pPlayer);
             return;
-        }
 
         pPlayer->DuelComplete(DUEL_INTERRUPTED);
         FullBuffPlayer(pPlayer);
@@ -942,29 +874,27 @@ struct npc_buff_machineAI : public ScriptedAI
         if (kUseCooldownAura)
             pPlayer->AddAura(SPELL_BUFF_COOLDOWN);
 
-        if (whisperDebug)
-            m_creature->MonsterWhisper("DEBUG: Buff sequence finished.", pPlayer);
+        std::string whisper = "Buff Machine: Full buffs applied. Detected spec: ";
+        whisper += GetDetectedSpecName(pPlayer);
+        m_creature->MonsterWhisper(whisper.c_str(), pPlayer);
     }
 
     void MoveInLineOfSight(Unit* pWho) override
     {
-        if (!pWho)
-            return;
-
         if (m_creature->GetEntry() != kBuffNpcEntry)
         {
             ScriptedAI::MoveInLineOfSight(pWho);
             return;
         }
 
-        if (pWho->GetTypeId() != TYPEID_PLAYER)
+        if (!pWho || pWho->GetTypeId() != TYPEID_PLAYER)
             return;
 
         Player* pPlayer = pWho->ToPlayer();
         if (!pPlayer)
             return;
 
-        ProcessPlayer(pPlayer, true);
+        ProcessPlayer(pPlayer);
     }
 
     void UpdateAI(const uint32 diff) override
@@ -972,31 +902,31 @@ struct npc_buff_machineAI : public ScriptedAI
         if (m_creature->GetEntry() != kBuffNpcEntry)
             return;
 
-        UpdatePlayerLockouts(diff);
+        UpdateCooldowns(diff);
 
-        if (m_uiScanTimer > diff)
+        if (m_scanTimer > diff)
         {
-            m_uiScanTimer -= diff;
+            m_scanTimer -= diff;
             return;
         }
 
-        m_uiScanTimer = kScanIntervalMs;
+        m_scanTimer = kScanIntervalMs;
 
         Map* pMap = m_creature->GetMap();
         if (!pMap)
             return;
 
-        Map::PlayerList const& playerList = pMap->GetPlayers();
-        if (playerList.isEmpty())
+        Map::PlayerList const& players = pMap->GetPlayers();
+        if (players.isEmpty())
             return;
 
-        for (Map::PlayerList::const_iterator itr = playerList.begin(); itr != playerList.end(); ++itr)
+        for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
         {
             Player* pPlayer = itr->getSource();
             if (!pPlayer)
                 continue;
 
-            ProcessPlayer(pPlayer, true);
+            ProcessPlayer(pPlayer);
         }
     }
 };
