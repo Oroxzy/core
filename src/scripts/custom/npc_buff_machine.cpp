@@ -683,14 +683,7 @@ namespace
             case ROLE_MELEE_DPS:
                 ApplyMeleeConsumes(pPlayer);
 
-                if (pPlayer->GetClass() == CLASS_WARRIOR)
-                {
-                    if (IsWarriorArms(pPlayer))
-                        ApplyTimedBuff(pPlayer, SPELL_SAYGES_DARK_FORTUNE_OF_STRENGTH);
-                    else if (IsWarriorFury(pPlayer))
-                        ApplyTimedBuff(pPlayer, SPELL_SAYGES_DARK_FORTUNE_OF_DAMAGE);
-                }
-                else if (pPlayer->GetClass() == CLASS_HUNTER)
+                if (pPlayer->GetClass() == CLASS_HUNTER)
                 {
                     ApplyTimedBuff(pPlayer, SPELL_SWIFTNESS_OF_ZANZA);
                 }
