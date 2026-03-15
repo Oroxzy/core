@@ -795,6 +795,7 @@ struct npc_buff_machineAI : public ScriptedAI
     explicit npc_buff_machineAI(Creature* pCreature)
         : ScriptedAI(pCreature), m_scanTimer(kScanIntervalMs)
     {
+        m_creature->EnableMoveInLosEvent();
     }
 
     std::map<uint32, uint32> m_playerCooldowns;
@@ -804,6 +805,7 @@ struct npc_buff_machineAI : public ScriptedAI
     {
         m_playerCooldowns.clear();
         m_scanTimer = kScanIntervalMs;
+        m_creature->EnableMoveInLosEvent();
     }
 
     void UpdateCooldowns(uint32 diff)
@@ -901,34 +903,10 @@ struct npc_buff_machineAI : public ScriptedAI
     {
         if (m_creature->GetEntry() != kBuffNpcEntry)
             return;
-
+    
         UpdateCooldowns(diff);
-
-        if (m_scanTimer > diff)
-        {
-            m_scanTimer -= diff;
-            return;
-        }
-
-        m_scanTimer = kScanIntervalMs;
-
-        Map* pMap = m_creature->GetMap();
-        if (!pMap)
-            return;
-
-        Map::PlayerList const& players = pMap->GetPlayers();
-        if (players.isEmpty())
-            return;
-
-        for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
-        {
-            Player* pPlayer = itr->getSource();
-            if (!pPlayer)
-                continue;
-
-            ProcessPlayer(pPlayer);
-        }
     }
+    
 };
 
 CreatureAI* GetAI_npc_buff_machine(Creature* pCreature)
