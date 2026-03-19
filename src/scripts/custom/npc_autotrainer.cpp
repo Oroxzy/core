@@ -551,9 +551,53 @@ static uint32 ResolveTalentSpellIdForRank(uint32 talentSpellId, uint8 rank)
     return resolvedSpellId;
 }
 
+
+static uint32 FindNextSpellInChainLinear(uint32 spellId)
+{
+    // Purpose: Find the next spell rank in a chain without relying on SpellMgr::GetNextSpellInChain,
+    // because some vMaNGOS branches only expose GetPrevSpellInChain.
+    if (!spellId)
+        return 0;
+
+    uint32 maxSpellId = sSpellMgr.GetMaxSpellId();
+    if (maxSpellId <= spellId)
+        return 0;
+
+    for (uint32 id = spellId + 1; id <= maxSpellId; ++id)
+    {
+        if (sSpellMgr.GetPrevSpellInChain(id) == spellId)
+            return id;
+    }
+
+    return 0;
+}
+
+static uint32 ResolveTalentSpellIdForRank(uint32 talentSpellId, uint8 rank)
+{
+    // Purpose: Convert a base talent spell id plus DB rank into the concrete spell id.
+    // Rank 1 uses the base spell directly. Higher ranks are resolved through the spell chain.
+    if (!talentSpellId)
+        return 0;
+
+    if (rank <= 1)
+        return talentSpellId;
+
+    uint32 resolvedSpellId = talentSpellId;
+    for (uint8 currentRank = 1; currentRank < rank; ++currentRank)
+    {
+        uint32 nextSpellId = FindNextSpellInChainLinear(resolvedSpellId);
+        if (!nextSpellId)
+            break;
+
+        resolvedSpellId = nextSpellId;
+    }
+
+    return resolvedSpellId;
+}
+
 static void LearnTalentsFromTemplate(Player* pPlayer, uint32 tempId)
 {
-    // Purpose: Learn the template talent spells exactly as defined in the DB.
+    // Purpose: Learn the template talent spells using the DB base spell id plus rank.
     if (!pPlayer)
         return;
 
