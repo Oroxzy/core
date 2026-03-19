@@ -78,7 +78,7 @@ struct AutoTrainerSource
 {
     uint32 trainerId;
     uint32 trainerEntry;
-    bool   isPetTrainer; // true nur for Pet Trainer (Hunter)
+    bool   isPetTrainer; // true nur fuer Pet Trainer (Hunter)
 
     AutoTrainerSource() : trainerId(0), trainerEntry(0), isPetTrainer(false) {}
 };
@@ -91,6 +91,7 @@ static std::vector<AutoTrainerSource> gWeaponSources;
 
 // Forward declarations for helper functions used before their definitions.
 static uint32 LearnAllAvailableInLoop(Player* pPlayer, Creature* pCreatureCaster);
+static uint32 FindNextSpellInChainLinear(uint32 spellId);
 static uint32 ResolveTalentSpellIdForRank(uint32 talentSpellId, uint8 rank);
 
 
@@ -527,40 +528,15 @@ static void AddBagsForClass(Player* pPlayer)
 }
 
 
-static uint32 ResolveTalentSpellIdForRank(uint32 talentSpellId, uint8 rank)
-{
-    // Purpose: Convert a base talent spell id plus DB rank into the concrete spell id.
-    // If the DB already stores the final spell id, this still remains safe because
-    // the chain walk simply stops when no higher rank exists.
-    if (!talentSpellId)
-        return 0;
-
-    if (rank <= 1)
-        return talentSpellId;
-
-    uint32 resolvedSpellId = talentSpellId;
-    for (uint8 currentRank = 1; currentRank < rank; ++currentRank)
-    {
-        uint32 nextSpellId = sSpellMgr.GetNextSpellInChain(resolvedSpellId);
-        if (!nextSpellId)
-            break;
-
-        resolvedSpellId = nextSpellId;
-    }
-
-    return resolvedSpellId;
-}
-
-
 static uint32 FindNextSpellInChainLinear(uint32 spellId)
 {
-    // Purpose: Find the next spell rank in a chain without relying on SpellMgr::GetNextSpellInChain,
-    // because some vMaNGOS branches only expose GetPrevSpellInChain.
+    // Purpose: Find the next spell in a chain without relying on SpellMgr::GetNextSpellInChain.
+    // Some vMaNGOS branches only expose GetPrevSpellInChain.
     if (!spellId)
         return 0;
 
     uint32 maxSpellId = sSpellMgr.GetMaxSpellId();
-    if (maxSpellId <= spellId)
+    if (spellId >= maxSpellId)
         return 0;
 
     for (uint32 id = spellId + 1; id <= maxSpellId; ++id)
@@ -574,8 +550,9 @@ static uint32 FindNextSpellInChainLinear(uint32 spellId)
 
 static uint32 ResolveTalentSpellIdForRank(uint32 talentSpellId, uint8 rank)
 {
-    // Purpose: Convert a base talent spell id plus DB rank into the concrete spell id.
-    // Rank 1 uses the base spell directly. Higher ranks are resolved through the spell chain.
+    // Purpose: Convert a base talent spell id plus rank into the concrete spell id.
+    // If the DB already stores the final spell id, rank 1 remains safe and higher ranks
+    // simply stop when no next spell exists in the chain.
     if (!talentSpellId)
         return 0;
 
@@ -597,7 +574,7 @@ static uint32 ResolveTalentSpellIdForRank(uint32 talentSpellId, uint8 rank)
 
 static void LearnTalentsFromTemplate(Player* pPlayer, uint32 tempId)
 {
-    // Purpose: Learn the template talent spells using the DB base spell id plus rank.
+    // Purpose: Learn template talent spells using the stored spell id plus rank.
     if (!pPlayer)
         return;
 
@@ -738,7 +715,7 @@ static void ExportHunterPetToDB(Player* pPlayer)
     SqlStatement stmtDel = CharacterDatabase.CreateStatement(delPet, "DELETE FROM template_pets WHERE entry = ?");
     stmtDel.PExecute(pet->GetEntry());
 
-    std::string escapedName = cInfo->name;
+    std::string escapedName = cInfo->name ? cInfo->name : "";
     CharacterDatabase.escape_string(escapedName);
 
     CharacterDatabase.PExecute(
@@ -957,13 +934,13 @@ static void ShowHunterPetMenu(Player* pPlayer, Creature* pCreature)
 
 static uint32 GetMaxPlayerLevel_Cached()
 {
-    // Purpose: Vanilla Max-Level
+    // Zweck: Vanilla Max-Level
     return 60;
 }
 
 static uint16 GetMaxSkillForPlayerLevel(Player* pPlayer)
 {
-    // Purpose: Skill-Max nach Level (lvl*5, max 300)
+    // Zweck: Skill-Max nach Level (lvl*5, max 300)
     if (!pPlayer)
         return 1;
 
@@ -980,7 +957,7 @@ static uint16 GetMaxSkillForPlayerLevel(Player* pPlayer)
 
 static bool StrContainsI(std::string const& haystack, char const* needle)
 {
-    // Purpose: ASCII case-insensitive contains
+    // Zweck: ASCII case-insensitive contains
     if (!needle || !*needle)
         return true;
 
@@ -1002,7 +979,7 @@ static bool StrContainsI(std::string const& haystack, char const* needle)
 
 static bool StrContainsI(char const* haystack, char const* needle)
 {
-    // Purpose: Wrapper for const char*
+    // Zweck: Wrapper fuer const char*
     if (!needle || !*needle)
         return true;
 
@@ -1014,7 +991,7 @@ static bool StrContainsI(char const* haystack, char const* needle)
 
 static void SetSkillToMaxIfKnown(Player* pPlayer, uint32 skillId, uint16 maxValue)
 {
-    // Purpose: Skill nur maxen wenn vorhanden
+    // Zweck: Skill nur maxen wenn vorhanden
     if (!pPlayer || !skillId)
         return;
 
@@ -1026,7 +1003,7 @@ static void SetSkillToMaxIfKnown(Player* pPlayer, uint32 skillId, uint16 maxValu
 
 static void MaxOutWeaponDefenseAndRiding(Player* pPlayer)
 {
-    // Purpose: Weapon/Defense/Riding Skills auf Level-Max
+    // Zweck: Weapon/Defense/Riding Skills auf Level-Max
     if (!pPlayer)
         return;
 
@@ -1055,10 +1032,10 @@ static void MaxOutWeaponDefenseAndRiding(Player* pPlayer)
 
 static void ResolveTrainerSourcesForClass(uint8 playerClass)
 {
-    // Purpose: Trainerquellen for Klasse sammeln (inkl. Pet Trainer for Hunter)
-    // IMPORTANT:
+    // Zweck: Trainerquellen fuer Klasse sammeln (inkl. Pet Trainer fuer Hunter)
+    // WICHTIG:
     // - Pet Trainer (Hunter) ist erlaubt und wird markiert (isPetTrainer = true)
-    // - Demon Trainer (Warlock) NICHT via TrainerSpellData lernen (Grimoires hardcoded) => wird hier NICHT als Source aufgenommen
+    // - Demon Trainer (Warlock) NICHT ueber TrainerSpellData lernen (Grimoires hardcoded) => wird hier NICHT als Source aufgenommen
 
     if (playerClass >= 12)
         return;
@@ -1184,7 +1161,7 @@ static void ResolveTrainerSourcesForClass(uint8 playerClass)
 
 static void ResolveWeaponTrainerSources()
 {
-    // Purpose: Weapon Master Quellen einmalig sammeln
+    // Zweck: Weapon Master Quellen einmalig sammeln
     if (gWeaponSourcesResolved)
         return;
 
@@ -1255,7 +1232,7 @@ static void ResolveWeaponTrainerSources()
 
 static TrainerSpellData const* GetTrainerSpells_EntryFirst_FallbackTemplate(AutoTrainerSource const& src)
 {
-    // Purpose: TrainerSpellData holen (Entry bevorzugt, sonst Template)
+    // Zweck: TrainerSpellData holen (Entry bevorzugt, sonst Template)
     if (src.trainerEntry)
     {
         TrainerSpellData const* byEntry = sObjectMgr.GetNpcTrainerSpells(src.trainerEntry);
@@ -1274,7 +1251,7 @@ static std::vector<uint32> gNextInChain;
 
 static void BuildSpellChainNextCache()
 {
-    // Purpose: Next-in-chain Cache bauen (einmalig)
+    // Zweck: Next-in-chain Cache bauen (einmalig)
     if (gSpellChainNextBuilt)
         return;
 
@@ -1307,7 +1284,7 @@ static uint32 GetNextSpellInChain_Cached(uint32 spellId)
 
 static bool IsPureLearnContainerSpell(uint32 spellId)
 {
-    // Purpose: Detect "pure learn container" spells (nur LearnSpell effects)
+    // Zweck: Detect "pure learn container" spells (nur LearnSpell effects)
     SpellEntry const* proto = sSpellMgr.GetSpellEntry(spellId);
     if (!proto)
         return false;
@@ -1328,7 +1305,7 @@ static bool IsPureLearnContainerSpell(uint32 spellId)
 
 static uint32 LearnHigherRanksFromSpellChains(Player* pPlayer)
 {
-    // Purpose: Hoehere Ranks aus Spell Chains lernen
+    // Zweck: Hoehere Ranks aus Spell Chains lernen
     if (!pPlayer)
         return 0;
 
@@ -1374,7 +1351,7 @@ static uint32 LearnHigherRanksFromSpellChains(Player* pPlayer)
 
 static uint32 GetMinLevelForSpecialSpell(uint32 spellId)
 {
-    // Purpose: Mindestlevel for gewisse Spezial-/Quest-Spells
+    // Zweck: Mindestlevel fuer gewisse Spezial-/Quest-Spells
     switch (spellId)
     {
         case 688:   return 1;
@@ -1444,7 +1421,7 @@ static uint32 GetMinLevelForSpecialSpell(uint32 spellId)
 
 static bool LearnDirectSpellIfMissing(Player* pPlayer, uint32 spellId)
 {
-    // Purpose: direkte Spezialspells lernen (Quest etc.)
+    // Zweck: direkte Spezialspells lernen (Quest etc.)
     if (!pPlayer || !spellId)
         return false;
 
@@ -1471,7 +1448,7 @@ static bool LearnDirectSpellIfMissing(Player* pPlayer, uint32 spellId)
 
 static bool LearnQuestSpellIfAllowed(Player* pPlayer, uint32 spellId)
 {
-    // Purpose: Spezialspell nur wenn Class/Race passt
+    // Zweck: Spezialspell nur wenn Class/Race passt
     if (!pPlayer || !spellId)
         return false;
 
@@ -1483,7 +1460,7 @@ static bool LearnQuestSpellIfAllowed(Player* pPlayer, uint32 spellId)
 
 static uint32 LearnQuestSpecialSpellsForClass(Player* pPlayer)
 {
-    // Purpose: Whitelist Quest-/Spezialspells pro Klasse
+    // Zweck: Whitelist Quest-/Spezialspells pro Klasse
     if (!pPlayer)
         return 0;
 
@@ -1577,11 +1554,11 @@ static uint32 LearnQuestSpecialSpellsForClass(Player* pPlayer)
 
 static bool CastTrainerTeachSpellToUnit(Player* pPlayer, Creature* pCreatureCaster, TrainerSpell const* trainerSpell, Unit* target)
 {
-    // Purpose: TrainerSpell wie Trainer "ausfuehren" (triggered cast auf target)
+    // Zweck: TrainerSpell wie Trainer "ausfuehren" (triggered cast auf target)
     if (!pPlayer || !trainerSpell || !target)
         return false;
 
-    // Crash safety: the target must still be valid in the world context.
+    // Crash-Schutz: target muss im World-Kontext gueltig sein
     if (!target->IsInWorld())
         return false;
 
@@ -1614,7 +1591,7 @@ static bool CastTrainerTeachSpellToUnit(Player* pPlayer, Creature* pCreatureCast
 
 static uint32 LearnFromTrainerSpellData_OnePass(Player* pPlayer, Creature* pCreatureCaster, TrainerSpellData const* pData, Unit* target)
 {
-    // Purpose: Ein Pass via TrainerSpellData, nur GREEN Spells
+    // Zweck: Ein Pass ueber TrainerSpellData, nur GREEN Spells
     if (!pPlayer || !pData || !target)
         return 0;
 
@@ -1637,7 +1614,7 @@ static uint32 LearnFromTrainerSpellData_OnePass(Player* pPlayer, Creature* pCrea
 
 static bool CastTriggeredSpellOnPlayer(Player* pPlayer, Creature* pCreatureCaster, uint32 spellId)
 {
-    // Purpose: Teach-/Item-Spell (Grimoire) auf Player casten (triggered)
+    // Zweck: Teach-/Item-Spell (Grimoire) auf Player casten (triggered)
     if (!pPlayer || !spellId)
         return false;
 
@@ -1679,9 +1656,9 @@ static bool CastTriggeredSpellOnPlayer(Player* pPlayer, Creature* pCreatureCaste
 
 static bool CastTriggeredSpellToUnit(Player* pPlayer, Creature* /*pCreatureCaster*/, uint32 spellId, Unit* target)
 {
-    // Purpose: Teach-/Item-Spell (Grimoire) triggered auf Ziel (Pet) casten
-    // Fix: The caster is always the player because the NPC may despawn and otherwise cause a use-after-free crash.
-    // Fix: Explicitly set the target pet.
+    // Zweck: Teach-/Item-Spell (Grimoire) triggered auf Ziel (Pet) casten
+    // Fix: Caster IMMER Player (NPC kann despawnen => Use-after-free Crash)
+    // Fix: Target explizit setzen (Pet)
 
     if (!pPlayer || !spellId || !target)
         return false;
@@ -1727,9 +1704,9 @@ static bool CastTriggeredSpellToUnit(Player* pPlayer, Creature* /*pCreatureCaste
 
 static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureCaster*/)
 {
-    // Purpose: Warlock-Grimoires HARD-CODED korrekt anwenden:
+    // Zweck: Warlock-Grimoires HARD-CODED korrekt anwenden:
     // - Pet wird je nach vorhandenem Summon-Spell beschworen (Imp/Voidwalker/Succubus/Felhunter)
-    // - NUR die zu diesem Pet gehoerenden Learned-Spells are gelernt (gemäss CSV)
+    // - NUR die zu diesem Pet gehoerenden Learned-Spells werden gelernt (gemäss CSV)
     // - Lernen erfolgt DIREKT via pet->LearnSpell()
     //
     // Fix: verhindert, dass jedes Pet jeden Spell lernt (Felhunter/Imp/etc strikt getrennt)
@@ -1741,7 +1718,7 @@ static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureC
     if (cls != CLASS_WARLOCK)
         return 0;
 
-    // Summon-Spells for Warlock-Pets (Classic)
+    // Summon-Spells fuer Warlock-Pets (Classic)
     static const uint32 kSummonImp       = 688;
     static const uint32 kSummonVoidwalker= 697;
     static const uint32 kSummonSuccubus  = 712;
@@ -1749,9 +1726,9 @@ static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureC
 
     struct GrimoirePetSpell
     {
-        uint32 summonSpell;   // welches Pet (via UNIT_CREATED_BY_SPELL)
-        uint32 teachSpell;    // Grimoire-Teach-Spell (nur for Doku/Debug)
-        uint32 learnedSpell;  // echter Pet-Spell der gelernt are soll
+        uint32 summonSpell;   // welches Pet (ueber UNIT_CREATED_BY_SPELL)
+        uint32 teachSpell;    // Grimoire-Teach-Spell (nur fuer Doku/Debug)
+        uint32 learnedSpell;  // echter Pet-Spell der gelernt werden soll
     };
 
     // HARD-CODE Mapping gemäss deinem CSV (TeachSpell -> LearnedSpell), strikt pro Pet
@@ -1917,7 +1894,7 @@ static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureC
 
 static uint32 LearnAllAvailableInLoop(Player* pPlayer, Creature* pCreatureCaster)
 {
-    // Purpose: Mehrere Paesse, bis nichts mehr zu lernen ist
+    // Zweck: Mehrere Paesse, bis nichts mehr zu lernen ist
     if (!pPlayer)
         return 0;
 
@@ -1950,7 +1927,7 @@ static uint32 LearnAllAvailableInLoop(Player* pPlayer, Creature* pCreatureCaster
                 if (!classSpells)
                     continue;
 
-                // IMPORTANT: Pet Trainer Spells beim Hunter sollen IMMER gelernt are, auch ohne/egal welches Pet.
+                // WICHTIG: Pet Trainer Spells beim Hunter sollen IMMER gelernt werden, auch ohne/egal welches Pet.
                 // Darum: target ist immer Player (nicht Pet).
                 Unit* target = (Unit*)pPlayer;
 
@@ -1979,7 +1956,7 @@ static uint32 LearnAllAvailableInLoop(Player* pPlayer, Creature* pCreatureCaster
 
 static uint32 LevelToAndLearn(Player* pPlayer, Creature* pCreatureCaster, uint32 targetLevel)
 {
-    // Purpose: Level setzen + lernen
+    // Zweck: Level setzen + lernen
     if (!pPlayer)
         return 0;
 
