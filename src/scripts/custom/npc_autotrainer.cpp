@@ -89,6 +89,9 @@ static std::vector<AutoTrainerSource> gClassSources[12];
 static bool gWeaponSourcesResolved = false;
 static std::vector<AutoTrainerSource> gWeaponSources;
 
+// Forward declarations for helper functions used before their definitions.
+static uint32 LearnAllAvailableInLoop(Player* pPlayer, Creature* pCreatureCaster);
+
 
 static const char* GetClassKeyString(Player* pPlayer)
 {
@@ -1503,14 +1506,14 @@ static bool CastTrainerTeachSpellToUnit(Player* pPlayer, Creature* pCreatureCast
     pPlayer->RemoveSpellsCausingAura(SPELL_AURA_MOUNTED);
 
     const bool kTriggered = true;
-	Unit* caster = (Unit*)pPlayer;
+    Unit* caster = (Unit*)pPlayer;
 
     Spell* spell = new Spell(caster, proto, kTriggered);
 
-	SpellCastTargets targets;
-	targets.setUnitTarget(target);
-	
-	SpellCastResult cast_result = spell->prepare(std::move(targets));
+    SpellCastTargets targets;
+    targets.setUnitTarget(target);
+    
+    SpellCastResult cast_result = spell->prepare(std::move(targets));
 
     if (cast_result != SPELL_CAST_OK)
     {
@@ -1568,14 +1571,14 @@ static bool CastTriggeredSpellOnPlayer(Player* pPlayer, Creature* pCreatureCaste
     pPlayer->RemoveSpellsCausingAura(SPELL_AURA_MOUNTED);
 
     const bool kTriggered = true;
-	Unit* caster = (Unit*)pPlayer;
+    Unit* caster = (Unit*)pPlayer;
 
     Spell* spell = new Spell(caster, proto, kTriggered);
 
-	SpellCastTargets targets;
-	targets.setUnitTarget(pPlayer);
-	
-	SpellCastResult cast_result = spell->prepare(std::move(targets));
+    SpellCastTargets targets;
+    targets.setUnitTarget(pPlayer);
+    
+    SpellCastResult cast_result = spell->prepare(std::move(targets));
 
     if (cast_result != SPELL_CAST_OK)
     {
@@ -1600,7 +1603,7 @@ static bool CastTriggeredSpellToUnit(Player* pPlayer, Creature* /*pCreatureCaste
 
     if (!target->IsInWorld())
         return false;
-	
+    
     if (!pPlayer->IsAlive())
         return false;
 
@@ -1840,9 +1843,9 @@ static uint32 LearnAllAvailableInLoop(Player* pPlayer, Creature* pCreatureCaster
     const uint32 kMaxPasses = 50;
     uint32 totalLearned = 0;
 
-	// Warlock Grimoires nur einmal pro "All learn" (sonst 50x Summons)
-	totalLearned += LearnWarlockGrimoireSpells(pPlayer, pCreatureCaster);
-		
+    // Warlock Grimoires nur einmal pro "All learn" (sonst 50x Summons)
+    totalLearned += LearnWarlockGrimoireSpells(pPlayer, pCreatureCaster);
+        
     for (uint32 pass = 0; pass < kMaxPasses; ++pass)
     {
         uint32 learnedThisPass = 0;
@@ -1943,10 +1946,10 @@ bool GossipHello_npc_autotrainer(Player* pPlayer, Creature* pCreature)
 
     pPlayer->PlayerTalkClass->ClearMenus();
 
-    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Alles lernen (aktuelles Level)",            GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEARN_CURRENT);
-    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "+10 Level und alles lernen",                GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_PLUS_10);
-    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Bis naechstes 10er-Level und alles lernen", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_NEXT_TEN);
-
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Learn all spells (current level)",        GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEARN_CURRENT);
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Gain +10 levels and learn all spells",    GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_PLUS_10);
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Level up to next multiple of 10 and learn all spells", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_NEXT_TEN);
+    
     if (TemplateNpcCache::HasAnyForClass(pPlayer))
         pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, "Gear- und Talent-Templates", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_SHOW_SPECS);
 
@@ -1965,7 +1968,7 @@ bool GossipHello_npc_autotrainer(Player* pPlayer, Creature* pCreature)
     if (pPlayer->GetByteValue(UNIT_FIELD_BYTES_0, 1) == CLASS_WARLOCK)
         pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Teach my current warlock pet", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_TEACH_WARLOCK_PET);
 
-    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Abbrechen", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_CANCEL);
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Cancel", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_CANCEL);
     pPlayer->SEND_GOSSIP_MENU(DEFAULT_GOSSIP_MESSAGE, pCreature->GetObjectGuid());
     return true;
 }
