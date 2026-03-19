@@ -91,6 +91,7 @@ static std::vector<AutoTrainerSource> gWeaponSources;
 
 // Forward declarations for helper functions used before their definitions.
 static uint32 LearnAllAvailableInLoop(Player* pPlayer, Creature* pCreatureCaster);
+static uint32 ResolveTalentSpellIdForRank(uint32 talentSpellId, uint8 rank);
 
 
 static const char* GetClassKeyString(Player* pPlayer)
@@ -525,9 +526,34 @@ static void AddBagsForClass(Player* pPlayer)
     }
 }
 
+
+static uint32 ResolveTalentSpellIdForRank(uint32 talentSpellId, uint8 rank)
+{
+    // Purpose: Convert a base talent spell id plus DB rank into the concrete spell id.
+    // If the DB already stores the final spell id, this still remains safe because
+    // the chain walk simply stops when no higher rank exists.
+    if (!talentSpellId)
+        return 0;
+
+    if (rank <= 1)
+        return talentSpellId;
+
+    uint32 resolvedSpellId = talentSpellId;
+    for (uint8 currentRank = 1; currentRank < rank; ++currentRank)
+    {
+        uint32 nextSpellId = sSpellMgr.GetNextSpellInChain(resolvedSpellId);
+        if (!nextSpellId)
+            break;
+
+        resolvedSpellId = nextSpellId;
+    }
+
+    return resolvedSpellId;
+}
+
 static void LearnTalentsFromTemplate(Player* pPlayer, uint32 tempId)
 {
-    // Purpose: Learn the template talent spell ids exactly as stored in the DB.
+    // Purpose: Learn the template talent spells exactly as defined in the DB.
     if (!pPlayer)
         return;
 
@@ -536,7 +562,13 @@ static void LearnTalentsFromTemplate(Player* pPlayer, uint32 tempId)
         return;
 
     for (std::vector<TemplateNpcCache::TalentTemplateEntry>::const_iterator it = talents->begin(); it != talents->end(); ++it)
-        pPlayer->LearnSpell(it->talentSpellId, false, true);
+    {
+        uint32 spellId = ResolveTalentSpellIdForRank(it->talentSpellId, it->rank);
+        if (!spellId)
+            continue;
+
+        pPlayer->LearnSpell(spellId, false, true);
+    }
 }
 
 static void EquipItemsFromTemplate(Player* pPlayer, uint32 tempId)
@@ -594,6 +626,9 @@ static void ApplyTemplateToPlayer(Player* pPlayer, Creature* pCreature, uint32 t
     if (!pPlayer || !pCreature || !tempId)
         return;
 
+    if (!TemplateNpcCache::GetTemplate(pPlayer, tempId))
+        return;
+
     DeleteEquippedGear(pPlayer);
     DeleteBagsAndContent(pPlayer);
     pPlayer->ResetTalents(true);
@@ -610,7 +645,7 @@ static void ApplyTemplateToPlayer(Player* pPlayer, Creature* pCreature, uint32 t
 
 static void SaveHunterPetSpellsToDB(Player* pPlayer)
 {
-    // Purpose: Save the currently active hunter pet spellbook to the same DB table as the template NPC.
+    // Purpose: Save the current hunter pet spellbook to the template table.
     if (!pPlayer || pPlayer->GetByteValue(UNIT_FIELD_BYTES_0, 1) != CLASS_HUNTER)
         return;
 
@@ -618,12 +653,13 @@ static void SaveHunterPetSpellsToDB(Player* pPlayer)
     if (!pet || !pet->IsControlled() || pet->GetPetType() != HUNTER_PET)
         return;
 
-    static SqlStatementID delSpell;
+    static SqlStatementID delAllSpells;
     static SqlStatementID insSpell;
-    SqlStatement stmtDel = CharacterDatabase.CreateStatement(delSpell, "DELETE FROM template_pet_spell WHERE entry = ? AND spell = ?");
+    SqlStatement stmtDelAll = CharacterDatabase.CreateStatement(delAllSpells, "DELETE FROM template_pet_spell WHERE entry = ?");
     SqlStatement stmtIns = CharacterDatabase.CreateStatement(insSpell, "INSERT INTO template_pet_spell (entry, spell, active) VALUES (?, ?, 1)");
 
     uint32 petEntry = pet->GetEntry();
+    stmtDelAll.PExecute(petEntry);
 
     for (PetSpellMap::iterator it = pet->m_petSpells.begin(); it != pet->m_petSpells.end(); ++it)
     {
@@ -633,7 +669,6 @@ static void SaveHunterPetSpellsToDB(Player* pPlayer)
         if (it->second.state == PETSPELL_REMOVED)
             continue;
 
-        stmtDel.PExecute(petEntry, it->first);
         stmtIns.PExecute(petEntry, it->first);
     }
 }
@@ -1502,7 +1537,7 @@ static bool CastTrainerTeachSpellToUnit(Player* pPlayer, Creature* pCreatureCast
     if (!pPlayer || !trainerSpell || !target)
         return false;
 
-    // Crash-Schutz: target muss im World-Kontext gueltig sein
+    // Crash safety: the target must still be valid in the world context.
     if (!target->IsInWorld())
         return false;
 
@@ -1601,8 +1636,8 @@ static bool CastTriggeredSpellOnPlayer(Player* pPlayer, Creature* pCreatureCaste
 static bool CastTriggeredSpellToUnit(Player* pPlayer, Creature* /*pCreatureCaster*/, uint32 spellId, Unit* target)
 {
     // Purpose: Teach-/Item-Spell (Grimoire) triggered auf Ziel (Pet) casten
-    // Fix: Caster IMMER Player (NPC kann despawnen => Use-after-free Crash)
-    // Fix: Target explizit setzen (Pet)
+    // Fix: The caster is always the player because the NPC may despawn and otherwise cause a use-after-free crash.
+    // Fix: Explicitly set the target pet.
 
     if (!pPlayer || !spellId || !target)
         return false;
@@ -2012,7 +2047,6 @@ bool GossipSelect_npc_autotrainer(Player* pPlayer, Creature* pCreature, uint32 s
     if (sender == GOSSIP_SENDER_HUNTER_PET_SELECT)
     {
         CreateHunterPet(pPlayer, pCreature, action);
-        LearnPetSpellsFromDB(pPlayer);
         pPlayer->CLOSE_GOSSIP_MENU();
         return true;
     }
