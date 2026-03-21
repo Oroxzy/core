@@ -16,7 +16,8 @@ enum
     GOSSIP_ACTION_LEARN_CURRENT         = GOSSIP_ACTION_INFO_DEF + 1,
     GOSSIP_ACTION_LEVEL_PLUS_10         = GOSSIP_ACTION_INFO_DEF + 2,
     GOSSIP_ACTION_LEVEL_NEXT_TEN        = GOSSIP_ACTION_INFO_DEF + 3,
-    GOSSIP_ACTION_CANCEL                = GOSSIP_ACTION_INFO_DEF + 4,
+    GOSSIP_ACTION_LEVEL_60              = GOSSIP_ACTION_INFO_DEF + 4,
+    GOSSIP_ACTION_CANCEL                = GOSSIP_ACTION_INFO_DEF + 5,
     GOSSIP_ACTION_SHOW_SPECS            = GOSSIP_ACTION_INFO_DEF + 20,
     GOSSIP_ACTION_BACK_TO_MAIN          = GOSSIP_ACTION_INFO_DEF + 21,
     GOSSIP_ACTION_SHOW_HUNTER_PETS      = GOSSIP_ACTION_INFO_DEF + 22,
@@ -589,6 +590,18 @@ static void LearnTalentsFromTemplate(Player* pPlayer, uint32 tempId)
     }
 }
 
+static bool CanUseTemplateItemAtCurrentLevel(Player* pPlayer, ItemPrototype const* pProto)
+{
+    // Purpose: Check whether the player can use a template item at the current level.
+    if (!pPlayer || !pProto)
+        return false;
+
+    if (pProto->RequiredLevel > pPlayer->GetLevel())
+        return false;
+
+    return true;
+}
+
 static void EquipItemsFromTemplate(Player* pPlayer, uint32 tempId)
 {
     // Purpose: Equip the exact template gear and permanent enchants.
@@ -608,6 +621,10 @@ static void EquipItemsFromTemplate(Player* pPlayer, uint32 tempId)
 
         ItemPrototype const* pProto = sObjectMgr.GetItemPrototype(itemEntry);
         if (!pProto)
+            continue;
+
+        // Skip items that the player cannot use yet at the current level.
+        if (!CanUseTemplateItemAtCurrentLevel(pPlayer, pProto))
             continue;
 
         if (pProto->RequiredReputationFaction && pProto->RequiredReputationRank > 0)
@@ -928,8 +945,8 @@ static void ShowHunterPetMenu(Player* pPlayer, Creature* pCreature)
 
 static uint32 GetMaxPlayerLevel_Cached()
 {
-    // Purpose: Vanilla Max-Level
-    return 60;
+    // Purpose: Return the configured core player level cap.
+    return sWorld.getConfig(CONFIG_UINT32_MAX_PLAYER_LEVEL);
 }
 
 
@@ -1968,6 +1985,14 @@ static uint32 LevelPlusTenAndLearn(Player* pPlayer, Creature* pCreatureCaster)
     return LevelToAndLearn(pPlayer, pCreatureCaster, pPlayer->GetLevel() + 10);
 }
 
+static uint32 LevelTo60AndLearn(Player* pPlayer, Creature* pCreatureCaster)
+{
+    if (!pPlayer)
+        return 0;
+
+    return LevelToAndLearn(pPlayer, pCreatureCaster, 60);
+}
+
 static uint32 LevelToNextTenAndLearn(Player* pPlayer, Creature* pCreatureCaster)
 {
     if (!pPlayer)
@@ -1992,6 +2017,7 @@ bool GossipHello_npc_autotrainer(Player* pPlayer, Creature* pCreature)
     pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Learn all spells (current level)",        GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEARN_CURRENT);
     pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Gain +10 levels and learn all spells",    GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_PLUS_10);
     pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Level up to next multiple of 10 and learn all spells", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_NEXT_TEN);
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Instant level 60 and learn all spells",   GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_60);
     
     if (TemplateNpcCache::HasAnyForClass(pPlayer))
         pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, "Gear and Talent Templates", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_SHOW_SPECS);
@@ -2124,6 +2150,10 @@ bool GossipSelect_npc_autotrainer(Player* pPlayer, Creature* pCreature, uint32 s
 
         case GOSSIP_ACTION_LEVEL_NEXT_TEN:
             learned = LevelToNextTenAndLearn(pPlayer, pCreature);
+            break;
+
+        case GOSSIP_ACTION_LEVEL_60:
+            learned = LevelTo60AndLearn(pPlayer, pCreature);
             break;
 
         default:
