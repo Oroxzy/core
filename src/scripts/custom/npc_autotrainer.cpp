@@ -23,7 +23,9 @@ enum
     GOSSIP_ACTION_SHOW_HUNTER_PETS      = GOSSIP_ACTION_INFO_DEF + 22,
     GOSSIP_ACTION_MAKE_PET_HAPPY        = GOSSIP_ACTION_INFO_DEF + 23,
     GOSSIP_ACTION_SAVE_CURRENT_PET      = GOSSIP_ACTION_INFO_DEF + 24,
-    GOSSIP_ACTION_TEACH_WARLOCK_PET     = GOSSIP_ACTION_INFO_DEF + 25
+    GOSSIP_ACTION_TEACH_WARLOCK_PET     = GOSSIP_ACTION_INFO_DEF + 25,
+    GOSSIP_ACTION_RESET_TALENTS_CONFIRM = GOSSIP_ACTION_INFO_DEF + 26,
+    GOSSIP_ACTION_RESET_TALENTS_DO      = GOSSIP_ACTION_INFO_DEF + 27
 };
 
 static const uint32 GOSSIP_SENDER_SPEC_SELECT        = 200001;
@@ -917,6 +919,18 @@ static void ShowTemplateConfirmMenu(Player* pPlayer, Creature* pCreature, uint32
     pPlayer->SEND_GOSSIP_MENU(DEFAULT_GOSSIP_MESSAGE, pCreature->GetObjectGuid());
 }
 
+static void ShowTalentResetConfirmMenu(Player* pPlayer, Creature* pCreature)
+{
+    // Purpose: Show a confirmation step before resetting all talents.
+    if (!pPlayer || !pCreature)
+        return;
+
+    pPlayer->PlayerTalkClass->ClearMenus();
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Yes, reset all talents", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_RESET_TALENTS_DO);
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Back", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_BACK_TO_MAIN);
+    pPlayer->SEND_GOSSIP_MENU(DEFAULT_GOSSIP_MESSAGE, pCreature->GetObjectGuid());
+}
+
 static void ShowHunterPetMenu(Player* pPlayer, Creature* pCreature)
 {
     // Purpose: Show the hunter pet selector copied from the template NPC behaviour.
@@ -1029,8 +1043,8 @@ static void ResolveTrainerSourcesForClass(uint8 playerClass)
 {
     // Purpose: Collect trainer sources for the class, including hunter pet trainers.
     // IMPORTANT:
-    // - Pet Trainer (Hunter) ist erlaubt und wird markiert (isPetTrainer = true)
-    // - Demon Trainer (Warlock) NICHT ueber TrainerSpellData lernen (Grimoires hardcoded) => wird hier NICHT als Source aufgenommen
+    // - Hunter pet trainers are allowed and marked with isPetTrainer = true.
+    // - Demon trainers for warlocks are intentionally excluded because grimoires are handled separately.
 
     if (playerClass >= 12)
         return;
@@ -1279,7 +1293,7 @@ static uint32 GetNextSpellInChain_Cached(uint32 spellId)
 
 static bool IsPureLearnContainerSpell(uint32 spellId)
 {
-    // Purpose: Detect "pure learn container" spells (nur LearnSpell effects)
+    // Purpose: Detect pure learn-container spells that only teach another spell.
     SpellEntry const* proto = sSpellMgr.GetSpellEntry(spellId);
     if (!proto)
         return false;
@@ -1652,8 +1666,8 @@ static bool CastTriggeredSpellOnPlayer(Player* pPlayer, Creature* pCreatureCaste
 static bool CastTriggeredSpellToUnit(Player* pPlayer, Creature* /*pCreatureCaster*/, uint32 spellId, Unit* target)
 {
     // Purpose: Cast a teach or item spell (grimoire) on the target pet as a triggered cast.
-    // Fix: Caster IMMER Player (NPC kann despawnen => Use-after-free Crash)
-    // Fix: Target explizit setzen (Pet)
+    // Fix: Always use the player as caster because the NPC may despawn and cause a use-after-free crash.
+    // Fix: Explicitly set the target pet.
 
     if (!pPlayer || !spellId || !target)
         return false;
@@ -1700,11 +1714,11 @@ static bool CastTriggeredSpellToUnit(Player* pPlayer, Creature* /*pCreatureCaste
 static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureCaster*/)
 {
     // Purpose: Apply warlock grimoires through a strict hard-coded pet-to-spell mapping:
-    // - Pet wird je nach vorhandenem Summon-Spell beschworen (Imp/Voidwalker/Succubus/Felhunter)
-    // - NUR die zu diesem Pet gehoerenden Learned-Spells werden gelernt (gemäss CSV)
-    // - Lernen erfolgt DIREKT via pet->LearnSpell()
+    // - Each demon is summoned based on the available summon spell (Imp, Voidwalker, Succubus, Felhunter).
+    // - Only the learned spells that belong to that demon are taught.
+    // - Learning is applied directly via pet->LearnSpell().
     //
-    // Fix: verhindert, dass jedes Pet jeden Spell lernt (Felhunter/Imp/etc strikt getrennt)
+    // Fix: Prevents every demon from learning every spell by keeping the spell sets strictly separated.
 
     if (!pPlayer)
         return 0;
@@ -1713,7 +1727,7 @@ static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureC
     if (cls != CLASS_WARLOCK)
         return 0;
 
-    // Summon-Spells fuer Warlock-Pets (Classic)
+    // Classic warlock summon spells.
     static const uint32 kSummonImp       = 688;
     static const uint32 kSummonVoidwalker= 697;
     static const uint32 kSummonSuccubus  = 712;
@@ -1721,12 +1735,12 @@ static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureC
 
     struct GrimoirePetSpell
     {
-        uint32 summonSpell;   // welches Pet (ueber UNIT_CREATED_BY_SPELL)
-        uint32 teachSpell;    // Grimoire-Teach-Spell (nur fuer Doku/Debug)
-        uint32 learnedSpell;  // echter Pet-Spell der gelernt werden soll
+        uint32 summonSpell;   // Demon type identified through UNIT_CREATED_BY_SPELL.
+        uint32 teachSpell;    // Grimoire teaching spell, kept for documentation and debugging.
+        uint32 learnedSpell;  // Actual pet spell that should be learned.
     };
 
-    // HARD-CODE Mapping gemäss deinem CSV (TeachSpell -> LearnedSpell), strikt pro Pet
+    // Hard-coded mapping from the CSV: teach spell to learned spell, strictly separated per demon.
     static const GrimoirePetSpell kMap[] =
     {
         // ---------------- IMP ----------------
@@ -1807,7 +1821,7 @@ static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureC
         { kSummonFelhunter, 20435,  19480 }  // Paranoia
     };
 
-    // Ursprungs-Pet merken (damit wir am Schluss wieder herstellen koennen)
+    // Remember the original demon so it can be restored at the end.
     uint32 originalSummonSpell = 0;
     {
         Pet* curPet = pPlayer->GetPet();
@@ -1829,7 +1843,7 @@ static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureC
     {
         uint32 summonId = kSummonSpells[s];
 
-        // Nur Pets "durchprobieren", die der Warlock wirklich kennt
+        // Only test summon spells that the warlock actually knows.
         if (!pPlayer->HasSpell(summonId))
             continue;
 
@@ -1840,7 +1854,7 @@ static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureC
         if (summonProto->spellLevel > 0 && pPlayer->GetLevel() < uint32(summonProto->spellLevel))
             continue;
 
-        // Pet beschwoeren (triggered)
+        // Summon the demon as a triggered cast.
         pPlayer->CastSpell(pPlayer, summonId, true);
 
         Pet* pet = pPlayer->GetPet();
@@ -1850,11 +1864,11 @@ static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureC
         if (!pet->IsInWorld())
             continue;
 
-        // Sicherstellen, dass das gerade beschworene Pet wirklich zu diesem Summon gehoert
+        // Make sure the currently summoned demon really belongs to this summon spell.
         if (pet->GetUInt32Value(UNIT_CREATED_BY_SPELL) != summonId)
             continue;
 
-        // NUR die zu diesem Pet gehoerenden Spells lernen
+        // Teach only the spells that belong to this demon.
         for (size_t i = 0; i < (sizeof(kMap) / sizeof(kMap[0])); ++i)
         {
             if (kMap[i].summonSpell != summonId)
@@ -1871,7 +1885,7 @@ static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureC
             if (!learnedProto)
                 continue;
 
-            // Level-Check am Pet-Spell
+            // Check the required level for the pet spell.
             if (learnedProto->spellLevel > 0 && pPlayer->GetLevel() < uint32(learnedProto->spellLevel))
                 continue;
 
@@ -1880,7 +1894,7 @@ static uint32 LearnWarlockGrimoireSpells(Player* pPlayer, Creature* /*pCreatureC
         }
     }
 
-    // Urspruengliches Pet wiederherstellen (wenn eines aktiv war)
+    // Restore the original demon if one was active before.
     if (originalSummonSpell && pPlayer->HasSpell(originalSummonSpell))
         pPlayer->CastSpell(pPlayer, originalSummonSpell, true);
 
@@ -1922,8 +1936,8 @@ static uint32 LearnAllAvailableInLoop(Player* pPlayer, Creature* pCreatureCaster
                 if (!classSpells)
                     continue;
 
-                // IMPORTANT: Pet Trainer Spells beim Hunter sollen IMMER gelernt werden, auch ohne/egal welches Pet.
-                // Darum: target ist immer Player (nicht Pet).
+                // IMPORTANT: Hunter pet trainer spells should always be learned, regardless of the current pet state.
+                // Therefore the target is always the player, not the pet.
                 Unit* target = (Unit*)pPlayer;
 
                 learnedThisPass += LearnFromTrainerSpellData_OnePass(pPlayer, pCreatureCaster, classSpells, target);
@@ -2018,6 +2032,7 @@ bool GossipHello_npc_autotrainer(Player* pPlayer, Creature* pCreature)
     pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Gain +10 levels and learn all spells",    GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_PLUS_10);
     pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Level up to next multiple of 10 and learn all spells", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_NEXT_TEN);
     pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Instant level 60 and learn all spells",   GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_60);
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Reset talents", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_RESET_TALENTS_CONFIRM);
     
     if (TemplateNpcCache::HasAnyForClass(pPlayer))
         pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, "Gear and Talent Templates", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_SHOW_SPECS);
@@ -2100,6 +2115,12 @@ bool GossipSelect_npc_autotrainer(Player* pPlayer, Creature* pCreature, uint32 s
         return true;
     }
 
+    if (action == GOSSIP_ACTION_RESET_TALENTS_CONFIRM)
+    {
+        ShowTalentResetConfirmMenu(pPlayer, pCreature);
+        return true;
+    }
+
     if (action == GOSSIP_ACTION_MAKE_PET_HAPPY)
     {
         Pet* pet = pPlayer->GetPet();
@@ -2131,6 +2152,17 @@ bool GossipSelect_npc_autotrainer(Player* pPlayer, Creature* pCreature, uint32 s
             pPlayer->GetSession()->SendNotification("No new warlock pet spells were learned.");
         else
             pPlayer->GetSession()->SendNotification("Warlock pet spells learned: %u", learned);
+
+        pPlayer->CLOSE_GOSSIP_MENU();
+        return true;
+    }
+
+    if (action == GOSSIP_ACTION_RESET_TALENTS_DO)
+    {
+        if (pPlayer->ResetTalents(true))
+            pPlayer->GetSession()->SendNotification("All talents have been reset.");
+        else
+            pPlayer->GetSession()->SendNotification("There were no talents to reset.");
 
         pPlayer->CLOSE_GOSSIP_MENU();
         return true;
