@@ -2254,28 +2254,31 @@ void LearnQuestSpells(Player* player)
     }
 }
 
+static const uint32 TEMPLATE_NPC_MIN_TEMP_ID = 50;
+
 uint32 GetTemplateID()
 {
     auto TalentIdResult = CharacterDatabase.PQuery("SELECT MAX(temp_id) FROM template_npc_talents");
     auto GearIdResult = CharacterDatabase.PQuery("SELECT MAX(temp_id) FROM template_npc_gear");
 
-    uint32 TalentId;
-    uint32 GearId;
+    uint32 TalentId = 0;
+    uint32 GearId = 0;
 
     if (TalentIdResult)
     {
         Field* fields = TalentIdResult->Fetch();
-        TalentId = fields[0].GetInt32();
+        if (fields)
+            TalentId = fields[0].GetUInt32();
     }
     if (GearIdResult)
     {
         Field* fields = GearIdResult->Fetch();
-        GearId = fields[0].GetInt32();
+        if (fields)
+            GearId = fields[0].GetUInt32();
     }
-    if (GearId = TalentId)
-        return GearId + 1;
-    else
-        return 50;
+
+    uint32 nextId = std::max(TalentId, GearId) + 1;
+    return nextId < TEMPLATE_NPC_MIN_TEMP_ID ? TEMPLATE_NPC_MIN_TEMP_ID : nextId;
 }
 
 void perform_npc_vendor_template()
@@ -2334,23 +2337,24 @@ void perform_player_factionchange_items()
                 if (ItemPrototype const* horde_id_proto = sObjectMgr.GetItemPrototype(horde_id))
                     horde_id_name = horde_id_proto->Name1;
 
-                std::replace(alliance_id_name.begin(), alliance_id_name.end(), '\'', '\''); // replace quotes or Server sql will crash.
-                std::replace(horde_id_name.begin(), horde_id_name.end(), '\'', '"');
-
                 std::ostringstream QueryText;
 
                 QueryText << alliance_id_name << " / " << horde_id_name;
+                std::string comment = QueryText.str();
+                WorldDatabase.escape_string(comment);
 
-                WorldDatabase.PExecute("UPDATE player_factionchange_items SET comment = '%s' WHERE alliance_id='%u'", QueryText.str().c_str(), alliance_id);
+                WorldDatabase.PExecute("UPDATE player_factionchange_items SET comment = '%s' WHERE alliance_id='%u'", comment.c_str(), alliance_id);
             }
 
         } while (result->NextRow());
     }
 }
 
-void ExtractGearTemplateToDB(Player* player, std::string& gossipTempText)
+void ExtractGearTemplateToDB(Player* player, std::string& gossipTempText, uint32 TempID)
 {
-    uint32 TempID = GetTemplateID();
+    if (!player || !TempID)
+        return;
+
     uint32 patch = 0;
 
     // todo get specid
@@ -2439,17 +2443,14 @@ void LearnSkillRecipes(Player *player, uint32 skill_id)
 bool LearnAllRecipesProfession(Player *pPlayer, SkillType skill)
 {
     ChatHandler handler(pPlayer->GetSession());
-    char* skill_name;
-
     SkillLineEntry const *SkillInfo = sSkillLineStore.LookupEntry(skill);
-    skill_name = SkillInfo->name[sWorld.GetDefaultDbcLocale()];
-
     if (!SkillInfo)
     {
         sLog.Out(LOG_BASIC, LOG_LVL_BASIC, "Profession NPC: received non-valid skill ID");
         return false;
     }
 
+    char const* skill_name = SkillInfo->name[sWorld.GetDefaultDbcLocale()];
     pPlayer->SetSkill(SkillInfo->id, 300, 300);
     LearnSkillRecipes(pPlayer, SkillInfo->id);
     pPlayer->GetSession()->SendNotification("All recipes for %s learned", skill_name);
@@ -2471,7 +2472,7 @@ void LearnProfession(Player *pPlayer, Creature *pCreature, SkillType skill)
 
 void LearnWarlockPetSpells(Player* player)
 {
-    if (TemplateNpc_GetPlayerClassId(player) != CLASS_WARLOCK)
+    if (!player || TemplateNpc_GetPlayerClassId(player) != CLASS_WARLOCK)
         return;
 
     if (Pet* pet = player->GetPet())
@@ -2594,35 +2595,21 @@ void PlayerLearnAllHunterPetSpellsDB(Player* player)
 
 void SaveHunterPetSpellsToDB(Player* player)
 {
-    if (TemplateNpc_GetPlayerClassId(player) != CLASS_HUNTER)
+    if (!player || TemplateNpc_GetPlayerClassId(player) != CLASS_HUNTER)
         return;
 
-    if (Pet* pet = player->GetPet())
-    {
-        if (TemplateNpc_GetPlayerClassId(player) != CLASS_HUNTER)
-            return;
-
-        if (!pet)
-            return;
-
-        if (!pet->IsControlled())
-            return;
-    }
-
     Pet* pet = player->GetPet();
+    if (!pet || !pet->IsControlled() || pet->GetPetType() != HUNTER_PET)
+        return;
 
     uint32 petentry = pet->GetEntry();
 
-    CreatureInfo const *cInfo = sObjectMgr.GetCreatureTemplate(petentry);
-
-    if (!cInfo) return;
-
-    std::string petname = cInfo->name;
-
-    static SqlStatementID delSpell;
+    static SqlStatementID delAllSpells;
     static SqlStatementID insSpell;
-    SqlStatement stmtdel = CharacterDatabase.CreateStatement(delSpell, "DELETE FROM template_pet_spell WHERE name = ? AND spell = ?");
-    SqlStatement stmtins = CharacterDatabase.CreateStatement(insSpell, "INSERT INTO template_pet_spell (name,spell) VALUES (?, ?)");
+    SqlStatement stmtDelAll = CharacterDatabase.CreateStatement(delAllSpells, "DELETE FROM template_pet_spell WHERE entry = ?");
+    SqlStatement stmtIns = CharacterDatabase.CreateStatement(insSpell, "INSERT INTO template_pet_spell (entry, spell, active) VALUES (?, ?, 1)");
+
+    stmtDelAll.PExecute(petentry);
 
     for (PetSpellMap::iterator itr = pet->m_petSpells.begin(), next = pet->m_petSpells.begin(); itr != pet->m_petSpells.end(); itr = next)
     {
@@ -2635,34 +2622,25 @@ void SaveHunterPetSpellsToDB(Player* player)
         if (itr->second.state == PETSPELL_REMOVED)
             continue;
 
-        stmtdel.PExecute(petname.c_str(), itr->first);
-        stmtins.PExecute(petname.c_str(), itr->first);
+        stmtIns.PExecute(petentry, itr->first);
     }
 }
 
 void ExportHunterPetToDB(Player* player)
 {
-    if (Pet* pet = player->GetPet())
-    {
-        if (TemplateNpc_GetPlayerClassId(player) != CLASS_HUNTER)
-            return;
+    if (!player || TemplateNpc_GetPlayerClassId(player) != CLASS_HUNTER)
+        return;
 
-        if (!pet)
-            return;
-
-        if (!pet->IsControlled())
-            return;
-
-        if (pet->GetPetType() != HUNTER_PET)
-            return;
-    }
+    Pet* pet = player->GetPet();
+    if (!pet || !pet->IsControlled() || pet->GetPetType() != HUNTER_PET)
+        return;
 
     static SqlStatementID insPet;
     static SqlStatementID delPet;
-    SqlStatement PetsDEL = CharacterDatabase.CreateStatement(delPet, "DELETE FROM template_pets WHERE name = ? and entry = ?");
+    SqlStatement PetsDEL = CharacterDatabase.CreateStatement(delPet, "DELETE FROM template_pets WHERE entry = ?");
     SqlStatement PetsINS = CharacterDatabase.CreateStatement(insPet, "INSERT INTO template_pets (name, entry, PetFamily, AttackSpeed) VALUES (?, ?, ?, ?)");
 
-    uint32 petentry = player->GetPet()->GetEntry();
+    uint32 petentry = pet->GetEntry();
 
     CreatureInfo const *cInfo = sObjectMgr.GetCreatureTemplate(petentry);
 
@@ -2671,34 +2649,23 @@ void ExportHunterPetToDB(Player* player)
     std::string petname = cInfo->name;
     uint32 petfamily = cInfo->pet_family;
     uint32 attackspeed = cInfo->base_attack_time;
-    PetsDEL.PExecute(petname.c_str(), petentry);
+    PetsDEL.PExecute(petentry);
     PetsINS.PExecute(petname.c_str(), petentry, petfamily, attackspeed);
 }
 
 void LearnPetSpellsFromDB(Player* player)
 {
-    if (Pet* pet = player->GetPet())
-    {
-        if (TemplateNpc_GetPlayerClassId(player) != CLASS_HUNTER)
-            return;
+    if (!player || TemplateNpc_GetPlayerClassId(player) != CLASS_HUNTER)
+        return;
 
-        if (!pet)
-            return;
+    Pet* pet = player->GetPet();
+    if (!pet || !pet->IsControlled() || pet->GetPetType() != HUNTER_PET)
+        return;
 
-        if (!pet->IsControlled())
-            return;
+    uint32 petentry = pet->GetEntry();
 
-        if (pet->GetPetType() != HUNTER_PET)
-            return;
-    }
-
-    uint32 petentry = player->GetPet()->GetEntry();
-
-    CreatureInfo const *cInfo = sObjectMgr.GetCreatureTemplate(petentry);
-
-    if (!cInfo) return;
-
-    std::string petname = cInfo->name;
+    if (!sObjectMgr.GetCreatureTemplate(petentry))
+        return;
 
     auto select = CharacterDatabase.PQuery(
         "SELECT spell FROM template_pet_spell WHERE entry = '%u' AND active = 1;",
@@ -2712,35 +2679,24 @@ void LearnPetSpellsFromDB(Player* player)
             uint32 spellId = fields[0].GetUInt32();
 
             if (spellId)
-                player->GetPet()->LearnSpell(spellId);
+                pet->LearnSpell(spellId);
 
         } while (select->NextRow());
     }
 
-    //player->GetPet()->SetTP(0);
-    player->GetPet()->SavePetToDB(PET_SAVE_AS_CURRENT);
+    //pet->SetTP(0);
+    pet->SavePetToDB(PET_SAVE_AS_CURRENT);
 }
 
 void CreateHunterPet(Player *player, Creature * m_creature, uint32 entry)
 {
-    if (TemplateNpc_GetPlayerClassId(player) != CLASS_HUNTER)
+    if (!player || !m_creature || TemplateNpc_GetPlayerClassId(player) != CLASS_HUNTER)
         return;
 
-    if (Pet* pet = player->GetPet())
+    if (player->GetPet())
     {
-        if (pet)
-        {
-            //player->CastSpell(player, 883, true); // Call Pet. If you don't do this and your pet is dismissed the Server will crash. Need to find a fix.
-            player->GetSession()->SendAreaTriggerMessage("You already have a Pet.");
-            return;
-        }
-
-        if (pet->GetPetType() == HUNTER_PET)
-        {
-            pet->Unsummon(PET_SAVE_AS_DELETED, player);
-            //player->GetSession()->SendAreaTriggerMessage("You already have a Pet.");
-            //return;
-        }
+        player->GetSession()->SendAreaTriggerMessage("You already have a Pet.");
+        return;
     }
 
     if (Creature *creatureTarget = m_creature->SummonCreature(entry, player->GetPositionX(), player->GetPositionY() + 2, player->GetPositionZ(), player->GetOrientation(), TEMPSUMMON_CORPSE_DESPAWN))
@@ -2758,6 +2714,7 @@ void CreateHunterPet(Player *player, Creature * m_creature, uint32 entry)
         {
             delete pet;
             pet = nullptr;
+            creatureTarget->ForcedDespawn();
             return;
         }
 
@@ -2772,6 +2729,8 @@ void CreateHunterPet(Player *player, Creature * m_creature, uint32 entry)
         if (!pet->InitStatsForLevel(creatureTarget->GetLevel()))
         {
             sLog.Out(LOG_BASIC, LOG_LVL_BASIC, "Pet::InitStatsForLevel() failed for creature (Entry: %u)!", creatureTarget->GetEntry());
+            delete pet;
+            creatureTarget->ForcedDespawn();
             return;
         }
 
@@ -2809,7 +2768,7 @@ void CreateHunterPet(Player *player, Creature * m_creature, uint32 entry)
 
 void LearnAllTrainerSpellsDB(Player* player, uint32 TrainerID)
 {
-    if (!TrainerID)
+    if (!player || !TrainerID)
         return;
 
     auto select = WorldDatabase.PQuery("SELECT spell FROM npc_trainer WHERE entry = '%u' "
@@ -2824,7 +2783,12 @@ void LearnAllTrainerSpellsDB(Player* player, uint32 TrainerID)
 
             // exist, already checked at loading
             SpellEntry const* spell = sSpellMgr.GetSpellEntry(spellId);
+            if (!spell || !spell->EffectTriggerSpell[0])
+                continue;
+
             SpellEntry const* TriggerSpell = sSpellMgr.GetSpellEntry(spell->EffectTriggerSpell[0]);
+            if (!TriggerSpell)
+                continue;
 
             // check race/class requirement
             if (!player->IsSpellFitByClassAndRace(TriggerSpell->Id))
@@ -3174,16 +3138,17 @@ void ApplyTemplateToPlayer(Player* player, Creature* creature, uint32 temp_id) /
 }
 
 // Export Talent Spell ID's (not Talent ID's) to Database!
-void ExportCharacterTalentsToDB(Player* player, std::string& gossipTempText)
+void ExportCharacterTalentsToDB(Player* player, std::string& gossipTempText, uint32 TempID)
 {
     static SqlStatementID insTalents;
-    uint32 TempID = GetTemplateID();
+    if (!player || !TempID)
+        return;
 
     SqlStatement stmtIns = CharacterDatabase.CreateStatement(insTalents, "INSERT INTO template_npc_talents (temp_id, class, talent_id, rank) VALUES (?, ?, ?, ?)");
 
     if (player->GetFreeTalentPoints() > 0)
     {
-        player->GetSession()->SendAreaTriggerMessage("You have unspend talent points. Please spend all your talent points.");
+        player->GetSession()->SendAreaTriggerMessage("You have unspent talent points. Please spend all your talent points.");
         return;
     }
 
@@ -3271,8 +3236,9 @@ bool GossipHello_TemplateNPC(Player* player, Creature* creature)
         if (TemplateNpc_GetPlayerClassId(player) == CLASS_HUNTER)
         {
             player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, "Choose a Hunter Pet", GOSSIP_SENDER_MAIN, SHOW_PETS);
-        
-            if (player->GetPet() && player->GetPet()->IsControlled() && player->GetPet()->GetPetType() == HUNTER_PET)
+
+            Pet* pet = player->GetPet();
+            if (pet && pet->IsControlled() && pet->GetPetType() == HUNTER_PET)
             {
                 player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Make my pet happy", GOSSIP_SENDER_MAIN, MAKE_PET_HAPPY);
                 player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Save my current pet", GOSSIP_SENDER_MAIN, SAVE_PET);
@@ -3486,12 +3452,13 @@ bool GossipStart_TemplateNPC(Player* player, Creature* creature, uint32 uiAction
     }
     else if (uiAction == MAKE_PET_HAPPY)
     {
-        if (TemplateNpc_GetPlayerClassId(player) == CLASS_HUNTER && player->GetPet()) {
+        Pet* pet = player->GetPet();
+        if (TemplateNpc_GetPlayerClassId(player) == CLASS_HUNTER && pet) {
 
-            player->GetPet()->SetPower(POWER_HAPPINESS, 1048000);
-            player->GetPet()->SetLoyaltyLevel(BEST_FRIEND);
-            player->GetPet()->InitStatsForLevel(TemplateNpc_GetPlayerLevel(player));
-            player->GetPet()->UpdateAllStats();
+            pet->SetPower(POWER_HAPPINESS, 1048000);
+            pet->SetLoyaltyLevel(BEST_FRIEND);
+            pet->InitStatsForLevel(TemplateNpc_GetPlayerLevel(player));
+            pet->UpdateAllStats();
         }
         player->CLOSE_GOSSIP_MENU();
     }
@@ -3733,7 +3700,7 @@ bool GossipStart_TemplateNPC(Player* player, Creature* creature, uint32 uiAction
 
         if (player->GetFreeTalentPoints() > 0)
         {
-            player->GetSession()->SendAreaTriggerMessage("You have unspend talent points. Please spend all your talent points.");
+            player->GetSession()->SendAreaTriggerMessage("You have unspent talent points. Please spend all your talent points.");
             return false;
         }
 
@@ -3748,8 +3715,10 @@ bool GossipStart_TemplateNPC(Player* player, Creature* creature, uint32 uiAction
         else
         {
             CharacterDatabase.escape_string(name);
-            ExtractGearTemplateToDB(player, name);
-            ExportCharacterTalentsToDB(player, name);
+            uint32 tempId = GetTemplateID();
+            ExtractGearTemplateToDB(player, name, tempId);
+            ExportCharacterTalentsToDB(player, name, tempId);
+            TemplateNpcCache::LoadFromDB();
             creature->CastSpell(player, COOL_VISUAL_SPELL, true);
             player->CastSpell(player, COOL_VISUAL_SPELL_3, true);
         }
@@ -3887,6 +3856,9 @@ bool GossipDelete_Template(Player* player, Creature* creature, uint32 uiAction)
 
 bool GossipSave_Template(Player* player, Creature* creature, uint32 sender, uint32 action, const char* code)
 {
+    if (!player || !creature || !code)
+        return false;
+
     std::string name = code;
     static const char* allowedcharacters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz _-/().,1234567890";
     if (!name.length() || name.find_first_not_of(allowedcharacters) != std::string::npos)
@@ -3895,11 +3867,20 @@ bool GossipSave_Template(Player* player, Creature* creature, uint32 sender, uint
         player->CLOSE_GOSSIP_MENU();
         return false;
     }
+    if (player->GetFreeTalentPoints() > 0)
+    {
+        player->GetSession()->SendAreaTriggerMessage("You have unspent talent points. Please spend all your talent points.");
+        player->CLOSE_GOSSIP_MENU();
+        return false;
+    }
     else
     {
+        CharacterDatabase.escape_string(name);
+        uint32 tempId = GetTemplateID();
         player->SaveToDB();
-        ExtractGearTemplateToDB(player, name);
-        ExportCharacterTalentsToDB(player, name);
+        ExtractGearTemplateToDB(player, name, tempId);
+        ExportCharacterTalentsToDB(player, name, tempId);
+        TemplateNpcCache::LoadFromDB();
         creature->CastSpell(player, COOL_VISUAL_SPELL, true);
         player->CastSpell(player, COOL_VISUAL_SPELL_3, true);
     }

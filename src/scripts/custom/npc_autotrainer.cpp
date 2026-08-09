@@ -94,9 +94,19 @@ static std::vector<AutoTrainerSource> gWeaponSources;
 
 // Forward declarations for helper functions used before their definitions.
 static uint32 LearnAllAvailableInLoop(Player* pPlayer, Creature* pCreatureCaster);
+static uint32 GetPlayerClassMask(uint8 classId);
 static uint32 FindNextSpellInChainLinear(uint32 spellId);
 static uint32 ResolveTalentSpellIdForRank(uint32 talentSpellId, uint8 rank);
 
+
+static uint32 GetPlayerClassMask(uint8 classId)
+{
+    // Purpose: Convert a class id into the corresponding class mask used by the talent tab store.
+    if (classId == 0 || classId >= 32)
+        return 0;
+
+    return 1u << (classId - 1);
+}
 
 static const char* GetClassKeyString(Player* pPlayer)
 {
@@ -757,7 +767,11 @@ static void LearnPetSpellsFromDB(Player* pPlayer)
     {
         do
         {
-            uint32 spellId = res->Fetch()[0].GetUInt32();
+            Field* fields = res->Fetch();
+            if (!fields)
+                continue;
+
+            uint32 spellId = fields[0].GetUInt32();
             if (spellId)
                 pet->LearnSpell(spellId);
         } while (res->NextRow());
@@ -788,6 +802,7 @@ static void CreateHunterPet(Player* pPlayer, Creature* pCreature, uint32 entry)
     if (!pet->CreateBaseAtCreature(pSummoned))
     {
         delete pet;
+        pSummoned->ForcedDespawn();
         return;
     }
 
@@ -801,6 +816,7 @@ static void CreateHunterPet(Player* pPlayer, Creature* pCreature, uint32 entry)
     if (!pet->InitStatsForLevel(pSummoned->GetLevel()))
     {
         delete pet;
+        pSummoned->ForcedDespawn();
         return;
     }
 
@@ -2022,18 +2038,29 @@ static uint32 LevelToNextTenAndLearn(Player* pPlayer, Creature* pCreatureCaster)
 
 bool GossipHello_npc_autotrainer(Player* pPlayer, Creature* pCreature)
 {
-    // Purpose: Show the original auto-trainer menu plus template and hunter pet features.
+    // Purpose: Show the auto-trainer main menu and hide level-up options at max level.
     if (!pPlayer || !pCreature)
         return true;
 
     pPlayer->PlayerTalkClass->ClearMenus();
+    TemplateNpcCache::LoadFromDB();
 
-    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Learn all spells (current level)",        GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEARN_CURRENT);
-    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Gain +10 levels and learn all spells",    GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_PLUS_10);
-    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Level up to next multiple of 10 and learn all spells", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_NEXT_TEN);
-    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Instant level 60 and learn all spells",   GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_60);
+    uint32 playerLevel = pPlayer->GetLevel();
+    uint32 maxLevel = GetMaxPlayerLevel_Cached();
+
+    pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Learn all spells (current level)", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEARN_CURRENT);
+
+    if (playerLevel < maxLevel)
+    {
+        pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Gain +10 levels and learn all spells", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_PLUS_10);
+        pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Level up to next multiple of 10 and learn all spells", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_NEXT_TEN);
+
+        if (maxLevel >= 60 && playerLevel < 60)
+            pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Instant level 60 and learn all spells", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_LEVEL_60);
+    }
+
     pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Reset talents", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_RESET_TALENTS_CONFIRM);
-    
+
     if (TemplateNpcCache::HasAnyForClass(pPlayer))
         pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, "Gear and Talent Templates", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_SHOW_SPECS);
 

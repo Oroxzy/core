@@ -33,8 +33,9 @@ static void SendBossDummyDebug(Player* pPlayer, Creature* pCreature, const char*
 
 enum
 {
+    NPC_DAMAGE_DUMMY = 60001,
     NPC_HEAL_DUMMY   = 60002,
-    NPC_DAMAGE_DUMMY = 60003
+    NPC_BOSS_DUMMY   = 60003
 };
 
 // ------------------------------------------------------------
@@ -129,6 +130,7 @@ namespace TrainingDummy
 
     // Sweep-Takt wie im alten Script (Combat/Attacker Cleanup nicht jede Sekunde)
     static const uint32 kKickSweepIntervalMs  = 15000;
+    static const uint32 kDebuffSweepIntervalMs = 5000;
 
     // Rote Combat-Aura (wie dein alter Dummy). Falls deine SpellId anders ist: hier aendern.
     static const uint32 kCombatAuraSpellId = 31309;
@@ -338,24 +340,13 @@ namespace TrainingDummy
         if (!me->IsInCombat())
             return;
 
-        // wie alt: Debuffs nur auf Elite + Boss-Dummies
+        // wie alt: Debuffs nur auf Elite-Dummies
         if (!me->IsElite())
             return;
 
         switch (me->GetEntry())
         {
-            case 60003: // caster mob
-                DummyApplyDebuffAura(me, 21992); // Thunderfury
-                DummyApplyDebuffAura(me, 12579); // Winter's Chill
-                DummyApplyDebuffAura(me, 17937); // Curse of Shadow
-                DummyApplyDebuffAura(me, 17800); // Shadow Vulnerability (Warlock)
-                DummyApplyDebuffAura(me, 15258); // Shadow Vulnerability (Priest)
-                DummyApplyDebuffAura(me, 11722); // Curse of the Elements
-                DummyApplyDebuffAura(me, 22959); // Improved Scorch
-                DummyApplyDebuffAura(me, 23605); // Spell Vulnerability (Nightfall)
-                break;
-
-            case 60002: // melee mob
+            case NPC_DAMAGE_DUMMY:
                 DummyApplyDebuffAura(me, 21992); // Thunderfury
                 DummyApplyDebuffAura(me, 11374); // Gift of Arthas
                 DummyApplyDebuffAura(me, 9907);  // Faerie Fire
@@ -363,6 +354,13 @@ namespace TrainingDummy
                 DummyApplyDebuffAura(me, 16928); // Armor Shatter
                 DummyApplyDebuffAura(me, 11717); // Curse of Recklessness
                 DummyApplyDebuffAura(me, 23577); // Expose Weakness
+                DummyApplyDebuffAura(me, 12579); // Winter's Chill
+                DummyApplyDebuffAura(me, 17937); // Curse of Shadow
+                DummyApplyDebuffAura(me, 17800); // Shadow Vulnerability (Warlock)
+                DummyApplyDebuffAura(me, 15258); // Shadow Vulnerability (Priest)
+                DummyApplyDebuffAura(me, 11722); // Curse of the Elements
+                DummyApplyDebuffAura(me, 22959); // Improved Scorch
+                DummyApplyDebuffAura(me, 23605); // Spell Vulnerability (Nightfall)
                 break;
 
             default:
@@ -634,6 +632,14 @@ struct npc_damage_dummyAI : public ScriptedAI
         if (!mActive)
             return;
 
+        if (mDebuffSweepMs <= diff)
+        {
+            TrainingDummy::ApplyBuffsAndDebuffs(me);
+            mDebuffSweepMs = TrainingDummy::kDebuffSweepIntervalMs;
+        }
+        else
+            mDebuffSweepMs -= diff;
+
         mIdleMs += diff;
 
         if (mIdleMs >= TrainingDummy::kResetAfterIdleMs && mElapsedMs >= TrainingDummy::kMinFightMs)
@@ -782,7 +788,7 @@ struct npc_heal_dummyAI : public ScriptedAI
         Reset();
     }
 
-    void HealedBy(Unit* healer, uint32 heal)
+    void HealedBy(Unit* healer, uint32& heal) override
     {
         TrainingDummy::FreezeInPlace(me, mHomeOri);
 
@@ -949,6 +955,9 @@ struct npc_boss_dummyAI : public ScriptedAI
     {
         mEvents.Reset();
 
+        if (me && (mAppliedMechanicMask || mAppliedSchoolMask))
+            ClearAndApplyImmunityMasks(0, 0);
+
         mCountingDown  = false;
         mActive        = false;
         mCountdownLeft = 0;
@@ -1001,9 +1010,9 @@ struct npc_boss_dummyAI : public ScriptedAI
 
 void ClearAndApplyImmunityMasks(uint32 mechanicMask, uint32 schoolMask)
 {
-    Creature* me = m_creature;
     if (!me)
         return;
+
     // Entferne alte (falls wir welche gesetzt hatten)
     if (mAppliedMechanicMask)
     {
@@ -1011,7 +1020,7 @@ void ClearAndApplyImmunityMasks(uint32 mechanicMask, uint32 schoolMask)
         {
             const uint32 m = (1u << bit);
             if (mAppliedMechanicMask & m)
-                me->ApplySpellImmune(0, IMMUNITY_MECHANIC, bit, false);
+                me->ApplySpellImmune(0, IMMUNITY_MECHANIC, bit + 1, false);
         }
     }
 
@@ -1025,7 +1034,7 @@ void ClearAndApplyImmunityMasks(uint32 mechanicMask, uint32 schoolMask)
         {
             const uint32 m = (1u << bit);
             if (mechanicMask & m)
-                me->ApplySpellImmune(0, IMMUNITY_MECHANIC, bit, true);
+                me->ApplySpellImmune(0, IMMUNITY_MECHANIC, bit + 1, true);
         }
     }
 
@@ -1374,24 +1383,10 @@ static bool ApplyBossTemplateToDummy(Creature* pDummy, uint32 bossEntry, Player*
     pDummy->SetUInt32Value(UNIT_FIELD_RESISTANCES + SPELL_SCHOOL_SHADOW, ci->shadow_res);
     pDummy->SetUInt32Value(UNIT_FIELD_RESISTANCES + SPELL_SCHOOL_ARCANE, ci->arcane_res);
 
-    // Immunitaeten aus Template (branch-sicher via ApplySpellImmune)
-    if (ci->mechanic_immune_mask)
-    {
-        for (uint32 m = 0; m < 32; ++m)
-            if (ci->mechanic_immune_mask & (1u << m))
-                pDummy->ApplySpellImmune(0, IMMUNITY_MECHANIC, m, true);
-    }
-    if (ci->school_immune_mask)
-    {
-        for (uint32 sc = 0; sc < 7; ++sc)
-            if (ci->school_immune_mask & (1u << sc))
-                pDummy->ApplySpellImmune(0, IMMUNITY_SCHOOL, sc, true);
-    }
-
     // Debug-Ausgabe
     if (pPlayerForChat)
     {
-                const uint32 rbHp = pDummy->GetHealth();
+        const uint32 rbHp = pDummy->GetHealth();
         const uint32 rbHpMax = pDummy->GetMaxHealth();
         const uint32 rbMana = pDummy->GetPower(POWER_MANA);
         const uint32 rbManaMax = pDummy->GetMaxPower(POWER_MANA);
@@ -1408,8 +1403,31 @@ static bool ApplyBossTemplateToDummy(Creature* pDummy, uint32 bossEntry, Player*
             pDummy->GetResistance(SPELL_SCHOOL_SHADOW),
             pDummy->GetResistance(SPELL_SCHOOL_ARCANE),
             rbHp, rbHpMax, rbMana, rbManaMax, rbArmor);
+    }
+
+    return true;
 }
 
+bool ApplySelectedBossTemplate(uint32 bossEntry, Player* playerForChat)
+{
+    if (!me || bossEntry == 0)
+        return false;
+
+    const CreatureInfo* ci = sObjectMgr.GetCreatureTemplate(bossEntry);
+    if (!ci)
+    {
+        ClearAndApplyImmunityMasks(0, 0);
+        return false;
+    }
+
+    if (!ApplyBossTemplateToDummy(me, bossEntry, playerForChat))
+    {
+        ClearAndApplyImmunityMasks(0, 0);
+        return false;
+    }
+
+    ClearAndApplyImmunityMasks(ci->mechanic_immune_mask, ci->school_immune_mask);
+    mSelectedBossEntry = bossEntry;
     return true;
 }
 
@@ -1424,7 +1442,7 @@ void StartCountdown(uint32 seconds, uint32 fightDurationMs, uint32 bossEntry)
 
     // Boss-Stats sofort setzen (damit HP/Resis ab Fight korrekt sind)
     if (bossEntry)
-        ApplyBossTemplateToDummy(me, bossEntry, nullptr);
+        ApplySelectedBossTemplate(bossEntry, nullptr);
 
     mCountingDown  = true;
     mCountdownLeft = (seconds > 0 ? seconds : 1);
@@ -1718,7 +1736,7 @@ void StartCountdown(uint32 seconds, uint32 fightDurationMs, uint32 bossEntry)
             if (mDebuffSweepMs <= diff)
             {
                 TrainingDummy::ApplyBossDebuffs(me);
-                mDebuffSweepMs = 5000;
+                mDebuffSweepMs = TrainingDummy::kDebuffSweepIntervalMs;
             }
             else
                 mDebuffSweepMs -= diff;
@@ -1865,7 +1883,7 @@ static bool GossipSelect_npc_boss_dummy(Player* pPlayer, Creature* pCreature, ui
                 gSelectedRaidIdxByPlayer[pguid] = raidIdx;
 
                 // Anzeige direkt: Stats jetzt schon setzen (damit HP sofort sichtbar ist)
-                npc_boss_dummyAI::ApplyBossTemplateToDummy(pCreature, bossEntry, pPlayer);
+                ai->ApplySelectedBossTemplate(bossEntry, pPlayer);
 
                 BuildTimerMenu(pPlayer, pCreature);
                 return true;

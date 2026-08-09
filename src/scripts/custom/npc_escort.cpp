@@ -7,12 +7,11 @@ enum
 
 struct npc_escort_genericAI : public npc_escortAI
 {
-    npc_escort_genericAI(Creature* pCreature, CreatureEscortData const* data) : npc_escortAI(pCreature)
+    npc_escort_genericAI(Creature* pCreature, CreatureEscortData const* data) : npc_escortAI(pCreature), m_pEscortData(data)
     {
-        Reset();
-        m_pEscortData = data;
         if (!m_pEscortData)
-            sLog.Out(LOG_SCRIPTS, LOG_LVL_ERROR, "npc_escort : La creature %u n'a pas de donnees dans la table `script_escort_data` ! Le PNJ sera inactif.");
+            sLog.Out(LOG_SCRIPTS, LOG_LVL_ERROR, "npc_escort : La creature %u n'a pas de donnees dans la table `script_escort_data` ! Le PNJ sera inactif.", pCreature->GetEntry());
+        Reset();
     }
 
     // ATTENTION : Peut etre nullptr
@@ -20,6 +19,9 @@ struct npc_escort_genericAI : public npc_escortAI
 
     void Reset() override
     {
+        if (!m_pEscortData)
+            return;
+
         if (Player* pPlayer = GetPlayerForEscort())
         {
             if (pPlayer->GetQuestStatus(m_pEscortData->uiQuestEntry) == QUEST_STATUS_INCOMPLETE)

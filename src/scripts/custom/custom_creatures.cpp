@@ -598,6 +598,9 @@ enum Enchants
 
 void Enchant(Player* player, Item* item, uint32 enchantid)
 {
+    if (!player)
+        return;
+
     if (!item)
     {
         player->GetSession()->SendNotification("You must first equip the item you are trying to enchant.");
@@ -612,7 +615,9 @@ void Enchant(Player* player, Item* item, uint32 enchantid)
 
     item->ClearEnchantment(PERM_ENCHANTMENT_SLOT);
     item->SetEnchantment(PERM_ENCHANTMENT_SLOT, enchantid, 0, 0);
-    player->GetSession()->SendNotification("%s succesfully enchanted", item->GetProto()->Name1);
+
+    ItemPrototype const* itemProto = item->GetProto();
+    player->GetSession()->SendNotification("%s succesfully enchanted", itemProto ? itemProto->Name1 : "Item");
 }
 
 bool GossipHello_EnchantNPC(Player* player, Creature* creature)
@@ -898,17 +903,14 @@ void LearnSkillRecipesHelper(Player *player, uint32 skill_id)
 
 bool LearnAllRecipesInProfession(Player *pPlayer, SkillType skill)
 {
-    char* skill_name;
-
     SkillLineEntry const *SkillInfo = sSkillLineStore.LookupEntry(skill);
-    skill_name = SkillInfo->name[sWorld.GetDefaultDbcLocale()];
-
     if (!SkillInfo)
     {
         sLog.Out(LOG_SCRIPTS, LOG_LVL_ERROR, "Profession NPC: received non-valid skill ID");
         return false;
     }
 
+    char const* skill_name = SkillInfo->name[sWorld.GetDefaultDbcLocale()];
     pPlayer->SetSkill(SkillInfo->id, 300, 300);
     LearnSkillRecipesHelper(pPlayer, SkillInfo->id);
     pPlayer->GetSession()->SendNotification("All recipes for %s learned", skill_name);
@@ -1122,7 +1124,7 @@ struct npc_training_dummyAI : ScriptedAI
             {
                 for (auto itr = attackers.begin(); itr != attackers.end();)
                 {
-                    Unit* pAttacker = m_creature->GetMap()->GetUnit(itr->first);
+                    Unit* pAttacker = m_creature->GetMap() ? m_creature->GetMap()->GetUnit(itr->first) : nullptr;
 
                     if (!pAttacker || !pAttacker->IsInWorld())
                     {
@@ -1196,7 +1198,8 @@ struct npc_summon_debugAI : ScriptedAI
         if (m_summonCount >= m_maxSummonCount)
             return;
 
-        m_summons[m_summonCount++] = m_creature->SummonCreature(12458, m_creature->GetPositionX(), m_creature->GetPositionY(), m_creature->GetPositionZ(), 0);
+        if (Creature* summon = m_creature->SummonCreature(12458, m_creature->GetPositionX(), m_creature->GetPositionY(), m_creature->GetPositionZ(), 0))
+            m_summons[m_summonCount++] = summon;
     }
 };
 

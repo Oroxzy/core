@@ -265,6 +265,37 @@ namespace PlayerStash
         return !rows.empty();
     }
 
+    static bool ValidateGearRows(Player* player, std::vector<GearRow> const& rows)
+    {
+        if (!player || rows.empty())
+            return false;
+
+        for (std::vector<GearRow>::const_iterator itr = rows.begin(); itr != rows.end(); ++itr)
+        {
+            if (!IsSupportedEquipmentSlot(itr->slot))
+            {
+                player->GetSession()->SendNotification("Stored equipment set contains an invalid slot.");
+                return false;
+            }
+
+            ItemPrototype const* itemProto = sObjectMgr.GetItemPrototype(itr->itemEntry);
+            if (!itemProto)
+            {
+                player->SendEquipError(EQUIP_ERR_ITEM_NOT_FOUND, nullptr, nullptr, itr->itemEntry);
+                return false;
+            }
+
+            InventoryResult msg = player->CanUseItem(itemProto, false);
+            if (msg != EQUIP_ERR_OK)
+            {
+                player->SendEquipError(msg, nullptr, nullptr, itr->itemEntry);
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     static void EquipItemsFromDB(Player* player, uint32 tempId)
     {
         if (!player || !tempId)
@@ -727,6 +758,14 @@ namespace PlayerStash
         if (!HasStoredGear(player, tempId))
         {
             player->GetSession()->SendNotification("This equipment set does not exist.");
+            ShowMainMenu(player, gameobject);
+            return true;
+        }
+
+        std::vector<GearRow> rows;
+        if (!LoadGearRows(player, tempId, rows) || !ValidateGearRows(player, rows))
+        {
+            player->GetSession()->SendNotification("This equipment set could not be equipped safely.");
             ShowMainMenu(player, gameobject);
             return true;
         }
