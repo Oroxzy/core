@@ -43,6 +43,15 @@
 #include "CreatureGroups.h"
 #include "HardcodedEvents.h"
 
+#include <algorithm>
+#include <cctype>
+#include <iomanip>
+#include <limits>
+#include <locale>
+#include <sstream>
+#include <string>
+#include <vector>
+
 bool ChatHandler::HandleAnnounceCommand(char* args)
 {
     if (!*args)
@@ -311,6 +320,96 @@ bool ChatHandler::HandleServerInfoCommand(char* /*args*/)
     PSendSysMessage("Players online: %i (%i queued). Max online: %i (%i queued).", activeClientsNum, queuedClientsNum, maxActiveClientsNum, maxQueuedClientsNum);
     PSendSysMessage(LANG_UPTIME, str.c_str());
 
+    return true;
+}
+
+bool ChatHandler::HandleServerPlayerPositionsCommand(char* args)
+{
+    char* requestToken = ExtractLiteralArg(&args);
+    if (!requestToken || ExtractLiteralArg(&args))
+        return false;
+
+    std::string const token(requestToken);
+    if (token.size() != 32 || !std::all_of(token.begin(), token.end(), [](unsigned char character)
+        {
+            return std::isxdigit(character) != 0;
+        }))
+    {
+        SendSysMessage("Request-ID must contain exactly 32 hexadecimal characters.");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    struct PlayerPositionSnapshot
+    {
+        uint32 Guid;
+        std::string Name;
+        uint8 Race;
+        uint8 Class;
+        uint32 Level;
+        uint32 Zone;
+        uint32 Map;
+        uint32 Instance;
+        float X;
+        float Y;
+        float Z;
+        float Orientation;
+    };
+
+    std::vector<PlayerPositionSnapshot> players;
+    players.reserve(sWorld.GetActiveSessionCount());
+    {
+        HashMapHolder<Player>::ReadGuard guard(HashMapHolder<Player>::GetLock());
+        HashMapHolder<Player>::MapType const& playerMap = sObjectAccessor.GetPlayers();
+        for (auto const& entry : playerMap)
+        {
+            if (players.size() >= 500)
+                break;
+
+            Player const* player = entry.second;
+            if (!player || !player->IsInWorld() || !player->GetSession())
+                continue;
+
+            players.push_back({
+                player->GetGUIDLow(),
+                player->GetName(),
+                player->GetRace(),
+                player->GetClass(),
+                player->GetLevel(),
+                player->GetZoneId(),
+                player->GetMapId(),
+                player->GetInstanceId(),
+                finiteAlways(player->GetPositionX()),
+                finiteAlways(player->GetPositionY()),
+                finiteAlways(player->GetPositionZ()),
+                finiteAlways(player->GetOrientation())
+            });
+        }
+    }
+
+    PSendSysMessage("VMANGOS_PLAYERPOS_V1\tBEGIN\t%s", token.c_str());
+    for (PlayerPositionSnapshot const& player : players)
+    {
+        std::ostringstream line;
+        line.imbue(std::locale::classic());
+        line << "VMANGOS_PLAYERPOS_V1\tROW\t" << token
+             << '\t' << player.Guid
+             << '\t' << player.Name
+             << '\t' << static_cast<uint32>(player.Race)
+             << '\t' << static_cast<uint32>(player.Class)
+             << '\t' << player.Level
+             << '\t' << player.Zone
+             << '\t' << player.Map
+             << '\t' << player.Instance
+             << std::setprecision(std::numeric_limits<float>::max_digits10)
+             << '\t' << player.X
+             << '\t' << player.Y
+             << '\t' << player.Z
+             << '\t' << player.Orientation;
+        std::string const output = line.str();
+        SendSysMessage(output.c_str());
+    }
+    PSendSysMessage("VMANGOS_PLAYERPOS_V1\tEND\t%s\t%u", token.c_str(), static_cast<uint32>(players.size()));
     return true;
 }
 

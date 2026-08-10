@@ -8,6 +8,86 @@
 #include "IO/Networking/IpAddress.h"
 #include "IO/Multithreading/CreateThread.h"
 
+#include <cctype>
+#include <cstddef>
+
+namespace
+{
+struct CommandToken
+{
+    char const* Begin;
+    std::size_t Length;
+};
+
+void SkipWhitespace(char const*& input)
+{
+    while (*input && std::isspace(static_cast<unsigned char>(*input)))
+        ++input;
+}
+
+bool ReadCommandToken(char const*& input, CommandToken& token)
+{
+    SkipWhitespace(input);
+    token.Begin = input;
+
+    while (*input && !std::isspace(static_cast<unsigned char>(*input)))
+        ++input;
+
+    token.Length = static_cast<std::size_t>(input - token.Begin);
+    return token.Length != 0;
+}
+
+bool IsCommandAbbreviation(CommandToken const& token, char const* canonicalToken)
+{
+    for (std::size_t i = 0; i < token.Length; ++i)
+    {
+        if (!canonicalToken[i] ||
+            std::tolower(static_cast<unsigned char>(token.Begin[i])) != canonicalToken[i])
+            return false;
+    }
+
+    return true;
+}
+
+char const* CommandForLog(char const* command)
+{
+    char const* input = command;
+    SkipWhitespace(input);
+
+    // CliHandler accepts a leading command marker. Ignore it for the security
+    // check even when whitespace was supplied before it.
+    if (*input == '.' || *input == '!')
+        ++input;
+
+    CommandToken account;
+    CommandToken action;
+    if (!ReadCommandToken(input, account) ||
+        !IsCommandAbbreviation(account, "account") ||
+        !ReadCommandToken(input, action))
+        return command;
+
+    // `c` resolves to `characters` (the first matching entry), not `create`.
+    // Exclude earlier table entries so harmless account lookups remain visible.
+    bool const isCreate = IsCommandAbbreviation(action, "create") &&
+        !IsCommandAbbreviation(action, "characters") &&
+        !IsCommandAbbreviation(action, "cleardata");
+    if (isCreate)
+        return "account create [arguments redacted]";
+
+    if (IsCommandAbbreviation(action, "password"))
+        return "account password [arguments redacted]";
+
+    if (IsCommandAbbreviation(action, "set"))
+    {
+        CommandToken setting;
+        if (ReadCommandToken(input, setting) && IsCommandAbbreviation(setting, "password"))
+            return "account set password [arguments redacted]";
+    }
+
+    return command;
+}
+}
+
 class SOAPCommand
 {
  public:
@@ -111,7 +191,7 @@ int ns1__executeCommand(soap* soap, char* command, char** result)
     if (!command || !*command)
         return soap_sender_fault(soap, "Parameter 'command' can not be empty", "The supplied command was an empty string");
 
-    sLog.Out(LOG_BASIC, LOG_LVL_DEBUG, "MaNGOSsoap: Received command '%s'", command);
+    sLog.Out(LOG_BASIC, LOG_LVL_DEBUG, "MaNGOSsoap: Received command '%s'", CommandForLog(command));
 
     // Commands are executed in the world thread. We have to wait for them to be completed
     SOAPCommand commandHolder;

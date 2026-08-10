@@ -990,6 +990,7 @@ ChatCommand * ChatHandler::getCommandTable()
         { "log",            SEC_CONSOLE,        true, nullptr,                                         "", serverLogCommandTable },
         { "motd",           SEC_PLAYER,         true,  &ChatHandler::HandleServerMotdCommand,          "", nullptr },
         { "plimit",         SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleServerPLimitCommand,        "", nullptr },
+        { "playerpositions", SEC_CONSOLE,       true,  &ChatHandler::HandleServerPlayerPositionsCommand, "", nullptr },
         { "resetallraids",  SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleServerResetAllRaidCommand,  "", nullptr },
         { "restart",        SEC_ADMINISTRATOR,  true, nullptr,                                         "", serverRestartCommandTable },
         { "shutdown",       SEC_ADMINISTRATOR,  true, nullptr,                                         "", serverShutdownCommandTable },
@@ -1889,8 +1890,17 @@ void ChatHandler::ExecuteCommand(char const* text)
 
             if (text[0])
             {
-                realCommandFull += " ";
-                realCommandFull += text;
+                // Account passwords must never be written to GM logs. The raw
+                // arguments are still passed to the handler below.
+                if (command->FullName == "account create" ||
+                    command->FullName == "account set password" ||
+                    command->FullName == "account password")
+                    realCommandFull += " [arguments redacted]";
+                else
+                {
+                    realCommandFull += " ";
+                    realCommandFull += text;
+                }
             }
             if (m_session && command->Flags & COMMAND_FLAGS_ONLY_ON_SELF)
             {
