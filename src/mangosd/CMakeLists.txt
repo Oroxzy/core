@@ -37,9 +37,7 @@ if(WIN32)
 endif()
 
 include_directories(
-  ${CMAKE_SOURCE_DIR}/dep/include/g3dlite
   ${CMAKE_SOURCE_DIR}/src/framework
-  ${CMAKE_SOURCE_DIR}/src/framework/Network
   ${CMAKE_SOURCE_DIR}/src/game
   ${CMAKE_SOURCE_DIR}/src/game/AI
   ${CMAKE_SOURCE_DIR}/src/game/Anticheat
@@ -82,6 +80,7 @@ set_directory_properties(PROPERTIES COMPILE_DEFINITIONS "${DEFINITIONS}")
 add_executable(${EXECUTABLE_NAME}
   ${EXECUTABLE_SRCS}
 )
+mangos_target_flags(${EXECUTABLE_NAME})
 
 if(USE_SCRIPTS)
   target_link_libraries(${EXECUTABLE_NAME}
@@ -105,7 +104,6 @@ endif()
 
 if(WIN32)
   target_link_libraries(${EXECUTABLE_NAME}
-    zlib
     optimized ${MYSQL_LIBRARY}
     optimized ${OPENSSL_LIBRARIES}
     debug ${MYSQL_DEBUG_LIBRARY}
@@ -126,7 +124,6 @@ if(UNIX)
     ${MYSQL_LIBRARY}
     ${OPENSSL_LIBRARIES}
     ${OPENSSL_EXTRA_LIBRARIES}
-    ${ZLIB_LIBRARIES}
   )
 endif()
 

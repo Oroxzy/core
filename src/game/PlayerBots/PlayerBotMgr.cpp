@@ -16,6 +16,7 @@
 #include "BattleGroundMgr.h"
 #include "MapManager.h"
 #include "Language.h"
+#include "Utilities/Random.h"
 #include "Spell.h"
 
 INSTANTIATE_SINGLETON_1(PlayerBotMgr);
@@ -235,7 +236,15 @@ void PlayerBotMgr::Update(uint32 diff)
             if (iter->second->requestRemoval)
             {
                 if (iter->second->ai && iter->second->ai->me)
+                {
+                    if (!iter->second->ai->me->IsAlive())
+                    {
+                        // don't leave permanent corpse
+                        iter->second->ai->me->ResurrectPlayer(1.0f);
+                        iter->second->ai->me->SpawnCorpseBones();
+                    }
                     iter->second->ai->me->RemoveFromGroup();
+                }
 
                 DeleteBot(iter);
 
@@ -1895,10 +1904,10 @@ bool ChatHandler::HandleBattleBotAddCommand(char* args, uint8 bg)
             return false;
         }
 
-        
+
         ExtractUInt32(&args, botLevel);
 
-        
+
         if (char* tempStr = ExtractArg(&args))
         {
             if (strcmp(tempStr, "temp") == 0)
@@ -2017,7 +2026,7 @@ bool ChatHandler::HandleBattleBotShowAllPathsCommand(char* args)
             break;
         }
         default:
-            break;
+            return false;
     }
 
     uint32 id = 1;

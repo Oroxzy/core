@@ -1,7 +1,9 @@
 #include "Errors.h"
 #include "Log.h"
 
+#ifdef ENABLE_CPPTRACE
 #include <cpptrace/cpptrace.hpp>
+#endif
 
 void MaNGOS::Errors::PrintStacktrace()
 {
@@ -10,6 +12,9 @@ void MaNGOS::Errors::PrintStacktrace()
 
 void MaNGOS::Errors::PrintStacktrace(int skipFrames, int maxFrames)
 {
+#ifndef ENABLE_CPPTRACE
+    sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "Stack traces using cpptrace are disabled. Set ENABLE_CPPTRACE=ON (default) during CMake configuration to enable them.");
+#else
     cpptrace::stacktrace st = cpptrace::generate_trace(
         std::size_t(skipFrames) + 1, // we want to skip our own frame
         std::size_t(maxFrames)
@@ -58,8 +63,14 @@ void MaNGOS::Errors::PrintStacktrace(int skipFrames, int maxFrames)
         sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "Missing debug symbols. Please build with debug symbols.");
 #endif
     }
+#endif
 }
 
+
+#if COMPILER == COMPILER_MICROSOFT
+#pragma warning(push)
+#pragma warning(disable: 4702) // Disable unreachable code warning
+#endif
 [[noreturn]]
 void MaNGOS::Errors::PrintStacktraceAndThrow(char const* filename, int line, char const* functionName, char const* failedExpression, char const* message)
 {
@@ -79,3 +90,6 @@ void MaNGOS::Errors::PrintStacktraceAndThrow(char const* filename, int line, cha
     // Just in case the std::runtime_error was ignored by a debugger, we throw an assert.
     assert("MANGOS_ASSERT throw was skipped" && false);
 }
+#if COMPILER == COMPILER_MICROSOFT
+#pragma warning(pop)
+#endif

@@ -32,13 +32,13 @@
 #include "Log.h"
 #include "Errors.h"
 #include "AuthSocket.h"
+#include "LoginThrottle.h"
 #include "SystemConfig.h"
 #include "revision.h"
 #include "Util.h"
 #include "migrations_list.h"
-#include <openssl/opensslv.h>
-#include <openssl/crypto.h>
 #include "ArgparserForServer.h"
+#include "Crypto/InitializeCrypto.h"
 #include "Crypto/Encoding/Base32.h"
 #include "ProxyProtocol/ProxyV2Reader.h"
 
@@ -125,9 +125,14 @@ extern int main(int argc, char** argv)
         break;
 #endif
     }
-
     sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "Core revision: %s [realm-daemon]", _FULLVERSION);
-    sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "<Ctrl-C> to stop.\n");
+    if (!Crypto::InitializeCryptoAndPrintVersion())
+    {
+        sLog.WaitBeforeContinueIfNeed();
+        return EXIT_FAILURE;
+    }
+
+    sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "<Ctrl-C> to stop.");
     sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "Using configuration file %s.", sConfig.GetFilename().c_str());
 
     // Check the version of the configuration file
@@ -140,13 +145,6 @@ extern int main(int argc, char** argv)
         sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "          strange behavior.                                                  ");
         sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "*****************************************************************************");
         Log::WaitBeforeContinueIfNeed();
-    }
-
-    sLog.Out(LOG_BASIC, LOG_LVL_DETAIL, "%s (Library: %s)", OPENSSL_VERSION_TEXT, SSLeay_version(SSLEAY_VERSION));
-    if (SSLeay() < 0x009080bfL)
-    {
-        sLog.Out(LOG_BASIC, LOG_LVL_DETAIL, "WARNING: Outdated version of OpenSSL lib. Logins to server may not work!");
-        sLog.Out(LOG_BASIC, LOG_LVL_DETAIL, "WARNING: Minimal required version [OpenSSL 0.9.8k]");
     }
 
 #ifdef ENABLE_MAILSENDER
@@ -208,7 +206,7 @@ extern int main(int argc, char** argv)
 
     (void)sRealmdPatchCache; // <-- This will initialize the singleton. Which will preload all known patches.
     (void)sAsyncSystemTimer; // <-- Pre-Initialize SystemTimer
-    IO::Multithreading::RenameCurrentThread("Main");
+    IO::Multithreading::RenameCurrentThread("realmd-main");
 
     // cleanup query
     // set expired bans to inactive
@@ -242,7 +240,7 @@ extern int main(int argc, char** argv)
     listener->AutoAcceptSocketsUntilClose([ctx = ioCtx.get(), trustedProxyIps](IO::Networking::SocketDescriptor socketDescriptor)
     {
         // Create a socket and attach it to our global ioCtx
-        auto authSocket = std::make_shared<AuthSocket>(std::move(IO::Networking::AsyncSocket(ctx, std::move(socketDescriptor))));
+        auto authSocket = std::make_shared<AuthSocket>(IO::Networking::AsyncSocket(ctx, std::move(socketDescriptor)));
 
         if (IO::NetworkError initError = authSocket->m_socket.InitializeAndFixateMemoryLocation())
         {
@@ -327,6 +325,7 @@ extern int main(int argc, char** argv)
     // maximum counter for next ping
     uint32 numLoops = (sConfig.GetIntDefault("MaxPingTime", 30) * (MINUTE * 1000000 / 100000)); // TODO make this loop like mangosd
     uint32 loopCounter = 0;
+    uint32 throttleCleanupCounter = 0;
 
     auto ioThread = IO::Multithreading::CreateThread("MainIoCtx", [&ioCtx]()
     {
@@ -340,6 +339,13 @@ extern int main(int argc, char** argv)
     while (!stopEvent)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+        constexpr uint32 kThrottleCleanupIntervalSecs = 60;
+        if (++throttleCleanupCounter >= kThrottleCleanupIntervalSecs)
+        {
+            throttleCleanupCounter = 0;
+            CleanupStaleLoginThrottles();
+        }
 
         if ((++loopCounter) == numLoops) // TODO make this loop like mangosd
         {

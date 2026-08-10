@@ -23,8 +23,7 @@
 #include "ObjectMgr.h"
 #include "MapManager.h"
 #include "MoveSpline.h"
-#include "Opcodes.h"
-#include "WorldPacket.h"
+#include "Utilities/Random.h"
 
 bool PlayerBotAI::OnSessionLoaded(PlayerBotEntry* entry, WorldSession* sess)
 {
@@ -36,17 +35,16 @@ void PlayerBotAI::UpdateAI(uint32 const diff)
 {
     if (me->IsBeingTeleportedNear())
     {
-        WorldPacket data(MSG_MOVE_TELEPORT_ACK, 10);
-        data << me->GetObjectGuid();
+        WorldPackets::Movement::MoveTeleportAck packet;
+        packet.guid = me->GetObjectGuid();
 #if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_9_4
-        data << uint32(0) << uint32(0);
-#else
-        data << uint32(0);
+        packet.movementCounter = 0;
 #endif
-        me->GetSession()->HandleMoveTeleportAckOpcode(data);
+        packet.time = 0;
+        me->GetSession()->HandleMoveTeleportAckOpcode(packet);
     }
     if (me->IsBeingTeleportedFar())
-        me->GetSession()->HandleMoveWorldportAckOpcode();
+        me->GetSession()->HandleMoveWorldportAck();
 }
 
 void PlayerBotAI::Remove()
@@ -130,7 +128,6 @@ bool PlayerBotAI::SpawnNewPlayer(WorldSession* sess, uint8 class_, uint32 race_,
         return false;
     }
     newChar->Relocate(x, y, z, o);
-    sObjectMgr.InsertPlayerInCache(newChar);
     newChar->SetMap(map);
     newChar->SaveRecallPosition();
     newChar->CreatePacketBroadcaster();
@@ -143,6 +140,7 @@ bool PlayerBotAI::SpawnNewPlayer(WorldSession* sess, uint8 class_, uint32 race_,
         delete newChar;
         return false;
     }
+    sObjectMgr.InsertPlayerInCache(newChar);
     sess->SetPlayer(newChar);
     sess->SetMasterPlayer(mPlayer);
     sObjectAccessor.AddObject(newChar);
@@ -198,7 +196,7 @@ void MageOrgrimmarAttackerAI::UpdateAI(uint32 const diff)
     if (me->GetMotionMaster()->GetCurrentMovementGeneratorType() == CHASE_MOTION_TYPE)
         me->GetMotionMaster()->MovementExpired();
     bool nearTarget = target && target->CanReachWithMeleeAutoAttack(me);
-    if (me->IsSpellReady(SPELL_FROST_NOVA) && me->GetPower(POWER_MANA) > 50)
+    if (me->IsSpellReady(sSpellMgr.GetSpellEntry(SPELL_FROST_NOVA)) && me->GetPower(POWER_MANA) > 50)
         if (nearTarget)
             me->CastSpell(me, SPELL_FROST_NOVA, false);
     if (nearTarget && target->HasUnitState(UNIT_STATE_CAN_NOT_MOVE))
@@ -244,7 +242,12 @@ void MageOrgrimmarAttackerAI::UpdateAI(uint32 const diff)
         return;
     }
     // MOVEMENT AI
-    float x, y, z = 0; // Where to go
+
+    // Target pos (where to go)
+    float x = 0;
+    float y = 0;
+    float z = 0;
+
     float r = 10;
     if (me->movespline->Finalized())
     {

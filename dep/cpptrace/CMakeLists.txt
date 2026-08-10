@@ -420,25 +420,61 @@ if(CPPTRACE_GET_SYMBOLS_WITH_LIBDWARF)
       set(ZSTD_BUILD_STATIC ON)
       set(ZSTD_BUILD_SHARED OFF)
       set(ZSTD_LEGACY_SUPPORT OFF)
-      FetchContent_Declare(
+      if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.14")
+        FetchContent_Declare(
           zstd
           SOURCE_SUBDIR build/cmake
           DOWNLOAD_EXTRACT_TIMESTAMP TRUE
           URL "${CPPTRACE_ZSTD_URL}"
-      )
-      FetchContent_MakeAvailable(zstd)
+          EXCLUDE_FROM_ALL
+        )
+      else()
+        FetchContent_Declare(
+          zstd
+          SOURCE_SUBDIR build/cmake
+          DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+          URL "${CPPTRACE_ZSTD_URL}"
+        )
+      endif()
+      FetchContent_GetProperties(zstd)
+      if(NOT zstd_POPULATED)
+        if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.14")
+          FetchContent_MakeAvailable(zstd)
+        else()
+          FetchContent_Populate(zstd)
+          add_subdirectory(${zstd_SOURCE_DIR}/build/cmake ${zstd_BINARY_DIR} EXCLUDE_FROM_ALL)
+        endif()
+      endif()
     endif()
     # Libdwarf itself
     set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
     set(PIC_ALWAYS TRUE)
     set(BUILD_DWARFDUMP FALSE)
-    FetchContent_Declare(
-      libdwarf
-      GIT_REPOSITORY ${CPPTRACE_LIBDWARF_REPO}
-      GIT_TAG ${CPPTRACE_LIBDWARF_TAG}
-      GIT_SHALLOW ${CPPTRACE_LIBDWARF_SHALLOW}
-    )
-    FetchContent_MakeAvailable(libdwarf)
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.14")
+      FetchContent_Declare(
+        libdwarf
+        GIT_REPOSITORY ${CPPTRACE_LIBDWARF_REPO}
+        GIT_TAG ${CPPTRACE_LIBDWARF_TAG}
+        GIT_SHALLOW ${CPPTRACE_LIBDWARF_SHALLOW}
+        EXCLUDE_FROM_ALL
+      )
+    else()
+      FetchContent_Declare(
+        libdwarf
+        GIT_REPOSITORY ${CPPTRACE_LIBDWARF_REPO}
+        GIT_TAG ${CPPTRACE_LIBDWARF_TAG}
+        GIT_SHALLOW ${CPPTRACE_LIBDWARF_SHALLOW}
+      )
+    endif()
+    FetchContent_GetProperties(libdwarf)
+    if(NOT libdwarf_POPULATED)
+      if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.14")
+        FetchContent_MakeAvailable(libdwarf)
+      else()
+        FetchContent_Populate(libdwarf)
+        add_subdirectory(${libdwarf_SOURCE_DIR} ${libdwarf_BINARY_DIR} EXCLUDE_FROM_ALL)
+      endif()
+    endif()
     target_include_directories(
       dwarf
       PRIVATE
@@ -601,9 +637,10 @@ endif()
 
 # =============================================== Install ===============================================
 
-if(NOT CMAKE_SKIP_INSTALL_RULES)
-  include(cmake/InstallRules.cmake)
-endif()
+# Disabled: cpptrace is statically linked and not needed at runtime
+# if(NOT CMAKE_SKIP_INSTALL_RULES)
+#   include(cmake/InstallRules.cmake)
+# endif()
 
 # =============================================== Demo/test ===============================================
 
