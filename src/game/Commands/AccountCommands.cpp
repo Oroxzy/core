@@ -373,10 +373,11 @@ bool ChatHandler::HandleAccountLockCommand(char* args)
 
 bool ChatHandler::HandleAccountPasswordCommand(char* args)
 {
-    // allow use from RA, but not from console (not have associated account id)
-    if (!GetAccountId())
+    // This command verifies the current in-game session password. CLI, RA and
+    // SOAP handlers do not have a WorldSession and must not dereference one.
+    if (!m_session || !GetAccountId())
     {
-        SendSysMessage(LANG_RA_ONLY_COMMAND);
+        SendSysMessage(LANG_COMMAND_UNAVAILABLE);
         SetSentErrorMessage(true);
         return false;
     }
@@ -424,8 +425,9 @@ bool ChatHandler::HandleAccountPasswordCommand(char* args)
             SetSentErrorMessage(true);
             return false;
     }
-    SetSentErrorMessage(true);
-    return false;
+
+    SetSentErrorMessage(false);
+    return true;
 }
 
 bool ChatHandler::HandleAddCharacterNoteCommand(char* args)

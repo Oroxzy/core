@@ -45,6 +45,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstddef>
 #include <iomanip>
 #include <limits>
 #include <locale>
@@ -356,14 +357,15 @@ bool ChatHandler::HandleServerPlayerPositionsCommand(char* args)
         float Orientation;
     };
 
+    std::size_t constexpr MaxPlayerCount = 500;
     std::vector<PlayerPositionSnapshot> players;
-    players.reserve(sWorld.GetActiveSessionCount());
+    players.reserve(std::min<std::size_t>(sWorld.GetActiveSessionCount(), MaxPlayerCount));
     {
         HashMapHolder<Player>::ReadGuard guard(HashMapHolder<Player>::GetLock());
         HashMapHolder<Player>::MapType const& playerMap = sObjectAccessor.GetPlayers();
         for (auto const& entry : playerMap)
         {
-            if (players.size() >= 500)
+            if (players.size() >= MaxPlayerCount)
                 break;
 
             Player const* player = entry.second;

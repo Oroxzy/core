@@ -39,6 +39,60 @@
 #include "PoolManager.h"
 #include "GameEventMgr.h"
 
+#include <cctype>
+#include <cstddef>
+#include <cstring>
+
+namespace
+{
+struct CommandLogToken
+{
+    char const* Begin;
+    std::size_t Length;
+};
+
+void SkipCommandLogWhitespace(char const*& input)
+{
+    while (*input && std::isspace(static_cast<unsigned char>(*input)))
+        ++input;
+}
+
+bool ReadCommandLogToken(char const*& input, CommandLogToken& token)
+{
+    SkipCommandLogWhitespace(input);
+    token.Begin = input;
+
+    while (*input && !std::isspace(static_cast<unsigned char>(*input)))
+        ++input;
+
+    token.Length = static_cast<std::size_t>(input - token.Begin);
+    return token.Length != 0;
+}
+
+bool IsCommandLogAbbreviation(CommandLogToken const& token, char const* canonicalToken)
+{
+    for (std::size_t i = 0; i < token.Length; ++i)
+    {
+        if (!canonicalToken[i] ||
+            std::tolower(static_cast<unsigned char>(token.Begin[i])) != canonicalToken[i])
+            return false;
+    }
+
+    return true;
+}
+
+char const* ResolveCommandLogToken(CommandLogToken const& token, char const* const* canonicalTokens, std::size_t tokenCount)
+{
+    for (std::size_t i = 0; i < tokenCount; ++i)
+    {
+        if (IsCommandLogAbbreviation(token, canonicalTokens[i]))
+            return canonicalTokens[i];
+    }
+
+    return nullptr;
+}
+}
+
 // Supported shift-links (client generated and server side)
 // |color|Harea:area_id|h[name]|h|r
 // |color|Hareatrigger:id|h[name]|h|r
@@ -61,6 +115,69 @@
 // |color|Htele:id|h[name]|h|r
 
 bool ChatHandler::m_loadCommandTable = true;
+
+std::string ChatHandler::SanitizeCommandForLog(char const* command)
+{
+    if (!command)
+        return {};
+
+    char const* input = command;
+    SkipCommandLogWhitespace(input);
+
+    // Be conservative for transport logs: even malformed commands with more
+    // than one command marker must not expose account-command arguments.
+    while (*input == '.' || *input == '!')
+    {
+        ++input;
+        SkipCommandLogWhitespace(input);
+    }
+
+    CommandLogToken root;
+    if (!ReadCommandLogToken(input, root) || !IsCommandLogAbbreviation(root, "account"))
+        return command;
+
+    std::string sanitized = "account";
+    CommandLogToken action;
+    if (!ReadCommandLogToken(input, action))
+        return sanitized;
+
+    // Keep this order aligned with accountCommandTable so abbreviations are
+    // represented by the same canonical command that the core executes.
+    static char const* const accountActions[] =
+    {
+        "characters", "cleardata", "create", "delete", "onlinelist", "lock", "set", "password"
+    };
+    char const* resolvedAction = ResolveCommandLogToken(action, accountActions,
+        sizeof(accountActions) / sizeof(accountActions[0]));
+    if (!resolvedAction)
+        return sanitized + " [subcommand and arguments redacted]";
+
+    sanitized += " ";
+    sanitized += resolvedAction;
+
+    if (std::strcmp(resolvedAction, "set") == 0)
+    {
+        CommandLogToken setting;
+        if (!ReadCommandLogToken(input, setting))
+            return sanitized;
+
+        // Keep this order aligned with accountSetCommandTable.
+        static char const* const accountSettings[] = { "addon", "gmlevel", "password", "locked" };
+        char const* resolvedSetting = ResolveCommandLogToken(setting, accountSettings,
+            sizeof(accountSettings) / sizeof(accountSettings[0]));
+        if (!resolvedSetting)
+            return sanitized + " [subcommand and arguments redacted]";
+
+        sanitized += " ";
+        sanitized += resolvedSetting;
+    }
+
+    SkipCommandLogWhitespace(input);
+    if (*input)
+        sanitized += " [arguments redacted]";
+
+    return sanitized;
+}
 
 ChatCommand * ChatHandler::getCommandTable()
 {
@@ -1890,18 +2007,10 @@ void ChatHandler::ExecuteCommand(char const* text)
 
             if (text[0])
             {
-                // Account passwords must never be written to GM logs. The raw
-                // arguments are still passed to the handler below.
-                if (command->FullName == "account create" ||
-                    command->FullName == "account set password" ||
-                    command->FullName == "account password")
-                    realCommandFull += " [arguments redacted]";
-                else
-                {
-                    realCommandFull += " ";
-                    realCommandFull += text;
-                }
+                realCommandFull += " ";
+                realCommandFull += text;
             }
+            realCommandFull = SanitizeCommandForLog(realCommandFull.c_str());
             if (m_session && command->Flags & COMMAND_FLAGS_ONLY_ON_SELF)
             {
                 ObjectGuid selGuid = m_session->GetPlayer()->GetSelectionGuid();
@@ -2074,7 +2183,8 @@ ParseCommandResult ChatHandler::ParseCommands(char const* text)
                     }
                     else
                     {
-                        sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "Skipping command '%s' from account %u. Player is not in world.", txt.c_str(), accountId);
+                        std::string const commandForLog = ChatHandler::SanitizeCommandForLog(txt.c_str());
+                        sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "Skipping command '%s' from account %u. Player is not in world.", commandForLog.c_str(), accountId);
                     }
                 }
             }

@@ -25,92 +25,14 @@
 #include "Language.h"
 #include "ObjectMgr.h"
 #include "Memory/ArrayDeleter.h"
+#include "Chat.h"
 
-#include <cctype>
-#include <cstddef>
 #include <utility>
 #include <vector>
 #include <string>
 
 static std::string const NEWLINE = "\r\n";
 static std::string const PROMPT = "mangos>";
-
-namespace
-{
-struct CommandToken
-{
-    char const* Begin;
-    std::size_t Length;
-};
-
-void SkipWhitespace(char const*& input)
-{
-    while (*input && std::isspace(static_cast<unsigned char>(*input)))
-        ++input;
-}
-
-bool ReadCommandToken(char const*& input, CommandToken& token)
-{
-    SkipWhitespace(input);
-    token.Begin = input;
-
-    while (*input && !std::isspace(static_cast<unsigned char>(*input)))
-        ++input;
-
-    token.Length = static_cast<std::size_t>(input - token.Begin);
-    return token.Length != 0;
-}
-
-bool IsCommandAbbreviation(CommandToken const& token, char const* canonicalToken)
-{
-    for (std::size_t i = 0; i < token.Length; ++i)
-    {
-        if (!canonicalToken[i] ||
-            std::tolower(static_cast<unsigned char>(token.Begin[i])) != canonicalToken[i])
-            return false;
-    }
-
-    return true;
-}
-
-char const* CommandForLog(char const* command)
-{
-    char const* input = command;
-    SkipWhitespace(input);
-
-    // CliHandler accepts a leading command marker. Ignore it for the security
-    // check even when whitespace was supplied before it.
-    if (*input == '.' || *input == '!')
-        ++input;
-
-    CommandToken account;
-    CommandToken action;
-    if (!ReadCommandToken(input, account) ||
-        !IsCommandAbbreviation(account, "account") ||
-        !ReadCommandToken(input, action))
-        return command;
-
-    // `c` resolves to `characters` (the first matching entry), not `create`.
-    // Exclude earlier table entries so harmless account lookups remain visible.
-    bool const isCreate = IsCommandAbbreviation(action, "create") &&
-        !IsCommandAbbreviation(action, "characters") &&
-        !IsCommandAbbreviation(action, "cleardata");
-    if (isCreate)
-        return "account create [arguments redacted]";
-
-    if (IsCommandAbbreviation(action, "password"))
-        return "account password [arguments redacted]";
-
-    if (IsCommandAbbreviation(action, "set"))
-    {
-        CommandToken setting;
-        if (ReadCommandToken(input, setting) && IsCommandAbbreviation(setting, "password"))
-            return "account set password [arguments redacted]";
-    }
-
-    return command;
-}
-}
 
 RASocket::RASocket(IO::Networking::AsyncSocket socket)
   : m_socket(std::move(socket)),
@@ -299,7 +221,8 @@ void RASocket::HandleInput_Authenticated(std::string const& line)
         return;
     }
 
-    sLog.Out(LOG_RA, LOG_LVL_MINIMAL, "[%s/%s] Received command: %s", m_socket.GetRemoteIpString().c_str(), m_username.c_str(), CommandForLog(line.c_str()));
+    std::string const commandForLog = ChatHandler::SanitizeCommandForLog(line.c_str());
+    sLog.Out(LOG_RA, LOG_LVL_MINIMAL, "[%s/%s] Received command: %s", m_socket.GetRemoteIpString().c_str(), m_username.c_str(), commandForLog.c_str());
 
     // handle quit, exit and logout commands to terminate connection
     if (line == "quit" || line == "exit" || line == "logout")

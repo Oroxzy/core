@@ -127,6 +127,7 @@ class ChatHandler
 
         ParseCommandResult ParseCommands(char const* text);
         ChatCommand const* FindCommand(char const* text);
+        static std::string SanitizeCommandForLog(char const* command);
 
         bool isValidChatMessage(std::string const& msg);
         bool HasSentErrorMessage() { return m_sentErrorMessage;}
