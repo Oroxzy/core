@@ -560,6 +560,8 @@ void World::LoadConfigSettings(bool reload)
     setConfig(CONFIG_BOOL_AUTO_EQUIP_ON_TALENT_LEARN, "PlayerAutoProgression.AutoEquip.OnTalentLearn", false);
     setConfig(CONFIG_BOOL_AUTO_EQUIP_REQUIRE_DISCOVERED, "PlayerAutoProgression.AutoEquip.RequireDiscovered", false);
     setConfig(CONFIG_BOOL_AUTO_EQUIP_REPLACE_EXISTING, "PlayerAutoProgression.AutoEquip.ReplaceExisting", true);
+    setConfig(CONFIG_BOOL_AUTO_EQUIP_DELETE_REPLACED_ITEMS, "PlayerAutoProgression.AutoEquip.DeleteReplacedItems", false);
+    setConfig(CONFIG_BOOL_AUTO_EQUIP_INCLUDE_QUEST_REWARDS, "PlayerAutoProgression.AutoEquip.IncludeQuestRewards", true);
     setConfig(CONFIG_BOOL_AUTO_ENCHANT_ON_LEVEL_UP, "PlayerAutoProgression.AutoEnchant.OnLevelUp", false);
     setConfig(CONFIG_BOOL_AUTO_ENCHANT_ON_TALENT_LEARN, "PlayerAutoProgression.AutoEnchant.OnTalentLearn", false);
     setConfig(CONFIG_BOOL_AUTO_ENCHANT_REPLACE_EXISTING, "PlayerAutoProgression.AutoEnchant.ReplaceExisting", true);

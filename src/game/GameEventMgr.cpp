@@ -1035,6 +1035,31 @@ void GameEventMgr::UpdateEventQuests(uint16 event_id, bool Activate)
     }
 }
 
+void GameEventMgr::RefreshEventQuestStates()
+{
+    std::set<uint32> eventQuestIds;
+    std::set<uint32> activeEventQuestIds;
+    for (uint16 eventId = 1; eventId < mGameEventQuests.size(); ++eventId)
+    {
+        for (uint32 questId : mGameEventQuests[eventId])
+        {
+            if (!sObjectMgr.IsQuestTemplateLoaded(questId))
+                continue;
+
+            eventQuestIds.insert(questId);
+            if (IsActiveEvent(eventId))
+                activeEventQuestIds.insert(questId);
+        }
+    }
+
+    for (uint32 questId : eventQuestIds)
+    {
+        Quest const* quest = sObjectMgr.GetQuestTemplate(questId);
+        if (quest && quest->IsActive())
+            const_cast<Quest*>(quest)->SetQuestActiveState(activeEventQuestIds.count(questId) != 0);
+    }
+}
+
 void GameEventMgr::SendEventMails(int16 event_id)
 {
     int32 internal_event_id = mGameEvent.size() + event_id - 1;

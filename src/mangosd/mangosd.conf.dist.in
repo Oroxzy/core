@@ -2940,7 +2940,7 @@ AHBot.itemcount = 50
 #
 # Event switches default to off. Trainer learning reuses the normal GREEN trainer-state checks, but does not charge
 # copper. Talent points are never assigned automatically. AutoEquip scans loaded item prototypes and uses the
-# character's class plus highest-spend talent tree. Replaced gear is moved into bags; a full inventory skips the swap.
+# character's class plus highest-spend talent tree. Replaced gear is moved into bags by default.
 #
 #    PlayerAutoProgression.AutoLearn.OnLevelUp
 #    PlayerAutoProgression.AutoLearn.OnTalentLearn
@@ -2970,7 +2970,15 @@ AHBot.itemcount = 50
 #        If enabled, only item prototypes already discovered by players are considered.
 #
 #    PlayerAutoProgression.AutoEquip.ReplaceExisting
-#        If enabled, upgrades replace equipped items after safely moving the old items into bags.
+#        If enabled, upgrades may replace equipped items.
+#
+#    PlayerAutoProgression.AutoEquip.DeleteReplacedItems
+#        If enabled together with ReplaceExisting, replaced gear is permanently destroyed instead of moved into bags.
+#        This avoids bag-space requirements, but also permanently removes existing enchants. Indestructible items are kept.
+#
+#    PlayerAutoProgression.AutoEquip.IncludeQuestRewards
+#        If enabled, equipment referenced by loaded quests as a reward is considered. Its earliest active race/class-compatible
+#        quest MinLevel is enforced in addition to normal item restrictions. Set to 0 to exclude all quest-reward gear.
 #
 #    PlayerAutoProgression.AutoEquip.Weight.*
 #        Global multipliers layered over the built-in Vanilla class/spec profiles.
@@ -3014,6 +3022,8 @@ PlayerAutoProgression.AutoEquip.MaxQuality = 4
 PlayerAutoProgression.AutoEquip.MaxItemLevelBonus = 10
 PlayerAutoProgression.AutoEquip.RequireDiscovered = 0
 PlayerAutoProgression.AutoEquip.ReplaceExisting = 1
+PlayerAutoProgression.AutoEquip.DeleteReplacedItems = 0
+PlayerAutoProgression.AutoEquip.IncludeQuestRewards = 1
 PlayerAutoProgression.AutoEquip.Weight.Primary = 1.0
 PlayerAutoProgression.AutoEquip.Weight.Secondary = 1.0
 PlayerAutoProgression.AutoEquip.Weight.Survival = 1.0

@@ -747,6 +747,7 @@ class ObjectMgr
             return itr != m_QuestTemplatesMap.end() ? itr->second.get() : nullptr;
         }
         QuestMap const& GetQuestTemplates() const { return m_QuestTemplatesMap; }
+        bool IsQuestTemplateLoaded(uint32 questId) const { return m_LoadedQuestTemplateIds.count(questId) != 0; }
 
         // Return the ID of the item that starts a quest.
         // Return 0 if no such item exists.
@@ -1490,6 +1491,7 @@ class ObjectMgr
         ObjectGuidGenerator<HIGHGUID_CORPSE>     m_CorpseGuids;
 
         QuestMap            m_QuestTemplatesMap;
+        std::set<uint32>    m_LoadedQuestTemplateIds;
 
         typedef std::unordered_map<uint32, uint32> QuestAreaTriggerMap;
         typedef std::unordered_map<uint32, std::string> ItemTextMap;

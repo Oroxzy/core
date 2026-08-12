@@ -5521,6 +5521,7 @@ void ObjectMgr::LoadGroups()
 
 void ObjectMgr::LoadQuests()
 {
+    std::set<uint32> loadedQuestTemplateIds;
     // For reload case
     for (auto const& itr : m_QuestTemplatesMap)
     {
@@ -5572,6 +5573,8 @@ void ObjectMgr::LoadQuests()
         sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "");
         sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, ">> Loaded 0 quests definitions");
         sLog.Out(LOG_DBERROR, LOG_LVL_MINIMAL, "`quest_template` table is empty!");
+        m_LoadedQuestTemplateIds.swap(loadedQuestTemplateIds);
+        sGameEventMgr.RefreshEventQuestStates();
         return;
     }
 
@@ -5587,6 +5590,7 @@ void ObjectMgr::LoadQuests()
 
         uint32 entry = fields[0].GetUInt32();
         std::unique_ptr<Quest>& pInfo = m_QuestTemplatesMap[entry];
+        loadedQuestTemplateIds.insert(entry);
         if (!pInfo)
             pInfo = std::make_unique<Quest>();
 
@@ -6240,8 +6244,10 @@ void ObjectMgr::LoadQuests()
         }
     }
 
+    m_LoadedQuestTemplateIds.swap(loadedQuestTemplateIds);
+    sGameEventMgr.RefreshEventQuestStates();
     sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "");
-    sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, ">> Loaded %lu quests definitions", (unsigned long)m_QuestTemplatesMap.size());
+    sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, ">> Loaded %lu quests definitions", (unsigned long)m_LoadedQuestTemplateIds.size());
 }
 
 uint32 ObjectMgr::GetQuestStartingItemID(uint32 quest_id) const

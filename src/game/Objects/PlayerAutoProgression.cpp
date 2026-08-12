@@ -7,6 +7,7 @@
 #include "Log.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "QuestDef.h"
 #include "Spell.h"
 #include "SpellAuraDefines.h"
 #include "SpellMgr.h"
@@ -17,6 +18,7 @@
 #include <cctype>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -978,7 +980,49 @@ void RestoreStoredItem(Player* player, uint8 slot, Item* item)
     player->EquipItem((uint16(INVENTORY_SLOT_BAG_0) << 8) | slot, item, true);
 }
 
-bool EquipPlannedItem(Player* player, uint8 slot, ItemPrototype const* item, bool replace)
+struct QuestRewardCatalog
+{
+    std::set<uint32> itemIds;
+    std::map<uint32, uint32> minimumLevelForPlayer;
+};
+
+QuestRewardCatalog BuildQuestRewardCatalog(Player const* player)
+{
+    QuestRewardCatalog catalog;
+    for (auto const& entry : sObjectMgr.GetQuestTemplates())
+    {
+        Quest const* quest = entry.second.get();
+        if (!quest || !sObjectMgr.IsQuestTemplateLoaded(entry.first))
+            continue;
+
+        bool const availableToPlayer = quest->IsActive() &&
+            (!quest->GetRequiredRaces() || (quest->GetRequiredRaces() & player->GetRaceMask())) &&
+            (!quest->GetRequiredClasses() || (quest->GetRequiredClasses() & player->GetClassMask()));
+
+        auto addReward = [&](uint32 itemId)
+        {
+            if (!itemId)
+                return;
+
+            catalog.itemIds.insert(itemId);
+            if (!availableToPlayer)
+                return;
+
+            auto const itr = catalog.minimumLevelForPlayer.find(itemId);
+            if (itr == catalog.minimumLevelForPlayer.end() || quest->GetMinLevel() < itr->second)
+                catalog.minimumLevelForPlayer[itemId] = quest->GetMinLevel();
+        };
+
+        for (uint32 itemId : quest->RewChoiceItemId)
+            addReward(itemId);
+        for (uint32 itemId : quest->RewItemId)
+            addReward(itemId);
+    }
+    return catalog;
+}
+
+bool EquipPlannedItem(Player* player, uint8 slot, ItemPrototype const* item, bool replace,
+    bool deleteReplaced)
 {
     if (!item)
         return false;
@@ -986,13 +1030,33 @@ bool EquipPlannedItem(Player* player, uint8 slot, ItemPrototype const* item, boo
     Item* current = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
     if (current && current->GetEntry() == item->ItemId)
         return false;
-    uint16 destination = 0;
-    if (player->CanEquipNewItem(slot, destination, item->ItemId, current != nullptr) != EQUIP_ERR_OK)
-        return false;
-    if (current && (!replace || !MoveEquippedItemToBag(player, slot)))
+    if (current && (!replace ||
+        (deleteReplaced && (current->GetProto()->Flags & ITEM_FLAG_INDESTRUCTIBLE))))
         return false;
 
-    return player->EquipNewItem(destination, item->ItemId, true) != nullptr;
+    Item* replacement = Item::CreateItem(item->ItemId, 1, player->GetObjectGuid());
+    if (!replacement)
+        return false;
+
+    uint16 destination = 0;
+    if (player->CanEquipItem(slot, destination, replacement, current != nullptr) != EQUIP_ERR_OK ||
+        (current && player->CanUnequipItem(current->GetPos(), false) != EQUIP_ERR_OK))
+    {
+        delete replacement;
+        return false;
+    }
+
+    if (current && deleteReplaced)
+        player->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
+    else if (current && !MoveEquippedItemToBag(player, slot))
+    {
+        delete replacement;
+        return false;
+    }
+
+    player->ItemAddedQuestCheck(replacement->GetEntry(), 1);
+    player->EquipItem(destination, replacement, true);
+    return true;
 }
 }
 
@@ -1034,6 +1098,8 @@ uint32 EquipBestItems(Player* player)
     uint32 const maxQuality = sWorld.getConfig(CONFIG_UINT32_AUTO_EQUIP_MAX_QUALITY);
     uint32 const levelBonus = sWorld.getConfig(CONFIG_UINT32_AUTO_EQUIP_MAX_ITEM_LEVEL_BONUS);
     bool const discovered = sWorld.getConfig(CONFIG_BOOL_AUTO_EQUIP_REQUIRE_DISCOVERED);
+    bool const includeQuestRewards = sWorld.getConfig(CONFIG_BOOL_AUTO_EQUIP_INCLUDE_QUEST_REWARDS);
+    QuestRewardCatalog const questRewards = BuildQuestRewardCatalog(player);
 
     for (auto const& entry : sObjectMgr.GetItemPrototypeMap())
     {
@@ -1047,6 +1113,18 @@ uint32 EquipBestItems(Player* player)
         if (item->HasExtraFlag(ITEM_EXTRA_NOT_OBTAINABLE) || item->Quality > maxQuality ||
             item->Duration || item->RandomProperty || (discovered && !item->Discovered))
             continue;
+
+        bool const isQuestReward = questRewards.itemIds.count(item->ItemId) != 0;
+        if (isQuestReward)
+        {
+            if (!includeQuestRewards)
+                continue;
+
+            auto const questLevel = questRewards.minimumLevelForPlayer.find(item->ItemId);
+            if (questLevel == questRewards.minimumLevelForPlayer.end() ||
+                questLevel->second > player->GetLevel())
+                continue;
+        }
         if (item->RequiredLevel > player->GetLevel() ||
             (!item->RequiredLevel && item->ItemLevel > player->GetLevel() + levelBonus))
             continue;
@@ -1054,10 +1132,6 @@ uint32 EquipBestItems(Player* player)
             continue;
         if (item->RequiredReputationFaction &&
             uint32(player->GetReputationRank(item->RequiredReputationFaction)) < item->RequiredReputationRank)
-            continue;
-        if ((item->SourceQuestRaces && !(item->SourceQuestRaces & player->GetRaceMask())) ||
-            (item->SourceQuestClasses && !(item->SourceQuestClasses & player->GetClassMask())) ||
-            (item->SourceQuestLevel >= 0 && uint32(item->SourceQuestLevel) > player->GetLevel()))
             continue;
         if (player->CanUseItem(item, false) != EQUIP_ERR_OK)
             continue;
@@ -1139,6 +1213,7 @@ uint32 EquipBestItems(Player* player)
     }
 
     bool const replace = sWorld.getConfig(CONFIG_BOOL_AUTO_EQUIP_REPLACE_EXISTING);
+    bool const deleteReplaced = sWorld.getConfig(CONFIG_BOOL_AUTO_EQUIP_DELETE_REPLACED_ITEMS);
     uint32 equipped = 0;
 
     ItemPrototype const* mainPlan = plan[EQUIPMENT_SLOT_MAINHAND];
@@ -1160,10 +1235,12 @@ uint32 EquipBestItems(Player* player)
 
     if (handCount)
     {
-        if (!replace || player->CanStoreItems(handsToStore, handCount) != EQUIP_ERR_OK)
+        if (!replace || (!deleteReplaced &&
+            player->CanStoreItems(handsToStore, handCount) != EQUIP_ERR_OK))
             handReady = false;
         for (int i = 0; handReady && i < handCount; ++i)
-            if (player->CanUnequipItem(handsToStore[i]->GetPos(), false) != EQUIP_ERR_OK)
+            if (player->CanUnequipItem(handsToStore[i]->GetPos(), false) != EQUIP_ERR_OK ||
+                (deleteReplaced && (handsToStore[i]->GetProto()->Flags & ITEM_FLAG_INDESTRUCTIBLE)))
                 handReady = false;
     }
 
@@ -1175,10 +1252,17 @@ uint32 EquipBestItems(Player* player)
     uint16 offDestination = 0;
     if ((mainChanges && !newMain) || (offChanges && !newOff))
         handReady = false;
-    if (handReady && mainChanges &&
-        player->CanEquipItem(EQUIPMENT_SLOT_MAINHAND, mainDestination,
-            newMain, oldMain != nullptr) != EQUIP_ERR_OK)
-        handReady = false;
+    if (handReady && mainChanges)
+    {
+        InventoryResult const result = player->CanEquipItem(EQUIPMENT_SLOT_MAINHAND,
+            mainDestination, newMain, oldMain != nullptr);
+        bool const deleteTwoHandOffhand = deleteReplaced && clearOffForTwoHand &&
+            (result == EQUIP_ERR_ITEMS_CANT_BE_SWAPPED || result == EQUIP_ERR_INVENTORY_FULL);
+        if (deleteTwoHandOffhand)
+            mainDestination = (uint16(INVENTORY_SLOT_BAG_0) << 8) | EQUIPMENT_SLOT_MAINHAND;
+        else if (result != EQUIP_ERR_OK)
+            handReady = false;
+    }
 
     bool const changingCurrentTwoHand = oldMain &&
         oldMain->GetProto()->InventoryType == INVTYPE_2HWEAPON && mainChanges;
@@ -1193,13 +1277,20 @@ uint32 EquipBestItems(Player* player)
     }
 
     bool mainStored = false;
-    if (handReady && mainChanges && oldMain)
+    if (handReady && deleteReplaced)
+    {
+        if (mainChanges && oldMain)
+            player->DestroyItem(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND, true);
+        if ((offChanges || clearOffForTwoHand) && oldOff)
+            player->DestroyItem(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND, true);
+    }
+    else if (handReady && mainChanges && oldMain)
     {
         mainStored = MoveEquippedItemToBag(player, EQUIPMENT_SLOT_MAINHAND);
         if (!mainStored)
             handReady = false;
     }
-    if (handReady && (offChanges || clearOffForTwoHand) && oldOff &&
+    if (handReady && !deleteReplaced && (offChanges || clearOffForTwoHand) && oldOff &&
         !MoveEquippedItemToBag(player, EQUIPMENT_SLOT_OFFHAND))
     {
         if (mainStored)
@@ -1231,7 +1322,7 @@ uint32 EquipBestItems(Player* player)
     {
         if (slot == EQUIPMENT_SLOT_MAINHAND || slot == EQUIPMENT_SLOT_OFFHAND)
             continue;
-        equipped += EquipPlannedItem(player, slot, plan[slot], replace) ? 1 : 0;
+        equipped += EquipPlannedItem(player, slot, plan[slot], replace, deleteReplaced) ? 1 : 0;
     }
     return equipped;
 }
