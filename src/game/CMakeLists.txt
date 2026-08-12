@@ -175,6 +175,7 @@ set (game_SRCS
     Objects/Object.cpp
     Objects/Pet.cpp
     Objects/Player.cpp
+    Objects/PlayerAutoProgression.cpp
     Objects/PlayerTaxi.cpp
     Objects/SpellCaster.cpp
     Objects/TemporarySummon.cpp
@@ -425,6 +426,7 @@ set (game_SRCS
     Objects/ObjectDefines.h
     Objects/Pet.h
     Objects/Player.h
+    Objects/PlayerAutoProgression.h
     Objects/PlayerTaxi.h
     Objects/SpellCaster.h
     Objects/TemporarySummon.h

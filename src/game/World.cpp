@@ -551,6 +551,26 @@ void World::LoadConfigSettings(bool reload)
     setConfigMinMax(CONFIG_FLOAT_RATE_TARGET_POS_RECALCULATION_RANGE, "TargetPosRecalculateRange", 1.5f, CONTACT_DISTANCE, ATTACK_DISTANCE);
 
     setConfig(CONFIG_BOOL_DURABILITY_LOSS_ENABLE, "DurabilityLoss.Enable", true);
+    setConfig(CONFIG_BOOL_AUTO_LEARN_ON_LEVEL_UP, "PlayerAutoProgression.AutoLearn.OnLevelUp", false);
+    setConfig(CONFIG_BOOL_AUTO_LEARN_ON_TALENT_LEARN, "PlayerAutoProgression.AutoLearn.OnTalentLearn", false);
+    setConfig(CONFIG_BOOL_AUTO_LEARN_CLASS_TRAINERS, "PlayerAutoProgression.AutoLearn.ClassTrainers", true);
+    setConfig(CONFIG_BOOL_AUTO_LEARN_WEAPON_TRAINERS, "PlayerAutoProgression.AutoLearn.WeaponTrainers", true);
+    setConfig(CONFIG_BOOL_AUTO_LEARN_MAX_WEAPON_SKILLS, "PlayerAutoProgression.AutoLearn.MaxWeaponSkills", false);
+    setConfig(CONFIG_BOOL_AUTO_EQUIP_ON_LEVEL_UP, "PlayerAutoProgression.AutoEquip.OnLevelUp", false);
+    setConfig(CONFIG_BOOL_AUTO_EQUIP_ON_TALENT_LEARN, "PlayerAutoProgression.AutoEquip.OnTalentLearn", false);
+    setConfig(CONFIG_BOOL_AUTO_EQUIP_REQUIRE_DISCOVERED, "PlayerAutoProgression.AutoEquip.RequireDiscovered", false);
+    setConfig(CONFIG_BOOL_AUTO_EQUIP_REPLACE_EXISTING, "PlayerAutoProgression.AutoEquip.ReplaceExisting", true);
+    setConfig(CONFIG_BOOL_AUTO_ENCHANT_ON_LEVEL_UP, "PlayerAutoProgression.AutoEnchant.OnLevelUp", false);
+    setConfig(CONFIG_BOOL_AUTO_ENCHANT_ON_TALENT_LEARN, "PlayerAutoProgression.AutoEnchant.OnTalentLearn", false);
+    setConfig(CONFIG_BOOL_AUTO_ENCHANT_REPLACE_EXISTING, "PlayerAutoProgression.AutoEnchant.ReplaceExisting", true);
+    setConfig(CONFIG_BOOL_AUTO_ENCHANT_SOURCE_ENCHANTING, "PlayerAutoProgression.AutoEnchant.Source.Enchanting", true);
+    setConfig(CONFIG_BOOL_AUTO_ENCHANT_SOURCE_SCOPES, "PlayerAutoProgression.AutoEnchant.Source.Scopes", true);
+    setConfig(CONFIG_BOOL_AUTO_ENCHANT_SOURCE_SHIELD_SPIKES, "PlayerAutoProgression.AutoEnchant.Source.ShieldSpikes", true);
+    setConfig(CONFIG_BOOL_AUTO_ENCHANT_SOURCE_ARMOR_KITS, "PlayerAutoProgression.AutoEnchant.Source.ArmorKits", true);
+    setConfig(CONFIG_BOOL_AUTO_ENCHANT_SOURCE_LIBRAMS, "PlayerAutoProgression.AutoEnchant.Source.Librams", true);
+    setConfig(CONFIG_BOOL_AUTO_ENCHANT_SOURCE_ZANDALAR, "PlayerAutoProgression.AutoEnchant.Source.Zandalar", true);
+    setConfig(CONFIG_BOOL_AUTO_ENCHANT_SOURCE_ARGENT_DAWN, "PlayerAutoProgression.AutoEnchant.Source.ArgentDawn", true);
+    setConfig(CONFIG_BOOL_AUTO_ENCHANT_SOURCE_NAXXRAMAS, "PlayerAutoProgression.AutoEnchant.Source.Naxxramas", true);
     setConfigPos(CONFIG_FLOAT_RATE_DURABILITY_LOSS_DAMAGE, "DurabilityLossChance.Damage", 0.5f);
 
     setConfigPos(CONFIG_FLOAT_LISTEN_RANGE_SAY,       "ListenRange.Say",       25.0f);
@@ -578,6 +598,9 @@ void World::LoadConfigSettings(bool reload)
     setConfig(CONFIG_BOOL_ADDON_CHANNEL, "AddonChannel", true);
     setConfig(CONFIG_BOOL_CLEAN_CHARACTER_DB, "CleanCharacterDB", true);
     setConfig(CONFIG_UINT32_REUSABLE_GUID_POOL_SIZE, "ReusableGuidPoolSize", 100000);
+    setConfigMinMax(CONFIG_UINT32_AUTO_EQUIP_MIN_LEVEL, "PlayerAutoProgression.AutoEquip.MinLevel", 1, 1, 60);
+    setConfigMinMax(CONFIG_UINT32_AUTO_EQUIP_MAX_QUALITY, "PlayerAutoProgression.AutoEquip.MaxQuality", 4, 0, 5);
+    setConfigMinMax(CONFIG_UINT32_AUTO_EQUIP_MAX_ITEM_LEVEL_BONUS, "PlayerAutoProgression.AutoEquip.MaxItemLevelBonus", 10, 0, 100);
     setConfig(CONFIG_BOOL_GRID_UNLOAD, "GridUnload", true);
     setConfig(CONFIG_BOOL_CLEANUP_TERRAIN, "CleanupTerrain", true);
     setConfigPos(CONFIG_UINT32_INTERVAL_SAVE, "PlayerSave.Interval", 15 * MINUTE * IN_MILLISECONDS);
@@ -649,6 +672,11 @@ void World::LoadConfigSettings(bool reload)
     }
 
     setConfigMinMax(CONFIG_FLOAT_RP_DECAY, "RpDecay", 0.2f, 0.0f, 1.0f);
+    setConfigMin(CONFIG_FLOAT_AUTO_EQUIP_PRIMARY_STAT_SCALE, "PlayerAutoProgression.AutoEquip.Weight.Primary", 1.0f, 0.0f);
+    setConfigMin(CONFIG_FLOAT_AUTO_EQUIP_SECONDARY_STAT_SCALE, "PlayerAutoProgression.AutoEquip.Weight.Secondary", 1.0f, 0.0f);
+    setConfigMin(CONFIG_FLOAT_AUTO_EQUIP_SURVIVAL_STAT_SCALE, "PlayerAutoProgression.AutoEquip.Weight.Survival", 1.0f, 0.0f);
+    setConfigMin(CONFIG_FLOAT_AUTO_EQUIP_WEAPON_DPS_SCALE, "PlayerAutoProgression.AutoEquip.Weight.WeaponDps", 1.0f, 0.0f);
+    setConfigMin(CONFIG_FLOAT_AUTO_EQUIP_SPELL_POWER_SCALE, "PlayerAutoProgression.AutoEquip.Weight.SpellPower", 1.0f, 0.0f);
     setConfigMinMax(CONFIG_UINT32_MAINTENANCE_DAY, "MaintenanceDay", 4, 0, 6);
     setConfig(CONFIG_UINT32_CHARDB_CLEANUP_FLAGS, "CharacterDatabaseCleanupFlags", CharacterDatabaseCleaner::CLEANING_FLAG_CHARACTERS | CharacterDatabaseCleaner::CLEANING_FLAG_PETS | CharacterDatabaseCleaner::CLEANING_FLAG_ITEMS);
     setConfig(CONFIG_BOOL_AUTO_HONOR_RESTART, "AutoHonorRestart", true);

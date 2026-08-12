@@ -1983,6 +1983,9 @@ class Player final: public Unit
         WorldSession* GetSession() const { return m_session; }
         void SetSession(WorldSession* s);
         bool IsBot() const { return m_session->GetBot() != nullptr; }
+        uint8 GetPendingAutoProgressionActions() const { return m_pendingAutoProgressionActions; }
+        void AddPendingAutoProgressionActions(uint8 actions) { m_pendingAutoProgressionActions |= actions; }
+        void ClearPendingAutoProgressionActions() { m_pendingAutoProgressionActions = 0; }
 
         void BuildCreateUpdateBlockForPlayer(UpdateData& data, Player* target) const override;
         void DestroyForPlayer(Player const* target) const override;
@@ -2011,6 +2014,7 @@ class Player final: public Unit
         bool m_isStandUpScheduled;
         uint32 m_detectInvisibilityTimer;
         uint32 m_ExtraFlags;
+        uint8 m_pendingAutoProgressionActions;
         ObjectGuid m_curSelectionGuid;
         ResurrectionData m_resurrectData;
         uint32 m_drunkTimer;

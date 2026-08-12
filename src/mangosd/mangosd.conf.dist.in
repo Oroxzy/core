@@ -2936,6 +2936,102 @@ AHBot.ah.fid = 120
 AHBot.itemcount = 50
 
 ###################################################################################################################
+# PLAYER AUTO PROGRESSION
+#
+# Event switches default to off. Trainer learning reuses the normal GREEN trainer-state checks, but does not charge
+# copper. Talent points are never assigned automatically. AutoEquip scans loaded item prototypes and uses the
+# character's class plus highest-spend talent tree. Replaced gear is moved into bags; a full inventory skips the swap.
+#
+#    PlayerAutoProgression.AutoLearn.OnLevelUp
+#    PlayerAutoProgression.AutoLearn.OnTalentLearn
+#        Learn every currently available spell from class and/or weapon trainers after the respective event.
+#
+#    PlayerAutoProgression.AutoLearn.ClassTrainers
+#    PlayerAutoProgression.AutoLearn.WeaponTrainers
+#        Select trainer source groups. Normal race, class, level, spell-chain and skill prerequisites still apply.
+#
+#    PlayerAutoProgression.AutoLearn.MaxWeaponSkills
+#        Set every known weapon skill and Defense to the current level cap (level * 5, maximum 300).
+#
+#    PlayerAutoProgression.AutoEquip.OnLevelUp
+#    PlayerAutoProgression.AutoEquip.OnTalentLearn
+#        Re-evaluate the complete equipment set after the respective event.
+#
+#    PlayerAutoProgression.AutoEquip.MinLevel
+#        Lowest character level at which automatic equipment is active. Range: 1-60.
+#
+#    PlayerAutoProgression.AutoEquip.MaxQuality
+#        Highest generated item quality. 0=Poor, 1=Common, 2=Uncommon, 3=Rare, 4=Epic, 5=Legendary.
+#
+#    PlayerAutoProgression.AutoEquip.MaxItemLevelBonus
+#        Maximum item-level lead for items without a RequiredLevel. Items with RequiredLevel use that requirement.
+#
+#    PlayerAutoProgression.AutoEquip.RequireDiscovered
+#        If enabled, only item prototypes already discovered by players are considered.
+#
+#    PlayerAutoProgression.AutoEquip.ReplaceExisting
+#        If enabled, upgrades replace equipped items after safely moving the old items into bags.
+#
+#    PlayerAutoProgression.AutoEquip.Weight.*
+#        Global multipliers layered over the built-in Vanilla class/spec profiles.
+#
+#    PlayerAutoProgression.AutoEnchant.OnLevelUp
+#    PlayerAutoProgression.AutoEnchant.OnTalentLearn
+#        Re-evaluate permanent item improvements after auto-equipping for the respective event.
+#
+#    PlayerAutoProgression.AutoEnchant.ReplaceExisting
+#        If enabled, replace an existing permanent enchant only when the new spec-weighted result scores higher.
+#
+#    PlayerAutoProgression.AutoEnchant.Source.Enchanting
+#        Include every real permanent Vanilla Enchanting recipe (SkillLine 333). Temporary oils/stones are excluded.
+#
+#    PlayerAutoProgression.AutoEnchant.Source.Scopes
+#    PlayerAutoProgression.AutoEnchant.Source.ShieldSpikes
+#    PlayerAutoProgression.AutoEnchant.Source.ArmorKits
+#        Include the obtainable permanent Vanilla crafted improvements from the corresponding source.
+#
+#    PlayerAutoProgression.AutoEnchant.Source.Librams
+#    PlayerAutoProgression.AutoEnchant.Source.Zandalar
+#    PlayerAutoProgression.AutoEnchant.Source.ArgentDawn
+#    PlayerAutoProgression.AutoEnchant.Source.Naxxramas
+#        Include obtainable permanent quest/NPC improvements from the corresponding Vanilla source.
+#
+# AutoEnchant respects the active realm patch plus source-item class, minimum-level, reputation and applicable
+# quest-unlock restrictions. It simulates an external artisan/NPC service: source items, recipes, professions,
+# currency and reagents are not consumed.
+#
+###################################################################################################################
+PlayerAutoProgression.AutoLearn.OnLevelUp = 0
+PlayerAutoProgression.AutoLearn.OnTalentLearn = 0
+PlayerAutoProgression.AutoLearn.ClassTrainers = 1
+PlayerAutoProgression.AutoLearn.WeaponTrainers = 1
+PlayerAutoProgression.AutoLearn.MaxWeaponSkills = 0
+
+PlayerAutoProgression.AutoEquip.OnLevelUp = 0
+PlayerAutoProgression.AutoEquip.OnTalentLearn = 0
+PlayerAutoProgression.AutoEquip.MinLevel = 1
+PlayerAutoProgression.AutoEquip.MaxQuality = 4
+PlayerAutoProgression.AutoEquip.MaxItemLevelBonus = 10
+PlayerAutoProgression.AutoEquip.RequireDiscovered = 0
+PlayerAutoProgression.AutoEquip.ReplaceExisting = 1
+PlayerAutoProgression.AutoEquip.Weight.Primary = 1.0
+PlayerAutoProgression.AutoEquip.Weight.Secondary = 1.0
+PlayerAutoProgression.AutoEquip.Weight.Survival = 1.0
+PlayerAutoProgression.AutoEquip.Weight.WeaponDps = 1.0
+PlayerAutoProgression.AutoEquip.Weight.SpellPower = 1.0
+
+PlayerAutoProgression.AutoEnchant.OnLevelUp = 0
+PlayerAutoProgression.AutoEnchant.OnTalentLearn = 0
+PlayerAutoProgression.AutoEnchant.ReplaceExisting = 1
+PlayerAutoProgression.AutoEnchant.Source.Enchanting = 1
+PlayerAutoProgression.AutoEnchant.Source.Scopes = 1
+PlayerAutoProgression.AutoEnchant.Source.ShieldSpikes = 1
+PlayerAutoProgression.AutoEnchant.Source.ArmorKits = 1
+PlayerAutoProgression.AutoEnchant.Source.Librams = 1
+PlayerAutoProgression.AutoEnchant.Source.Zandalar = 1
+PlayerAutoProgression.AutoEnchant.Source.ArgentDawn = 1
+PlayerAutoProgression.AutoEnchant.Source.Naxxramas = 1
+
 # PLAYER BOTS
 #
 #    RandomBot.Enable

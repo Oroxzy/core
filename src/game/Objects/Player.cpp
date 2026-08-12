@@ -24,6 +24,7 @@
 #include <sstream>
 
 #include "Player.h"
+#include "PlayerAutoProgression.h"
 #include "Bag.h"
 #include "Language.h"
 #include "Database/DatabaseEnv.h"
@@ -122,6 +123,7 @@ Player::Player(WorldSession* session) : Unit(),
     m_isActiveObject = true;                                // player is always active object
 
     m_session = session;
+    m_pendingAutoProgressionActions = 0;
 
     m_ExtraFlags = 0;
     if (GetSession()->GetSecurity() > SEC_PLAYER)
@@ -1113,7 +1115,6 @@ void Player::Update(uint32 update_diff, uint32 p_time)
 {
     if (!IsInWorld())
         return;
-
     UpdateMirrorTimers(update_diff);
 
     //used to implement delayed far teleports
@@ -1122,6 +1123,7 @@ void Player::Update(uint32 update_diff, uint32 p_time)
     if (m_AI)
         m_AI->UpdateAI(p_time);
     SetCanDelayTeleport(false);
+    PlayerAutoProgression::OnPlayerUpdate(this);
 
     time_t now = time(nullptr);
 
@@ -3098,6 +3100,7 @@ void Player::GiveLevel(uint32 level)
 {
     if (level == GetLevel())
         return;
+    bool const levelIncreased = level > GetLevel();
 
     uint32 numInstanceMembers = 0;
     uint32 numGroupMembers = 0;
@@ -3231,6 +3234,8 @@ void Player::GiveLevel(uint32 level)
     SetCreateMana(classInfo.basemana);
 
     InitTalentForLevel();
+    if (levelIncreased)
+        PlayerAutoProgression::OnLevelUp(this);
 
     UpdateAllStats();
 
@@ -20894,6 +20899,7 @@ bool Player::LearnTalent(uint32 talentId, uint32 talentRank)
 
     // learn! (other talent ranks will unlearned at learning)
     LearnSpell(spellid, false, true);
+    PlayerAutoProgression::OnTalentLearned(this);
     sLog.Out(LOG_BASIC, LOG_LVL_DETAIL, "TalentID: %u Rank: %u Spell: %u\n", talentId, talentRank, spellid);
     return true;
 }
