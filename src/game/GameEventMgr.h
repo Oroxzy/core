@@ -27,6 +27,8 @@
 #include "Platform/Define.h"
 #include "Policies/Singleton.h"
 
+#include <unordered_map>
+
 #define max_ge_check_delay 86400                            // 1 day in seconds
 #define default_year_length 525600                          // 365 days in minutes
 
@@ -126,6 +128,18 @@ class GameEventMgr
         bool IsEnabled(uint16 event_id);
         template<typename T>
         int16 GetGameEventId(uint32 guid_or_poolid);
+        std::unordered_map<uint32, int16> const& GetCreatureEventIds() const
+        {
+            return mCreatureEventIds;
+        }
+        std::unordered_map<uint32, int16> const& GetGameObjectEventIds() const
+        {
+            return mGameObjectEventIds;
+        }
+        std::unordered_map<uint32, int16> const& GetPoolEventIds() const
+        {
+            return mPoolEventIds;
+        }
 
         GameEventCreatureData const* GetCreatureUpdateDataForActiveEvent(uint32 lowguid) const;
         HardcodedEventList mGameEventHardcodedList;
@@ -165,6 +179,9 @@ class GameEventMgr
         GameEventIdMap    mGameEventSpawnPoolIds;           // events size, only positive event case
         GameEventDataMap  mGameEvent;
         ActiveEvents m_ActiveEvents;
+        std::unordered_map<uint32, int16> mCreatureEventIds;
+        std::unordered_map<uint32, int16> mGameObjectEventIds;
+        std::unordered_map<uint32, int16> mPoolEventIds;
         bool m_IsGameEventsInit;
 };
 

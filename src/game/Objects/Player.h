@@ -1986,6 +1986,9 @@ class Player final: public Unit
         uint8 GetPendingAutoProgressionActions() const { return m_pendingAutoProgressionActions; }
         void AddPendingAutoProgressionActions(uint8 actions) { m_pendingAutoProgressionActions |= actions; }
         void ClearPendingAutoProgressionActions() { m_pendingAutoProgressionActions = 0; }
+        uint32 GetAutoProgressionDelay() const { return m_autoProgressionDelay; }
+        void SetAutoProgressionDelay(uint32 delay) { m_autoProgressionDelay = delay; }
+        void UpdateAutoProgressionDelay(uint32 diff) { m_autoProgressionDelay = diff >= m_autoProgressionDelay ? 0 : m_autoProgressionDelay - diff; }
 
         void BuildCreateUpdateBlockForPlayer(UpdateData& data, Player* target) const override;
         void DestroyForPlayer(Player const* target) const override;
@@ -2015,6 +2018,7 @@ class Player final: public Unit
         uint32 m_detectInvisibilityTimer;
         uint32 m_ExtraFlags;
         uint8 m_pendingAutoProgressionActions;
+        uint32 m_autoProgressionDelay;
         ObjectGuid m_curSelectionGuid;
         ResurrectionData m_resurrectData;
         uint32 m_drunkTimer;

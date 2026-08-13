@@ -124,6 +124,7 @@ Player::Player(WorldSession* session) : Unit(),
 
     m_session = session;
     m_pendingAutoProgressionActions = 0;
+    m_autoProgressionDelay = 0;
 
     m_ExtraFlags = 0;
     if (GetSession()->GetSecurity() > SEC_PLAYER)
@@ -1123,7 +1124,7 @@ void Player::Update(uint32 update_diff, uint32 p_time)
     if (m_AI)
         m_AI->UpdateAI(p_time);
     SetCanDelayTeleport(false);
-    PlayerAutoProgression::OnPlayerUpdate(this);
+    PlayerAutoProgression::OnPlayerUpdate(this, update_diff);
 
     time_t now = time(nullptr);
 
@@ -4208,6 +4209,7 @@ bool Player::ResetTalents(bool noCost)
 
     //FIXME: remove pet before or after unlearn spells? for now after unlearn to allow removing of talent related, pet affecting auras
     RemovePet(PET_SAVE_REAGENTS);
+    PlayerAutoProgression::OnTalentsReset(this);
     return true;
 }
 

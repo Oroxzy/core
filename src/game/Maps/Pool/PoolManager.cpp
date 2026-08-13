@@ -21,6 +21,7 @@
 
 #include "PoolManager.h"
 #include "ObjectMgr.h"
+#include "PlayerAutoProgression.h"
 #include "ObjectGuid.h"
 #include "ProgressBar.h"
 #include "Log.h"
@@ -667,6 +668,7 @@ bool CheckPoolAndChance(char const* table, uint16 pool_id, float chance)
 
 void PoolManager::LoadFromDB()
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     std::unique_ptr<QueryResult> result = WorldDatabase.PQuery("SELECT MAX(`entry`) FROM `pool_template` WHERE %u BETWEEN `patch_min` AND `patch_max`", sWorld.GetWowPatch());
     if (!result)
     {

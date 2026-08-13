@@ -28,6 +28,7 @@
 #include "Log.h"
 #include "MapManager.h"
 #include "ObjectGuid.h"
+#include "PlayerAutoProgression.h"
 #include "ScriptMgr.h"
 #include "SpellMgr.h"
 #include "UpdateMask.h"
@@ -332,6 +333,7 @@ void ObjectMgr::LoadAllIdentifiers()
 // Nostalrius
 void ObjectMgr::LoadSpellDisabledEntrys()
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     m_DisabledSpells.clear();                                // need for reload case
 
     std::unique_ptr<QueryResult> result(WorldDatabase.Query("SELECT `entry` FROM `spell_disabled`"));
@@ -373,6 +375,7 @@ void ObjectMgr::LoadSpellDisabledEntrys()
 
 void ObjectMgr::LoadMapLootDisabled()
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     m_DisabledMapLoots.clear();                                // need for reload case
 
     std::unique_ptr<QueryResult> result(WorldDatabase.Query("SELECT `map_id` FROM `map_loot_disabled`"));
@@ -1189,6 +1192,7 @@ struct SQLCreatureLoader : public SQLStorageLoaderBase<SQLCreatureLoader, SQLSto
 
 void ObjectMgr::LoadCreatureTemplates()
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     //                                                                0        1       2          3            4            5          6            7                 8              9              10             11             12                13                14                15                16                      17                       18                     19                      20                           21                  22            23           24                 25                     26             27      28            29      30            31               32                   33                 34                  35                   36                 37               38                  39                    40          41          42            43           44            45            46              47               48               49               50         51                    52                  53          54          55               56                   57                58                59       60         61               62              63          64               65              66            67           68                      69                    70                71               72               73             74
     std::unique_ptr<QueryResult> result(WorldDatabase.PQuery("SELECT `entry`, `name`, `subname`, `level_min`, `level_max`, `faction`, `npc_flags`, `gossip_menu_id`, `display_id1`, `display_id2`, `display_id3`, `display_id4`, `display_scale1`, `display_scale2`, `display_scale3`, `display_scale4`, `display_probability1`, `display_probability2`, `display_probability3`, `display_probability4`, `display_total_probability`, `mount_display_id`, `speed_walk`, `speed_run`, `detection_range`, `call_for_help_range`, `leash_range`, `type`, `pet_family`, `rank`, `unit_class`, `xp_multiplier`, `health_multiplier`, `mana_multiplier`, `armor_multiplier`, `damage_multiplier`, `damage_variance`, `damage_school`, `base_attack_time`, `ranged_attack_time`, `holy_res`, `fire_res`, `nature_res`, `frost_res`, `shadow_res`, `arcane_res`, `trainer_type`, `trainer_spell`, `trainer_class`, `trainer_race`,  `loot_id`, `pickpocket_loot_id`, `skinning_loot_id`, `gold_min`, `gold_max`, `spell_list_id`, `pet_spell_list_id`, `spawn_spell_id`, `totem_spell_id`, `auras`, `ai_name`, `movement_type`, `inhabit_type`, `civilian`, `racial_leader`, `equipment_id`, `trainer_id`, `vendor_id`, `mechanic_immune_mask`, `school_immune_mask`, `immunity_flags`, `static_flags1`, `static_flags2`, `flags_extra`, `script_name` FROM `creature_template` t1 WHERE `patch`=(SELECT max(`patch`) FROM `creature_template` t2 WHERE t1.`entry`=t2.`entry` && `patch` <= %u)", sWorld.GetWowPatch()));
 
@@ -1208,6 +1212,7 @@ void ObjectMgr::LoadCreatureTemplates()
 
 void ObjectMgr::LoadCreatureTemplate(uint32 entry)
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     //                                                                0        1       2          3            4            5          6            7                 8              9              10             11             12                13                14                15                16                      17                       18                     19                      20                           21                  22            23           24                 25                     26             27      28            29      30            31               32                   33                 34                  35                   36                 37               38                  39                    40          41          42            43           44            45            46              47               48               49               50         51                    52                  53          54          55               56                   57                58                59       60         61               62              63          64               65              66            67           68                      69                    70                71               72               73             74
     std::unique_ptr<QueryResult> result(WorldDatabase.PQuery("SELECT `entry`, `name`, `subname`, `level_min`, `level_max`, `faction`, `npc_flags`, `gossip_menu_id`, `display_id1`, `display_id2`, `display_id3`, `display_id4`, `display_scale1`, `display_scale2`, `display_scale3`, `display_scale4`, `display_probability1`, `display_probability2`, `display_probability3`, `display_probability4`, `display_total_probability`, `mount_display_id`, `speed_walk`, `speed_run`, `detection_range`, `call_for_help_range`, `leash_range`, `type`, `pet_family`, `rank`, `unit_class`, `xp_multiplier`, `health_multiplier`, `mana_multiplier`, `armor_multiplier`, `damage_multiplier`, `damage_variance`, `damage_school`, `base_attack_time`, `ranged_attack_time`, `holy_res`, `fire_res`, `nature_res`, `frost_res`, `shadow_res`, `arcane_res`, `trainer_type`, `trainer_spell`, `trainer_class`, `trainer_race`,  `loot_id`, `pickpocket_loot_id`, `skinning_loot_id`, `gold_min`, `gold_max`, `spell_list_id`, `pet_spell_list_id`, `spawn_spell_id`, `totem_spell_id`, `auras`, `ai_name`, `movement_type`, `inhabit_type`, `civilian`, `racial_leader`, `equipment_id`, `trainer_id`, `vendor_id`, `mechanic_immune_mask`, `school_immune_mask`, `immunity_flags`, `static_flags1`, `static_flags2`, `flags_extra`, `script_name` FROM `creature_template` t1 WHERE `entry`=%u && `patch`=(SELECT max(`patch`) FROM `creature_template` t2 WHERE t1.`entry`=t2.`entry` && `patch` <= %u)", entry, sWorld.GetWowPatch()));
 
@@ -2317,6 +2322,7 @@ CreatureClassLevelStats const* ObjectMgr::GetCreatureClassLevelStats(uint32 unit
 
 void ObjectMgr::LoadCreatures(bool reload)
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     //                                                                          0                  1                2                 3                 4                 5      6
     std::unique_ptr<QueryResult> result(WorldDatabase.Query("SELECT `creature`.`guid`, `creature`.`id`, `creature`.`id2`, `creature`.`id3`, `creature`.`id4`, `creature`.`id5`, `map`,"
     //                      7             8             9             10             11                  12                  13
@@ -2524,6 +2530,7 @@ void ObjectMgr::RemoveCreatureFromGrid(uint32 guid, CreatureData const* data)
 
 void ObjectMgr::LoadGameobjects(bool reload)
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     //                                                                            0                    1     2      3             4             5             6
     std::unique_ptr<QueryResult> result(WorldDatabase.Query("SELECT `gameobject`.`guid`, `gameobject`.`id`, `map`, `position_x`, `position_y`, `position_z`, `orientation`,"
     //                      7            8            9            10           11                12              13       14      15
@@ -3813,6 +3820,7 @@ void ObjectMgr::FillObtainedItemsList(std::set<uint32>& obtainedItems)
 
 void ObjectMgr::LoadItemPrototypes()
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     m_itemPrototypesMap.clear();
 
     //                                                                0        1        2           3       4              5                6          7        8            9            10            11                12                 13                14            15                16                17                     18                19                     20                    21                             22                          23           24           25                 26            27             28            29             30            31             32            33             34            35             36            37             38            39             40            41             42            43             44             45              46       47           48           49          50          51           52          53          54           55          56          57           58          59          60           61          62          63           64       65       66          67          68            69           70            71            72           73                74                75                76                 77                 78                         79           80                81                82                83                 84                 85                         86           87                88                89                90                 91                 92                         93           94                95                96                97                 98                 99                         100          101               102               103               104                105                106                        107        108          109              110              111            112        113         114       115                116       117               118           119          120         121           122              123          124               125               126            127                 128
@@ -5521,6 +5529,7 @@ void ObjectMgr::LoadGroups()
 
 void ObjectMgr::LoadQuests()
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     std::set<uint32> loadedQuestTemplateIds;
     // For reload case
     for (auto const& itr : m_QuestTemplatesMap)
@@ -8144,6 +8153,7 @@ inline void CheckGOConsumable(GameObjectInfo const* goInfo, uint32 dataN, uint32
 
 void ObjectMgr::LoadGameObjectTemplates()
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     //                                                                0        1       2            3       4       5          6        7       8        9        10       11       12       13       14       15       16       17       18        19        20        21        22        23        24        25        26        27        28        29        30        31        32         33         34
     std::unique_ptr<QueryResult> result(WorldDatabase.PQuery("SELECT `entry`, `type`, `displayId`, `name`, `icon`, `faction`, `flags`, `size`, `data0`, `data1`, `data2`, `data3`, `data4`, `data5`, `data6`, `data7`, `data8`, `data9`, `data10`, `data11`, `data12`, `data13`, `data14`, `data15`, `data16`, `data17`, `data18`, `data19`, `data20`, `data21`, `data22`, `data23`, `mingold`, `maxgold`, `script_name` FROM `gameobject_template` t1 WHERE `patch`=(SELECT max(`patch`) FROM `gameobject_template` t2 WHERE t1.`entry`=t2.`entry` && `patch` <= %u)", sWorld.GetWowPatch()));
 
@@ -8167,6 +8177,7 @@ void ObjectMgr::LoadGameObjectTemplates()
 
 void ObjectMgr::LoadGameObjectTemplate(uint32 entry)
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     //                                                                0        1       2            3       4       5          6        7       8        9        10       11       12       13       14       15       16       17       18        19        20        21        22        23        24        25        26        27        28        29        30        31        32         33         34
     std::unique_ptr<QueryResult> result(WorldDatabase.PQuery("SELECT `entry`, `type`, `displayId`, `name`, `icon`, `faction`, `flags`, `size`, `data0`, `data1`, `data2`, `data3`, `data4`, `data5`, `data6`, `data7`, `data8`, `data9`, `data10`, `data11`, `data12`, `data13`, `data14`, `data15`, `data16`, `data17`, `data18`, `data19`, `data20`, `data21`, `data22`, `data23`, `mingold`, `maxgold`, `script_name` FROM `gameobject_template` t1 WHERE `entry`=%u && `patch`=(SELECT max(`patch`) FROM `gameobject_template` t2 WHERE t1.`entry`=t2.`entry` && `patch` <= %u)", entry, sWorld.GetWowPatch()));
 
@@ -9137,6 +9148,7 @@ void ObjectMgr::LoadPointsOfInterest()
 
 void ObjectMgr::DeleteCreatureData(uint32 guid)
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     // remove mapid*cellid -> guid_set map
     CreatureData const* data = GetCreatureData(guid);
     if (data)
@@ -9150,6 +9162,7 @@ void ObjectMgr::DeleteCreatureData(uint32 guid)
 
 void ObjectMgr::DeleteGOData(uint32 guid)
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     // remove mapid*cellid -> guid_set map
     GameObjectData const* data = GetGOData(guid);
     if (data)
@@ -10604,6 +10617,7 @@ bool ObjectMgr::DeleteGameTele(std::string const& name)
 
 void ObjectMgr::LoadTrainers(char const* tableName, bool isTemplates)
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     CacheTrainerSpellMap& trainerList = isTemplates ? m_CacheTrainerTemplateSpellMap : m_CacheTrainerSpellMap;
 
     // For reload case
@@ -10784,6 +10798,7 @@ void ObjectMgr::LoadTrainerTemplates()
 
 void ObjectMgr::LoadVendors(char const* tableName, bool isTemplates)
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     CacheVendorItemMap& vendorList = isTemplates ? m_CacheVendorTemplateItemMap : m_CacheVendorItemMap;
 
     // For reload case
@@ -11212,6 +11227,7 @@ void ObjectMgr::LoadGossipMenuItems(std::set<uint32>& gossipScriptSet)
 
 void ObjectMgr::AddVendorItem(uint32 entry, uint32 item, uint32 maxcount, uint32 incrtime, uint32 itemflags)
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     VendorItemData& vList = m_CacheVendorItemMap[entry];
     vList.AddItem(item, maxcount, incrtime, itemflags, 0);
 
@@ -11220,6 +11236,7 @@ void ObjectMgr::AddVendorItem(uint32 entry, uint32 item, uint32 maxcount, uint32
 
 bool ObjectMgr::RemoveVendorItem(uint32 entry, uint32 item)
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     CacheVendorItemMap::iterator  iter = m_CacheVendorItemMap.find(entry);
     if (iter == m_CacheVendorItemMap.end())
         return false;
@@ -11452,6 +11469,7 @@ GameObjectDataPair const* FindGOData::GetResult() const
 
 uint32 ObjectMgr::AddGOData(uint32 entry, uint32 mapId, float x, float y, float z, float o, uint32 spawntimedelay, float rotation0, float rotation1, float rotation2, float rotation3)
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     GameObjectInfo const* goinfo = GetGameObjectTemplate(entry);
     if (!goinfo)
         return 0;
@@ -11501,6 +11519,7 @@ uint32 ObjectMgr::AddGOData(uint32 entry, uint32 mapId, float x, float y, float 
 
 bool ObjectMgr::MoveCreData(uint32 guid, uint32 mapId, Position const& pos)
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     CreatureData& data = NewOrExistCreatureData(guid);
     if (!data.creature_id[0])
         return false;
@@ -11535,6 +11554,7 @@ bool ObjectMgr::MoveCreData(uint32 guid, uint32 mapId, Position const& pos)
 
 uint32 ObjectMgr::AddCreData(uint32 entry, uint32 /*team*/, uint32 mapId, float x, float y, float z, float o, uint32 spawntimedelay)
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     CreatureInfo const* cInfo = GetCreatureTemplate(entry);
     if (!cInfo)
         return 0;

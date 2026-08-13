@@ -202,6 +202,10 @@ class ChatHandler
         bool HandleViewLogCommand(char*);
         bool HandleSniffCommand(char*);
 
+        bool HandleAutoProgressionStatusCommand(char* args);
+        bool HandleAutoProgressionPreviewCommand(char* args);
+        bool HandleAutoProgressionApplyCommand(char* args);
+
         //Cheats
         bool HandleCheatStatusCommand(char *);
         bool HandleCheatBeastmasterCommand(char* args);

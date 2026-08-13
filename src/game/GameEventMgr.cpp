@@ -20,6 +20,7 @@
  */
 
 #include "GameEventMgr.h"
+#include "PlayerAutoProgression.h"
 #include "World.h"
 #include "ObjectMgr.h"
 #include "ObjectGuid.h"
@@ -114,6 +115,7 @@ void GameEventMgr::StopEvent(uint16 event_id, bool overwrite)
 
 void GameEventMgr::EnableEvent(uint16 event_id, bool enable)
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     // skip if event not exists or length <= 0
     if (!IsValidEvent(event_id))
     {
@@ -164,6 +166,10 @@ bool GameEventMgr::IsEnabled(uint16 event_id)
 
 void GameEventMgr::LoadFromDB()
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
+    mCreatureEventIds.clear();
+    mGameObjectEventIds.clear();
+    mPoolEventIds.clear();
     {
         std::unique_ptr<QueryResult> result = WorldDatabase.Query("SELECT MAX(entry) FROM game_event");
         if (!result)
@@ -264,7 +270,6 @@ void GameEventMgr::LoadFromDB()
     std::map<uint16, int16> pool2event;                     // for check unique spawn event associated with pool
     std::map<uint32, int16> creature2event;                 // for check unique spawn event associated with creature
     std::map<uint32, int16> go2event;                       // for check unique spawn event associated with gameobject
-
     // list only positive event top pools, filled at creature/gameobject loading
     mGameEventSpawnPoolIds.resize(mGameEvent.size());
 
@@ -316,6 +321,7 @@ void GameEventMgr::LoadFromDB()
             int32 internal_event_id = mGameEvent.size() + event_id - 1;
 
             ++count;
+            mCreatureEventIds[guid] = event_id;
 
             // spawn objects at event can be grouped in pools and then affected pools have stricter requirements for this case
             if (event_id > 0)
@@ -394,6 +400,7 @@ void GameEventMgr::LoadFromDB()
             int32 internal_event_id = mGameEvent.size() + event_id - 1;
 
             ++count;
+            mGameObjectEventIds[guid] = event_id;
 
             // spawn objects at event can be grouped in pools and then affected pools have stricter requirements for this case
             if (event_id > 0)
@@ -435,6 +442,7 @@ void GameEventMgr::LoadFromDB()
     {
         uint16 pool_id = itr.first;
         int16 event_id = itr.second;
+        mPoolEventIds[pool_id] = event_id;
 
         sPoolMgr.CheckEventLinkAndReport(pool_id, event_id, creature2event, go2event);
     }
@@ -764,6 +772,7 @@ uint32 GameEventMgr::Update(ActiveEvents const* activeAtShutdown /*= nullptr*/)
 
 void GameEventMgr::UnApplyEvent(uint16 event_id)
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     m_ActiveEvents.erase(event_id);
     CharacterDatabase.PExecute("DELETE FROM game_event_status WHERE event = %u", event_id);
 
@@ -782,6 +791,7 @@ void GameEventMgr::UnApplyEvent(uint16 event_id)
 
 void GameEventMgr::ApplyNewEvent(uint16 event_id, bool resume)
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     m_ActiveEvents.insert(event_id);
     CharacterDatabase.PExecute("INSERT IGNORE INTO game_event_status (event) VALUES (%u)", event_id);
 

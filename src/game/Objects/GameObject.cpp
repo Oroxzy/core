@@ -22,6 +22,7 @@
 #include "GameObject.h"
 #include "QuestDef.h"
 #include "ObjectMgr.h"
+#include "PlayerAutoProgression.h"
 #include "PoolManager.h"
 #include "SpellMgr.h"
 #include "Spell.h"
@@ -902,6 +903,7 @@ void GameObject::SaveToDB()
 
 void GameObject::SaveToDB(uint32 mapid)
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     GameObjectInfo const* goI = GetGOInfo();
 
     if (!goI)

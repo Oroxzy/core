@@ -2938,30 +2938,47 @@ AHBot.itemcount = 50
 ###################################################################################################################
 # PLAYER AUTO PROGRESSION
 #
-# Event switches default to off. Trainer learning reuses the normal GREEN trainer-state checks, but does not charge
-# copper. Talent points are never assigned automatically. AutoEquip scans loaded item prototypes and uses the
-# character's class plus highest-spend talent tree. Replaced gear is moved into bags by default.
+# Level-up and talent-learn triggers default to on; login and talent-reset triggers default to off. Trainer learning
+# reuses the normal GREEN trainer-state checks, but does not charge copper. Talent points are never assigned
+# automatically. AutoEquip scans loaded item prototypes and uses the character's class plus highest-spend talent tree.
+# Replaced gear is permanently deleted by default.
+# GM inspection is available through .autoprogression status [player], .autoprogression preview [player], and the
+# administrator-only .autoprogression apply [player]. Preview is read-only and explains scores and planned changes.
+# Debug builds emit one aggregated performance line per cache rebuild and auto-progression operation when
+# LogLevel.Console or LogLevel.File is set to 4. Non-Debug builds contain no auto-progression telemetry overhead.
+#
+#    PlayerAutoProgression.TalentDebounceMs
+#        Delay in milliseconds used to coalesce rapid talent changes before talent-triggered learning, equipment and
+#        enchantment re-evaluation. Each additional talent change restarts the delay. Range: 0-10000. Default: 750.
 #
 #    PlayerAutoProgression.AutoLearn.OnLevelUp
 #    PlayerAutoProgression.AutoLearn.OnTalentLearn
+#    PlayerAutoProgression.AutoLearn.OnLogin
 #        Learn every currently available spell from class and/or weapon trainers after the respective event.
+#        Default: 1 for OnLevelUp and OnTalentLearn; 0 for OnLogin.
 #
 #    PlayerAutoProgression.AutoLearn.ClassTrainers
 #    PlayerAutoProgression.AutoLearn.WeaponTrainers
 #        Select trainer source groups. Normal race, class, level, spell-chain and skill prerequisites still apply.
+#        Default: 1 for each switch.
 #
 #    PlayerAutoProgression.AutoLearn.MaxWeaponSkills
 #        Set every known weapon skill and Defense to the current level cap (level * 5, maximum 300).
+#        Default: 1.
 #
 #    PlayerAutoProgression.AutoEquip.OnLevelUp
 #    PlayerAutoProgression.AutoEquip.OnTalentLearn
-#        Re-evaluate the complete equipment set after the respective event.
+#    PlayerAutoProgression.AutoEquip.OnLogin
+#    PlayerAutoProgression.AutoEquip.OnTalentReset
+#        Re-evaluate the complete equipment set after the respective event. Talent-triggered runs use TalentDebounceMs.
+#        Default: 1 for OnLevelUp and OnTalentLearn; 0 for OnLogin and OnTalentReset.
 #
 #    PlayerAutoProgression.AutoEquip.MinLevel
 #        Lowest character level at which automatic equipment is active. Range: 1-60.
 #
 #    PlayerAutoProgression.AutoEquip.MaxQuality
 #        Highest generated item quality. 0=Poor, 1=Common, 2=Uncommon, 3=Rare, 4=Epic, 5=Legendary.
+#        Default: 5.
 #
 #    PlayerAutoProgression.AutoEquip.MaxItemLevelBonus
 #        Maximum item-level lead for items without a RequiredLevel. Items with RequiredLevel use that requirement.
@@ -2969,23 +2986,71 @@ AHBot.itemcount = 50
 #    PlayerAutoProgression.AutoEquip.RequireDiscovered
 #        If enabled, only item prototypes already discovered by players are considered.
 #
+#    PlayerAutoProgression.AutoEquip.IgnoreItemsWithoutStatsAndArmor
+#        If enabled, items without useful equipment attributes are ignored. Any non-zero ItemStat value, armor,
+#        weapon DPS, block, resistances, item-set membership and on-equip, on-use or chance-on-hit item spells all count.
+#
 #    PlayerAutoProgression.AutoEquip.ReplaceExisting
 #        If enabled, upgrades may replace equipped items.
 #
 #    PlayerAutoProgression.AutoEquip.DeleteReplacedItems
 #        If enabled together with ReplaceExisting, replaced gear is permanently destroyed instead of moved into bags.
 #        This avoids bag-space requirements, but also permanently removes existing enchants. Indestructible items are kept.
+#        Default: 1.
 #
 #    PlayerAutoProgression.AutoEquip.IncludeQuestRewards
 #        If enabled, equipment referenced by loaded quests as a reward is considered. Its earliest active race/class-compatible
-#        quest MinLevel is enforced in addition to normal item restrictions. Set to 0 to exclude all quest-reward gear.
+#        quest MinLevel is enforced in addition to normal item restrictions. For an unfinished choice reward, one currently
+#        usable option is selected with the same class/spec score as AutoEquip. Set to 0 to exclude personally quest-gated
+#        reward gear; the independent BoE option below can still admit tradeable quest rewards.
+#        Default: 0.
+#
+#    PlayerAutoProgression.AutoEquip.AllowBoEQuestRewardsWithoutQuest
+#        If enabled, Bind-on-Equip rewards from at least one loaded, globally active quest may be generated without the
+#        receiving character being able to take or having completed that quest. This models another character obtaining
+#        and trading the still-unbound reward.
+#        Quest MinLevel, choice exclusivity and per-quest reward counts are therefore not applied to these items. Normal item
+#        requirements, MaxCount and all other AutoEquip restrictions still apply. Only Bonding=Bind-on-Equip is covered;
+#        Bind-on-Pickup and quest-bound items remain quest-gated. This switch works independently of IncludeQuestRewards.
+#        Default: 1.
+#
+#    PlayerAutoProgression.AutoEquip.Source.Vendor
+#    PlayerAutoProgression.AutoEquip.Source.Crafted
+#    PlayerAutoProgression.AutoEquip.Source.WorldLoot
+#    PlayerAutoProgression.AutoEquip.Source.DungeonLoot
+#    PlayerAutoProgression.AutoEquip.Source.RaidLoot
+#    PlayerAutoProgression.AutoEquip.Source.Other
+#        Select eligible acquisition sources: vendors, crafted items, outdoor-world loot, dungeon loot, raid loot,
+#        or items with none of those classified sources. Items with multiple sources remain eligible when at least
+#        one source is enabled. Quest-/condition-bound drops and condition-bound vendor entries are never treated as
+#        freely available; unspawned unconditional loot templates are classified as Other. Personally quest-gated reward
+#        eligibility is controlled by IncludeQuestRewards; tradeable BoE quest rewards have their own switch above.
+#        Default: 1 for each source.
+#
+#    PlayerAutoProgression.AutoEquip.MinimumUpgradePercent
+#        Minimum relative weighted-score improvement required before replacing equipped gear. Empty slots are not
+#        subject to this threshold. A value of 0 accepts any positive improvement. Default: 5.0.
+#
+#    PlayerAutoProgression.AutoEquip.HighestArmorClassBonusPercent
+#        Percentage score bonus for armor using the highest armor class the character can wear at the current level.
+#        This is a preference, not a hard exclusion of lower armor classes. Set to 0 to disable it. Default: 10.0.
 #
 #    PlayerAutoProgression.AutoEquip.Weight.*
 #        Global multipliers layered over the built-in Vanilla class/spec profiles.
+#        Default: 1.0 for each multiplier.
+#
+#    PlayerAutoProgression.AutoEquip.Weight.SetBonus
+#        Multiplier for each set item's amortized share of its complete item-set bonuses. Set to 0 to ignore item-set
+#        potential. Supported active set effects are evaluated for the final equipment plan; an active threshold with
+#        an unknown or zero-valued effect is preserved conservatively so it is not broken accidentally. Default: 1.0.
 #
 #    PlayerAutoProgression.AutoEnchant.OnLevelUp
 #    PlayerAutoProgression.AutoEnchant.OnTalentLearn
-#        Re-evaluate permanent item improvements after auto-equipping for the respective event.
+#    PlayerAutoProgression.AutoEnchant.OnLogin
+#    PlayerAutoProgression.AutoEnchant.OnTalentReset
+#        Re-evaluate permanent item improvements after the respective event. When AutoEquip is also enabled for that
+#        event, equipment is updated first. Talent-triggered runs use TalentDebounceMs.
+#        Default: 1 for OnLevelUp and OnTalentLearn; 0 for OnLogin and OnTalentReset.
 #
 #    PlayerAutoProgression.AutoEnchant.ReplaceExisting
 #        If enabled, replace an existing permanent enchant only when the new spec-weighted result scores higher.
@@ -3009,29 +3074,47 @@ AHBot.itemcount = 50
 # currency and reagents are not consumed.
 #
 ###################################################################################################################
-PlayerAutoProgression.AutoLearn.OnLevelUp = 0
-PlayerAutoProgression.AutoLearn.OnTalentLearn = 0
+PlayerAutoProgression.TalentDebounceMs = 750
+
+PlayerAutoProgression.AutoLearn.OnLevelUp = 1
+PlayerAutoProgression.AutoLearn.OnTalentLearn = 1
+PlayerAutoProgression.AutoLearn.OnLogin = 0
 PlayerAutoProgression.AutoLearn.ClassTrainers = 1
 PlayerAutoProgression.AutoLearn.WeaponTrainers = 1
-PlayerAutoProgression.AutoLearn.MaxWeaponSkills = 0
+PlayerAutoProgression.AutoLearn.MaxWeaponSkills = 1
 
-PlayerAutoProgression.AutoEquip.OnLevelUp = 0
-PlayerAutoProgression.AutoEquip.OnTalentLearn = 0
+PlayerAutoProgression.AutoEquip.OnLevelUp = 1
+PlayerAutoProgression.AutoEquip.OnTalentLearn = 1
+PlayerAutoProgression.AutoEquip.OnLogin = 0
+PlayerAutoProgression.AutoEquip.OnTalentReset = 0
 PlayerAutoProgression.AutoEquip.MinLevel = 1
-PlayerAutoProgression.AutoEquip.MaxQuality = 4
+PlayerAutoProgression.AutoEquip.MaxQuality = 5
 PlayerAutoProgression.AutoEquip.MaxItemLevelBonus = 10
 PlayerAutoProgression.AutoEquip.RequireDiscovered = 0
+PlayerAutoProgression.AutoEquip.IgnoreItemsWithoutStatsAndArmor = 0
 PlayerAutoProgression.AutoEquip.ReplaceExisting = 1
-PlayerAutoProgression.AutoEquip.DeleteReplacedItems = 0
-PlayerAutoProgression.AutoEquip.IncludeQuestRewards = 1
+PlayerAutoProgression.AutoEquip.DeleteReplacedItems = 1
+PlayerAutoProgression.AutoEquip.IncludeQuestRewards = 0
+PlayerAutoProgression.AutoEquip.AllowBoEQuestRewardsWithoutQuest = 1
+PlayerAutoProgression.AutoEquip.Source.Vendor = 1
+PlayerAutoProgression.AutoEquip.Source.Crafted = 1
+PlayerAutoProgression.AutoEquip.Source.WorldLoot = 1
+PlayerAutoProgression.AutoEquip.Source.DungeonLoot = 1
+PlayerAutoProgression.AutoEquip.Source.RaidLoot = 1
+PlayerAutoProgression.AutoEquip.Source.Other = 1
+PlayerAutoProgression.AutoEquip.MinimumUpgradePercent = 5.0
+PlayerAutoProgression.AutoEquip.HighestArmorClassBonusPercent = 10.0
 PlayerAutoProgression.AutoEquip.Weight.Primary = 1.0
 PlayerAutoProgression.AutoEquip.Weight.Secondary = 1.0
 PlayerAutoProgression.AutoEquip.Weight.Survival = 1.0
 PlayerAutoProgression.AutoEquip.Weight.WeaponDps = 1.0
 PlayerAutoProgression.AutoEquip.Weight.SpellPower = 1.0
+PlayerAutoProgression.AutoEquip.Weight.SetBonus = 1.0
 
-PlayerAutoProgression.AutoEnchant.OnLevelUp = 0
-PlayerAutoProgression.AutoEnchant.OnTalentLearn = 0
+PlayerAutoProgression.AutoEnchant.OnLevelUp = 1
+PlayerAutoProgression.AutoEnchant.OnTalentLearn = 1
+PlayerAutoProgression.AutoEnchant.OnLogin = 0
+PlayerAutoProgression.AutoEnchant.OnTalentReset = 0
 PlayerAutoProgression.AutoEnchant.ReplaceExisting = 1
 PlayerAutoProgression.AutoEnchant.Source.Enchanting = 1
 PlayerAutoProgression.AutoEnchant.Source.Scopes = 1
@@ -3150,4 +3233,3 @@ DynamicRespawn.AffectRespawnTimeBelow = 0
 DynamicRespawn.AffectLevelBelow = 0
 DynamicRespawn.PlayersThreshold = 0
 DynamicRespawn.PlayersMaxLevelDiff = 0
-

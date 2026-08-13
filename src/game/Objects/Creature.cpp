@@ -29,6 +29,7 @@
 #include "SpellMgr.h"
 #include "GossipDef.h"
 #include "Player.h"
+#include "PlayerAutoProgression.h"
 #include "Group.h"
 #include "GameEventMgr.h"
 #include "PoolManager.h"
@@ -1674,6 +1675,7 @@ void Creature::SaveToDB()
 
 void Creature::SaveToDB(uint32 mapid)
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     // update in loaded data
     CreatureData& data = sObjectMgr.NewOrExistCreatureData(GetGUIDLow());
 

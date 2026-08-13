@@ -358,6 +358,7 @@ bool ChatHandler::HandleServerPlayerPositionsCommand(char* args)
     };
 
     std::size_t constexpr MaxPlayerCount = 500;
+    std::size_t totalEligible = 0;
     std::vector<PlayerPositionSnapshot> players;
     players.reserve(std::min<std::size_t>(sWorld.GetActiveSessionCount(), MaxPlayerCount));
     {
@@ -365,11 +366,12 @@ bool ChatHandler::HandleServerPlayerPositionsCommand(char* args)
         HashMapHolder<Player>::MapType const& playerMap = sObjectAccessor.GetPlayers();
         for (auto const& entry : playerMap)
         {
-            if (players.size() >= MaxPlayerCount)
-                break;
-
             Player const* player = entry.second;
             if (!player || !player->IsInWorld() || !player->GetSession())
+                continue;
+
+            ++totalEligible;
+            if (players.size() >= MaxPlayerCount)
                 continue;
 
             players.push_back({
@@ -411,7 +413,9 @@ bool ChatHandler::HandleServerPlayerPositionsCommand(char* args)
         std::string const output = line.str();
         SendSysMessage(output.c_str());
     }
-    PSendSysMessage("VMANGOS_PLAYERPOS_V1\tEND\t%s\t%u", token.c_str(), static_cast<uint32>(players.size()));
+    bool const truncated = totalEligible > players.size();
+    PSendSysMessage("VMANGOS_PLAYERPOS_V1\tEND\t%s\t%u\t%u\t%u", token.c_str(),
+        static_cast<uint32>(players.size()), static_cast<uint32>(totalEligible), truncated ? 1u : 0u);
     return true;
 }
 

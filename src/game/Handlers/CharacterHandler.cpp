@@ -29,6 +29,7 @@
 #include "World.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "PlayerAutoProgression.h"
 #include "Guild.h"
 #include "GuildMgr.h"
 #include "ObjectAccessor.h"
@@ -686,6 +687,7 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder *holder)
 
     m_playerLoading = false;
     delete holder;
+    PlayerAutoProgression::OnLogin(pCurrChar);
 
     if (alreadyOnline)
     {

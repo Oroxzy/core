@@ -22,6 +22,7 @@
 #include "LootMgr.h"
 #include "Log.h"
 #include "ObjectMgr.h"
+#include "PlayerAutoProgression.h"
 #include "ProgressBar.h"
 #include "World.h"
 #include "Util.h"
@@ -65,6 +66,8 @@ public:
 
     void Verify(LootStore const& lootstore, uint32 id, uint32 group_id) const;
     void CheckLootRefs(LootIdSet* ref_set) const;
+    void CollectItemIds(std::set<uint32>& itemIds,
+        bool includeRestricted) const;
 private:
     LootStoreItemList ExplicitlyChanced;                // Entries with chances defined in DB
     LootStoreItemList EqualChanced;                     // Zero chances - every entry takes the same chance
@@ -218,8 +221,36 @@ LootTemplate const* LootStore::GetLootFor(uint32 loot_id) const
     return tab->second;
 }
 
+void LootStore::CollectItemIds(uint32 lootId, std::set<uint32>& itemIds,
+    bool includeRestricted) const
+{
+    LootTemplate const* lootTemplate = GetLootFor(lootId);
+    if (!lootTemplate)
+        return;
+
+    std::set<uint64> referencePath;
+    if (this == &LootTemplates_Reference)
+        referencePath.insert(uint64(lootId) << 8);
+
+    lootTemplate->CollectItemIds(itemIds, referencePath, 0, includeRestricted);
+}
+
+void LootStore::CollectAllItemIds(std::set<uint32>& itemIds,
+    bool includeRestricted) const
+{
+    for (const auto& itr : m_LootTemplates)
+    {
+        std::set<uint64> referencePath;
+        if (this == &LootTemplates_Reference)
+            referencePath.insert(uint64(itr.first) << 8);
+
+        itr.second->CollectItemIds(itemIds, referencePath, 0, includeRestricted);
+    }
+}
+
 void LootStore::LoadAndCollectLootIds(LootIdSet& ids_set)
 {
+    PlayerAutoProgression::CacheUpdateGuard autoProgressionCacheUpdate;
     LoadLootTable();
 
     for (const auto& itr : m_LootTemplates)
@@ -1087,6 +1118,20 @@ void LootTemplate::LootGroup::AddEntry(LootStoreItem& item)
     }
 }
 
+void LootTemplate::LootGroup::CollectItemIds(std::set<uint32>& itemIds,
+    bool includeRestricted) const
+{
+    for (const auto& item : ExplicitlyChanced)
+        if (item.mincountOrRef > 0 && item.itemid &&
+            (includeRestricted || (!item.needs_quest && !item.conditionId)))
+            itemIds.insert(item.itemid);
+
+    for (const auto& item : EqualChanced)
+        if (item.mincountOrRef > 0 && item.itemid &&
+            (includeRestricted || (!item.needs_quest && !item.conditionId)))
+            itemIds.insert(item.itemid);
+}
+
 // Rolls an item from the group, returns nullptr if all miss their chances
 LootStoreItem const* LootTemplate::LootGroup::Roll(Loot const& loot) const
 {
@@ -1235,6 +1280,52 @@ void LootTemplate::AddEntry(LootStoreItem& item)
     }
     else                                                    // Non-grouped entries and references are stored together
         Entries.push_back(item);
+}
+
+void LootTemplate::CollectItemIds(std::set<uint32>& itemIds,
+    std::set<uint64>& referencePath, uint8 groupId,
+    bool includeRestricted) const
+{
+    if (groupId)
+    {
+        if (groupId <= Groups.size())
+            Groups[groupId - 1].CollectItemIds(itemIds, includeRestricted);
+        return;
+    }
+
+    for (const auto& item : Entries)
+    {
+        if (item.mincountOrRef > 0)
+        {
+            if (!includeRestricted && (item.needs_quest || item.conditionId))
+                continue;
+            if (item.itemid)
+                itemIds.insert(item.itemid);
+            continue;
+        }
+
+        if (item.mincountOrRef >= 0)
+            continue;
+
+        // A negative ChanceOrQuestChance is valid for references at runtime and
+        // does not turn the referenced contents into quest-only loot.
+        if (!includeRestricted && item.conditionId)
+            continue;
+
+        uint32 const referenceId = uint32(-int64(item.mincountOrRef));
+        uint64 const referenceKey = (uint64(referenceId) << 8) | uint64(item.group);
+        if (!referencePath.insert(referenceKey).second)
+            continue;
+
+        if (LootTemplate const* referenced = LootTemplates_Reference.GetLootFor(referenceId))
+            referenced->CollectItemIds(itemIds, referencePath, item.group,
+                includeRestricted);
+
+        referencePath.erase(referenceKey);
+    }
+
+    for (const auto& group : Groups)
+        group.CollectItemIds(itemIds, includeRestricted);
 }
 
 // Rolls for every item in the template and adds the rolled items the the loot

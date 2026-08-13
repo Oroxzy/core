@@ -29,6 +29,7 @@
 #include "SharedDefines.h"
 
 #include <map>
+#include <set>
 #include <vector>
 
 #define MAX_NR_LOOT_ITEMS 16
@@ -195,6 +196,10 @@ class LootStore
         bool HaveQuestLootForPlayer(uint32 loot_id, Player const* player) const;
 
         LootTemplate const* GetLootFor(uint32 loot_id) const;
+        void CollectItemIds(uint32 lootId, std::set<uint32>& itemIds,
+            bool includeRestricted = false) const;
+        void CollectAllItemIds(std::set<uint32>& itemIds,
+            bool includeRestricted = false) const;
 
         char const* GetName() const { return m_name; }
         char const* GetEntryName() const { return m_entryName; }
@@ -211,6 +216,8 @@ class LootStore
 
 class LootTemplate
 {
+    friend class LootStore;
+
     class  LootGroup;                                       // A set of loot definitions for items (refs are not allowed inside)
     typedef std::vector<LootGroup> LootGroups;
 
@@ -229,6 +236,10 @@ class LootTemplate
         void Verify(LootStore const& store, uint32 Id) const;
         void CheckLootRefs(LootIdSet* ref_set) const;
     private:
+        void CollectItemIds(std::set<uint32>& itemIds,
+            std::set<uint64>& referencePath, uint8 groupId = 0,
+            bool includeRestricted = false) const;
+
         LootStoreItemList Entries;                          // not grouped only
         LootGroups        Groups;                           // groups have own (optimised) processing, grouped entries go there
 };
