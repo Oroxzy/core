@@ -22,6 +22,7 @@
 #include "Item.h"
 #include "Bag.h"
 #include "ObjectMgr.h"
+#include "PlayerAutoProgression.h"
 #include "ObjectGuid.h"
 #include "Opcodes.h"
 #include "WorldPacket.h"
@@ -227,7 +228,8 @@ bool Item::Create(uint32 guidlow, uint32 itemid, ObjectGuid ownerGuid)
 
     SetUInt32Value(ITEM_FIELD_DURATION, itemProto->Duration);
 
-    itemProto->Discovered = true;
+    if (!PlayerAutoProgression::IsAuditExecution())
+        itemProto->Discovered = true;
 
     return true;
 }
@@ -1118,7 +1120,9 @@ Item* Item::CreateItem(uint32 item, uint32 count, ObjectGuid playerGuid)
         MANGOS_ASSERT(count != 0 && "pProto->Stackable == 0 but checked at loading already");
 
         Item* pItem = NewItemOrBag(pProto);
-        uint32 lowGuid = sObjectMgr.GenerateItemLowGuid();
+        uint32 lowGuid = PlayerAutoProgression::IsAuditExecution() ?
+            PlayerAutoProgression::GenerateAuditItemLowGuid() :
+            sObjectMgr.GenerateItemLowGuid();
 
         if (pItem->Create(lowGuid, item, playerGuid))
         {

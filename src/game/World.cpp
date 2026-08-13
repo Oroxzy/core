@@ -34,6 +34,7 @@
 #include "WorldPacket.h"
 #include "Weather.h"
 #include "Player.h"
+#include "PlayerAutoProgression.h"
 #include "TransactionLog.h"
 #include "Group.h"
 #include "AccountMgr.h"
@@ -199,6 +200,7 @@ World::~World()
 
 void World::Shutdown()
 {
+    PlayerAutoProgression::ShutdownAuditMatrix();
     sPlayerBotMgr.DeleteAll();
     KickAll();                                     // save and kick all players
     UpdateSessions(1);                             // real players unload required UpdateSessions call
@@ -2072,6 +2074,8 @@ void World::Update(uint32 diff)
 
         m_canProcessAsyncPackets = true;
     }
+
+    PlayerAutoProgression::UpdateAuditMatrix(diff);
 
     // <li> Update uptime table
     if (m_timers[WUPDATE_UPTIME].Passed())

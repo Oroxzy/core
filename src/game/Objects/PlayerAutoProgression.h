@@ -42,6 +42,14 @@ namespace PlayerAutoProgression
     void BuildPreview(Player* player, std::vector<std::string>& lines);
     bool ApplyNow(Player* player, uint32& learned, uint32& equipped, uint32& enchanted);
 
+    bool StartAuditMatrix(char const* args, std::string& message);
+    void BuildAuditMatrixStatus(std::vector<std::string>& lines);
+    bool CancelAuditMatrix(std::string& message);
+    void UpdateAuditMatrix(uint32 diff);
+    void ShutdownAuditMatrix();
+    bool IsAuditExecution();
+    uint32 GenerateAuditItemLowGuid();
+
     void InvalidateCaches();
 }
 

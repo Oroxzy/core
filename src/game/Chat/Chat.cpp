@@ -1298,11 +1298,20 @@ ChatCommand * ChatHandler::getCommandTable()
         { nullptr,          0,                false, nullptr,                                          "", nullptr }
     };
 
+    static ChatCommand autoProgressionAuditCommandTable[] =
+    {
+        { "start",          SEC_ADMINISTRATOR, true, &ChatHandler::HandleAutoProgressionAuditStartCommand,  "", nullptr },
+        { "status",         SEC_ADMINISTRATOR, true, &ChatHandler::HandleAutoProgressionAuditStatusCommand, "", nullptr },
+        { "cancel",         SEC_ADMINISTRATOR, true, &ChatHandler::HandleAutoProgressionAuditCancelCommand, "", nullptr },
+        { nullptr,           0,                 false, nullptr,                                              "", nullptr }
+    };
+
     static ChatCommand autoProgressionCommandTable[] =
     {
         { "status",         SEC_GAMEMASTER,    true, &ChatHandler::HandleAutoProgressionStatusCommand,  "", nullptr },
         { "preview",        SEC_GAMEMASTER,    true, &ChatHandler::HandleAutoProgressionPreviewCommand, "", nullptr },
         { "apply",          SEC_ADMINISTRATOR, true, &ChatHandler::HandleAutoProgressionApplyCommand,   "", nullptr },
+        { "audit",          SEC_ADMINISTRATOR, true, nullptr,                                           "", autoProgressionAuditCommandTable },
         { nullptr,          0,                 false, nullptr,                                           "", nullptr }
     };
 

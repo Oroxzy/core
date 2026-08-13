@@ -3152,10 +3152,11 @@ void Player::GiveLevel(uint32 level)
     else
         instanceInfo << "None";
 
-    sLog.Player(GetSession(), LOG_LEVELUP, LOG_LVL_BASIC,
-        "Character %s:%u [c%u r%u] reaches level %2u, zone %u, pos: [%0.2f, %0.2f, %0.2f] [Group: %s] [Instance: %s]",
-        GetName(), GetGUIDLow(), GetClass(), GetRace(), level, GetZoneId(), GetPositionX(), GetPositionY(), GetPositionZ(),
-        groupInfo.str().c_str(), instanceInfo.str().c_str());
+    if (!PlayerAutoProgression::IsAuditExecution())
+        sLog.Player(GetSession(), LOG_LEVELUP, LOG_LVL_BASIC,
+            "Character %s:%u [c%u r%u] reaches level %2u, zone %u, pos: [%0.2f, %0.2f, %0.2f] [Group: %s] [Instance: %s]",
+            GetName(), GetGUIDLow(), GetClass(), GetRace(), level, GetZoneId(), GetPositionX(), GetPositionY(), GetPositionZ(),
+            groupInfo.str().c_str(), instanceInfo.str().c_str());
 
     // If we have instance members, and the number of players in the instance is not
     // equal to the number of group members, then the player is likely mob tagging
@@ -19343,6 +19344,9 @@ void Player::SendInstanceResetWarning(uint32 mapId, uint32 resetTime) const
 
 void Player::ApplyEquipCooldown(Item const* pItem)
 {
+    if (PlayerAutoProgression::IsAuditExecution())
+        return;
+
     if (pItem->GetProto()->Flags & ITEM_FLAG_NO_EQUIP_COOLDOWN)
         return;
 

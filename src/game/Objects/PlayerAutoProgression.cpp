@@ -4,7 +4,6 @@
 #include "DBCStores.h"
 #include "GameEventMgr.h"
 #include "Item.h"
-#include "LFGMgr.h"
 #include "LootMgr.h"
 #include "Map.h"
 #include "SQLStorages.h"
@@ -17,15 +16,18 @@
 #include "SpellAuraDefines.h"
 #include "SpellMgr.h"
 #include "World.h"
-#ifdef MANGOS_DEBUG
+#include "SystemConfig.h"
 #include "Timer.h"
-#endif
+#include "WorldSession.h"
 
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <atomic>
 #include <cmath>
+#include <cstring>
 #include <condition_variable>
+#include <ctime>
 #include <functional>
 #include <iomanip>
 #include <limits>
@@ -37,6 +39,7 @@
 #include <unordered_map>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 namespace
@@ -520,6 +523,17 @@ void BuildTrainerCache(TrainerCache& cache,
                 AddSource(cache.classes[info->trainer_class], info->trainer_id, true);
         }
     }
+
+    auto const sourceLess = [](TrainerSource const& left,
+        TrainerSource const& right)
+    {
+        if (left.id != right.id)
+            return left.id < right.id;
+        return left.isTemplate < right.isTemplate;
+    };
+    std::sort(cache.weapons.begin(), cache.weapons.end(), sourceLess);
+    for (auto& sources : cache.classes)
+        std::sort(sources.begin(), sources.end(), sourceLess);
 }
 uint32 LootSourceForMap(uint32 mapId)
 {
@@ -943,9 +957,11 @@ uint32 LearnSources(Player* player, std::vector<TrainerSource> const& sources)
         for (auto const& entry : source->spellList)
         {
             TrainerSpell const& trainer = entry.second;
-            if (!attempted.insert(trainer.spell).second)
+            if (attempted.count(trainer.spell) ||
+                player->GetTrainerSpellState(&trainer) != TRAINER_SPELL_GREEN)
                 continue;
-            if (player->GetTrainerSpellState(&trainer) == TRAINER_SPELL_GREEN && CastTrainerSpell(player, trainer))
+            attempted.insert(trainer.spell);
+            if (CastTrainerSpell(player, trainer))
                 ++learned;
         }
     }
@@ -967,6 +983,19 @@ void MaxCombatSkills(Player* player)
             player->SetSkill(skill, maximum, maximum);
 }
 
+struct SpellHitProfile
+{
+    uint32 spellId = 0;
+    float share = 0;
+    float talentBonus = 0;
+};
+
+struct WeaponSkillTalentProfile
+{
+    uint32 skillId = 0;
+    float bonus = 0;
+};
+
 struct Weights
 {
     float str = 0, agi = 0, sta = 0.25f, intl = 0, spi = 0;
@@ -975,8 +1004,13 @@ struct Weights
     float meleeHit = 0, spellHit = 0, meleeCrit = 0, spellCrit = 0;
     float dodge = 0, parry = 0, block = 0, defense = 0, weaponSkill = 0;
     uint32 spellSchools = 0;
+    float shadowScale = 1.0f, fireScale = 1.0f;
     bool tank = false, caster = false, healer = false;
     bool twoHand = false, dualWield = false, shield = false;
+    std::array<SpellHitProfile, 3> spellHitProfiles = {};
+    uint8 spellHitProfileCount = 0;
+    std::array<WeaponSkillTalentProfile, 4> weaponSkillTalentProfiles = {};
+    uint8 weaponSkillTalentProfileCount = 0;
 };
 
 Weights StrengthMelee()
@@ -1012,9 +1046,190 @@ Weights Healer()
     return w;
 }
 
+uint32 HighestKnownSpellRank(Player const* player, uint32 baseSpellId)
+{
+    uint32 const first = sSpellMgr.GetFirstSpellInChain(baseSpellId);
+    uint32 bestSpellId = 0;
+    uint8 bestRank = 0;
+    for (auto const& known : player->GetSpellMap())
+    {
+        if (known.second.state == PLAYERSPELL_REMOVED || known.second.disabled ||
+            sSpellMgr.GetFirstSpellInChain(known.first) != first)
+            continue;
+        uint8 const rank = sSpellMgr.GetSpellRank(known.first);
+        if (!bestSpellId || rank >= bestRank)
+        {
+            bestSpellId = known.first;
+            bestRank = rank;
+        }
+    }
+    return bestSpellId;
+}
+
+void AddSpellHitProfile(Player const* player, Weights& weights,
+    uint32 spellId, float share)
+{
+    if (weights.spellHitProfileCount >= weights.spellHitProfiles.size())
+        return;
+    uint32 const knownSpellId = HighestKnownSpellRank(player, spellId);
+    if (!knownSpellId)
+        return;
+    SpellHitProfile& profile =
+        weights.spellHitProfiles[weights.spellHitProfileCount++];
+    profile.spellId = knownSpellId;
+    profile.share = share;
+}
+
+bool IsWeaponSkill(uint32 skill);
+
+void PopulateTalentSpellHit(Player const* player, Weights& weights)
+{
+    for (uint32 talentId = 0; talentId < sTalentStore.GetNumRows(); ++talentId)
+    {
+        TalentEntry const* talent = sTalentStore.LookupEntry(talentId);
+        if (!talent)
+            continue;
+        TalentTabEntry const* tab =
+            sTalentTabStore.LookupEntry(talent->TalentTab);
+        if (!tab || !(tab->ClassMask & player->GetClassMask()))
+            continue;
+
+        SpellEntry const* talentSpell = nullptr;
+        for (int8 rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
+        {
+            uint32 const rankSpellId = talent->RankID[rank];
+            if (rankSpellId && player->HasSpell(rankSpellId))
+            {
+                talentSpell = sSpellMgr.GetSpellEntry(rankSpellId);
+                break;
+            }
+        }
+        if (!talentSpell)
+            continue;
+
+        for (uint8 effect = 0; effect < MAX_EFFECT_INDEX; ++effect)
+        {
+            if (talentSpell->Effect[effect] != SPELL_EFFECT_APPLY_AURA)
+                continue;
+            float const amount = std::max(0.0f, float(
+                talentSpell->CalculateSimpleValue(SpellEffectIndex(effect))));
+            if (amount <= 0)
+                continue;
+
+            AuraType const aura =
+                AuraType(talentSpell->EffectApplyAuraName[effect]);
+            if (aura == SPELL_AURA_MOD_SKILL &&
+                IsWeaponSkill(uint32(talentSpell->EffectMiscValue[effect])))
+            {
+                uint32 const skill =
+                    uint32(talentSpell->EffectMiscValue[effect]);
+                uint8 index = 0;
+                while (index < weights.weaponSkillTalentProfileCount &&
+                    weights.weaponSkillTalentProfiles[index].skillId != skill)
+                    ++index;
+                if (index == weights.weaponSkillTalentProfileCount &&
+                    index < weights.weaponSkillTalentProfiles.size())
+                {
+                    weights.weaponSkillTalentProfiles[index].skillId = skill;
+                    ++weights.weaponSkillTalentProfileCount;
+                }
+                if (index < weights.weaponSkillTalentProfiles.size())
+                    weights.weaponSkillTalentProfiles[index].bonus += amount;
+                continue;
+            }
+            if (aura == SPELL_AURA_MOD_SPELL_HIT_CHANCE)
+            {
+                for (uint8 i = 0; i < weights.spellHitProfileCount; ++i)
+                    weights.spellHitProfiles[i].talentBonus += amount;
+                continue;
+            }
+            if (aura != SPELL_AURA_ADD_FLAT_MODIFIER ||
+                talentSpell->EffectMiscValue[effect] !=
+                    SPELLMOD_RESIST_MISS_CHANCE)
+                continue;
+
+            uint64 const familyMask = sSpellMgr.GetSpellAffectMask(
+                talentSpell->Id, SpellEffectIndex(effect));
+            for (uint8 i = 0; i < weights.spellHitProfileCount; ++i)
+            {
+                SpellEntry const* primary = sSpellMgr.GetSpellEntry(
+                    weights.spellHitProfiles[i].spellId);
+                if (primary && primary->SpellFamilyName ==
+                        talentSpell->SpellFamilyName &&
+                    primary->IsFitToFamilyMask(familyMask))
+                    weights.spellHitProfiles[i].talentBonus += amount;
+            }
+        }
+    }
+
+    float totalShare = 0;
+    for (uint8 i = 0; i < weights.spellHitProfileCount; ++i)
+        totalShare += weights.spellHitProfiles[i].share;
+    if (totalShare > 0)
+        for (uint8 i = 0; i < weights.spellHitProfileCount; ++i)
+            weights.spellHitProfiles[i].share /= totalShare;
+}
+
+uint32 TalentTreeIndex(TalentTabEntry const* tab)
+{
+    if (!tab)
+        return 3;
+    // The 1.12.1 TalentTab.dbc shipped with this core labels both Mage
+    // Arcane (81) and Fire (41) as page zero. Fire is the missing page one.
+    if (tab->TalentTabID == 41)
+        return 1;
+    return tab->tabpage;
+}
+
+std::array<uint32, 3> TalentTreePoints(Player const* player)
+{
+    std::array<uint32, 3> points = {};
+    for (uint32 id = 0; id < sTalentStore.GetNumRows(); ++id)
+    {
+        TalentEntry const* talent = sTalentStore.LookupEntry(id);
+        if (!talent)
+            continue;
+        TalentTabEntry const* tab = sTalentTabStore.LookupEntry(
+            talent->TalentTab);
+        uint32 const tree = TalentTreeIndex(tab);
+        if (!tab || tree >= points.size() ||
+            !(tab->ClassMask & player->GetClassMask()))
+            continue;
+        for (int8 rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
+            if (talent->RankID[rank] && player->HasSpell(
+                    talent->RankID[rank]))
+            {
+                points[tree] += uint32(rank + 1);
+                break;
+            }
+    }
+    return points;
+}
+
+uint32 AutoProgressionTalentTree(Player* player)
+{
+    if (player->GetLevel() >= 10)
+    {
+        std::array<uint32, 3> const trees = TalentTreePoints(player);
+        uint32 const total = trees[0] + trees[1] + trees[2];
+        if (total > 0)
+            return uint32(std::distance(trees.begin(),
+                std::max_element(trees.begin(), trees.end())));
+    }
+
+    switch (player->GetClass())
+    {
+        case CLASS_SHAMAN: return 2;
+        case CLASS_PRIEST: return 1;
+        case CLASS_DRUID: return 2;
+        case CLASS_WARRIOR: return 2;
+        default: return 0;
+    }
+}
+
 Weights GetWeights(Player* player)
 {
-    uint32 const tree = LFGMgr::GetHighestTalentTree(player);
+    uint32 const tree = AutoProgressionTalentTree(player);
     Weights w;
     switch (player->GetClass())
     {
@@ -1049,7 +1264,15 @@ Weights GetWeights(Player* player)
         case CLASS_PRIEST:
             w = tree == 2 ? Caster() : Healer();
             if (tree == 0) w.spi = 1.0f;
-            w.spellSchools = tree == 2 ? SPELL_SCHOOL_MASK_SHADOW : SPELL_SCHOOL_MASK_HOLY;
+            if (tree == 2)
+            {
+                w.spellSchools = SPELL_SCHOOL_MASK_SHADOW;
+                AddSpellHitProfile(player, w, 15407, 0.45f); // Mind Flay
+                AddSpellHitProfile(player, w, 8092, 0.30f);  // Mind Blast
+                AddSpellHitProfile(player, w, 589, 0.25f);   // Shadow Word: Pain
+            }
+            else
+                w.spellSchools = SPELL_SCHOOL_MASK_HOLY;
             break;
         case CLASS_SHAMAN:
             if (tree == 0) w = Caster();
@@ -1060,16 +1283,61 @@ Weights GetWeights(Player* player)
             else w = Healer();
             w.spellSchools = tree == 0 ? (SPELL_SCHOOL_MASK_NATURE | SPELL_SCHOOL_MASK_FIRE |
                 SPELL_SCHOOL_MASK_FROST) : SPELL_SCHOOL_MASK_NATURE;
+            if (tree == 0)
+            {
+                AddSpellHitProfile(player, w, 403, 0.55f);  // Lightning Bolt
+                AddSpellHitProfile(player, w, 421, 0.25f);  // Chain Lightning
+                AddSpellHitProfile(player, w, 8042, 0.20f); // Earth Shock
+            }
             break;
         case CLASS_MAGE:
             w = Caster(); if (tree == 1) w.spellCrit = 10;
             w.spellSchools = tree == 0 ? SPELL_SCHOOL_MASK_ARCANE :
                 tree == 1 ? SPELL_SCHOOL_MASK_FIRE : SPELL_SCHOOL_MASK_FROST;
+            if (tree == 0)
+            {
+                AddSpellHitProfile(player, w, 5143, 0.65f); // Arcane Missiles
+                AddSpellHitProfile(player, w, 1449, 0.35f); // Arcane Explosion
+            }
+            else if (tree == 1)
+            {
+                AddSpellHitProfile(player, w, 133, 0.65f);  // Fireball
+                AddSpellHitProfile(player, w, 2948, 0.20f); // Scorch
+                AddSpellHitProfile(player, w, 2136, 0.15f); // Fire Blast
+            }
+            else
+            {
+                AddSpellHitProfile(player, w, 116, 0.65f); // Frostbolt
+                AddSpellHitProfile(player, w, 10, 0.20f);  // Blizzard
+                AddSpellHitProfile(player, w, 120, 0.15f); // Cone of Cold
+            }
             break;
         case CLASS_WARLOCK:
-            w = Caster(); w.sta = 0.8f; w.spi = 0.25f; w.spellCrit = tree == 2 ? 9.0f : 6.5f;
-            w.spellSchools = tree == 2 ? (SPELL_SCHOOL_MASK_FIRE | SPELL_SCHOOL_MASK_SHADOW) :
-                SPELL_SCHOOL_MASK_SHADOW;
+            w = Caster(); w.sta = 0.8f; w.spi = 0.25f;
+            // Destruction is not synonymous with Fire: Shadow Bolt is a
+            // Destruction spell and remains the default raid filler.
+            w.spellCrit = tree == 2 ? 9.0f : 6.5f;
+            w.spellSchools = SPELL_SCHOOL_MASK_FIRE | SPELL_SCHOOL_MASK_SHADOW;
+            w.fireScale = tree == 2 ? 0.75f : 0.35f;
+            if (player->GetRace() == RACE_GNOME)
+                w.intl *= 1.05f; // Expansive Mind also scales Intellect from gear.
+            AddSpellHitProfile(player, w, 686, tree == 0 ? 0.45f :
+                tree == 1 ? 0.60f : 0.55f); // Shadow Bolt always matters.
+            if (tree == 0)
+            {
+                AddSpellHitProfile(player, w, 172, 0.30f); // Corruption
+                AddSpellHitProfile(player, w, 980, 0.25f); // Curse of Agony
+            }
+            else if (tree == 1)
+            {
+                AddSpellHitProfile(player, w, 172, 0.25f); // Corruption
+                AddSpellHitProfile(player, w, 348, 0.15f); // Immolate
+            }
+            else
+            {
+                AddSpellHitProfile(player, w, 348, 0.25f);  // Immolate
+                AddSpellHitProfile(player, w, 5676, 0.20f); // Searing Pain
+            }
             break;
         case CLASS_DRUID:
             if (tree == 0) w = Caster();
@@ -1081,9 +1349,16 @@ Weights GetWeights(Player* player)
             else w = Healer();
             w.spellSchools = tree == 0 ? (SPELL_SCHOOL_MASK_NATURE | SPELL_SCHOOL_MASK_ARCANE) :
                 tree == 2 ? SPELL_SCHOOL_MASK_NATURE : 0;
+            if (tree == 0)
+            {
+                AddSpellHitProfile(player, w, 5176, 0.45f); // Wrath
+                AddSpellHitProfile(player, w, 2912, 0.40f); // Starfire
+                AddSpellHitProfile(player, w, 8921, 0.15f); // Moonfire
+            }
             break;
         default: break;
     }
+    PopulateTalentSpellHit(player, w);
     return w;
 }
 
@@ -1133,7 +1408,48 @@ float SpellSchoolScale(Weights const& w, uint32 schoolMask)
     uint32 const magic = schoolMask & SPELL_SCHOOL_MASK_MAGIC;
     if (!magic || magic == SPELL_SCHOOL_MASK_MAGIC)
         return 1.0f;
-    return (magic & w.spellSchools) ? 1.0f : 0.0f;
+    uint32 const relevant = magic & w.spellSchools;
+    if (!relevant)
+        return 0.0f;
+    float scale = 0;
+    if (relevant & SPELL_SCHOOL_MASK_SHADOW)
+        scale = std::max(scale, w.shadowScale);
+    if (relevant & SPELL_SCHOOL_MASK_FIRE)
+        scale = std::max(scale, w.fireScale);
+    uint32 const otherMagic = relevant &
+        ~(SPELL_SCHOOL_MASK_SHADOW | SPELL_SCHOOL_MASK_FIRE);
+    if (otherMagic)
+        scale = 1.0f;
+    return scale;
+}
+
+float PhysicalOffenseScale(Weights const& w)
+{
+    return std::max(std::max(w.ap, w.rap),
+        std::max(w.weaponDps / 13.0f, w.rangedDps / 16.0f));
+}
+
+float ScoreTargetResistanceReduction(Weights const& w, float value,
+    uint32 schoolMask)
+{
+    if (value <= 0)
+        return 0;
+
+    float score = 0;
+    if (schoolMask & SPELL_SCHOOL_MASK_NORMAL)
+        score += std::min(value, 3000.0f) * PhysicalOffenseScale(w) *
+            0.04f * SecondaryScale();
+    if ((schoolMask & SPELL_SCHOOL_MASK_MAGIC) && w.caster)
+        score += std::min(value, 300.0f) * w.spell * 0.45f *
+            SpellSchoolScale(w, schoolMask) * SecondaryScale();
+    return score;
+}
+
+bool IsScoredAuraEffect(uint32 effect)
+{
+    // Relevant Vanilla item and set area auras (notably Atiesh) use PARTY.
+    return effect == SPELL_EFFECT_APPLY_AURA ||
+        effect == SPELL_EFFECT_APPLY_AREA_AURA_PARTY;
 }
 
 bool IsWeaponSkill(uint32 skill)
@@ -1170,7 +1486,7 @@ float ScoreAura(Weights const& w, SpellEntry const* spell, float trigger,
     float score = 0;
     for (uint8 i = 0; i < MAX_EFFECT_INDEX; ++i)
     {
-        if (spell->Effect[i] != SPELL_EFFECT_APPLY_AURA)
+        if (!IsScoredAuraEffect(spell->Effect[i]))
             continue;
 
         float const rawValue = float(spell->CalculateSimpleValue(SpellEffectIndex(i)));
@@ -1202,6 +1518,15 @@ float ScoreAura(Weights const& w, SpellEntry const* spell, float trigger,
                     score += (hostileTarget ? 1.0f : -1.0f) * value *
                         (0.12f + w.sta * 0.04f) * SurvivalScale();
                 continue;
+            case SPELL_AURA_MOD_CASTING_SPEED_NOT_STACK:
+                if (spell->Id != 18803 && positive && rawValue > 0 && w.caster)
+                {
+                    // Bound malformed data and any percent-style sentinels.
+                    float const castSpeed = std::min(value, 100.0f);
+                    score += castSpeed * (w.spell * 4.0f +
+                        w.spellCrit * 0.35f) * SecondaryScale();
+                }
+                continue;
             case SPELL_AURA_MOD_INCREASE_SPEED:
                 score += scoredValue * (positive ? 0.6f : 0.15f) * SecondaryScale();
                 continue;
@@ -1224,6 +1549,18 @@ float ScoreAura(Weights const& w, SpellEntry const* spell, float trigger,
                     continue;
                 }
                 break;
+            case SPELL_AURA_MOD_DAMAGE_PERCENT_DONE:
+                if (positive && rawValue > 0)
+                {
+                    uint32 const schoolMask = uint32(spell->EffectMiscValue[i]);
+                    float weighted = 0;
+                    if (schoolMask & SPELL_SCHOOL_MASK_MAGIC)
+                        weighted += w.spell * 5.0f * SpellSchoolScale(w, schoolMask);
+                    if (schoolMask & SPELL_SCHOOL_MASK_NORMAL)
+                        weighted += std::max(w.weaponDps, w.rangedDps) * 0.4f;
+                    score += value * weighted * SecondaryScale();
+                }
+                continue;
             default:
                 break;
         }
@@ -1238,6 +1575,26 @@ float ScoreAura(Weights const& w, SpellEntry const* spell, float trigger,
                     SpellSchoolScale(w, uint32(spell->EffectMiscValue[i])) * SpellScale(); break;
             case SPELL_AURA_MOD_DAMAGE_DONE_CREATURE:
                 score += scoredValue * (w.spell + w.weaponDps / 13.0f) * 0.10f * SecondaryScale(); break;
+            case SPELL_AURA_MOD_MELEE_ATTACK_POWER_VERSUS:
+                score += scoredValue * w.ap * 0.20f * PrimaryScale(); break;
+            case SPELL_AURA_MOD_RANGED_ATTACK_POWER_VERSUS:
+                score += scoredValue * w.rap * 0.20f * PrimaryScale(); break;
+            case SPELL_AURA_MOD_DAMAGE_DONE_VERSUS:
+                score += scoredValue *
+                    (w.spell * 5.0f + std::max(w.weaponDps, w.rangedDps) * 0.4f) *
+                    0.20f * SecondaryScale();
+                break;
+            case SPELL_AURA_MOD_CRIT_PERCENT_VERSUS:
+                score += scoredValue *
+                    std::max(w.spellCrit, w.meleeCrit) * 0.20f *
+                    SecondaryScale();
+                break;
+            case SPELL_AURA_MOD_FLAT_SPELL_DAMAGE_VERSUS:
+                score += scoredValue * w.spell * 0.20f * SpellScale(); break;
+            case SPELL_AURA_MOD_HEALTH_REGEN_IN_COMBAT:
+                score += scoredValue * (0.05f + w.sta * 0.02f) *
+                    SurvivalScale();
+                break;
             case SPELL_AURA_MOD_HEALING_DONE: score += scoredValue * w.healing * SpellScale(); break;
             case SPELL_AURA_MOD_HEALING_DONE_PERCENT:
                 score += scoredValue * w.healing * 4.0f * SpellScale(); break;
@@ -1260,10 +1617,25 @@ float ScoreAura(Weights const& w, SpellEntry const* spell, float trigger,
                 score += scoredValue * w.block * 0.6f * SurvivalScale(); break;
             case SPELL_AURA_MOD_RESISTANCE:
             case SPELL_AURA_MOD_RESISTANCE_EXCLUSIVE:
-                score += ScoreResistance(w, scoredValue, uint32(spell->EffectMiscValue[i])); break;
+                if (hostileTarget && rawValue < 0)
+                    score += ScoreTargetResistanceReduction(w, value,
+                        uint32(spell->EffectMiscValue[i]));
+                else
+                    score += ScoreResistance(w, scoredValue,
+                        uint32(spell->EffectMiscValue[i]));
+                break;
+            case SPELL_AURA_MOD_TARGET_RESISTANCE:
+                if (rawValue < 0)
+                    score += ScoreTargetResistanceReduction(w, value,
+                        uint32(spell->EffectMiscValue[i]));
+                break;
             case SPELL_AURA_MOD_POWER_REGEN:
             case SPELL_AURA_MOD_MANA_REGEN_INTERRUPT:
                 score += scoredValue * w.mp5 * SecondaryScale(); break;
+            case SPELL_AURA_MOD_POWER_REGEN_PERCENT:
+                if (spell->EffectMiscValue[i] == POWER_MANA)
+                    score += scoredValue * w.mp5 * 0.8f * SecondaryScale();
+                break;
             case SPELL_AURA_MOD_INCREASE_HEALTH:
                 score += ScoreItemMod(w, ITEM_MOD_HEALTH, scoredValue); break;
             case SPELL_AURA_MOD_INCREASE_ENERGY:
@@ -1276,8 +1648,10 @@ float ScoreAura(Weights const& w, SpellEntry const* spell, float trigger,
             case SPELL_AURA_MOD_SKILL_TALENT:
                 if (spell->EffectMiscValue[i] == SKILL_DEFENSE)
                     score += scoredValue * w.defense * SurvivalScale();
-                else if (IsWeaponSkill(uint32(spell->EffectMiscValue[i])))
-                    score += scoredValue * w.weaponSkill * SecondaryScale();
+                else if (IsWeaponSkill(uint32(spell->EffectMiscValue[i])) &&
+                    hostileTarget && rawValue < 0)
+                    score += value * (0.08f + w.sta * 0.02f) *
+                        SurvivalScale();
                 break;
             case SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE:
                 score += scoredValue * ((w.str + w.agi + w.intl) * PrimaryScale() +
@@ -1292,6 +1666,13 @@ float ScoreAura(Weights const& w, SpellEntry const* spell, float trigger,
                         spell->EffectMiscValue[i] == STAT_STAMINA ? ITEM_MOD_STAMINA :
                         spell->EffectMiscValue[i] == STAT_INTELLECT ? ITEM_MOD_INTELLECT :
                         spell->EffectMiscValue[i] == STAT_SPIRIT ? ITEM_MOD_SPIRIT : MAX_ITEM_MOD), scoredValue);
+                break;
+            case SPELL_AURA_MOD_SPELL_DAMAGE_OF_STAT_PERCENT:
+                // Spirit is implicit in 1.12; miscValue is the school mask.
+                score += scoredValue * w.spi * w.spell * 0.6f *
+                    SpellSchoolScale(w,
+                        uint32(spell->EffectMiscValue[i])) *
+                    SpellScale();
                 break;
             default: break;
         }
@@ -1320,16 +1701,46 @@ float EnchantProcPpm(ItemPrototype const* item, SpellEntry const* procSpell, uin
     return 1.0f;
 }
 
+float ProcUptime(SpellEntry const* spell, float ppm)
+{
+    if (!spell || ppm <= 0)
+        return 0;
+    int32 const duration = spell->GetDuration();
+    return duration > 0 ?
+        1.0f - std::exp(-ppm * float(duration) / 60000.0f) :
+        std::min(1.0f, ppm / 60.0f);
+}
+
+float ProcAuraExposure(SpellEntry const* spell, float ppm)
+{
+    float const uptime = ProcUptime(spell, ppm);
+    uint32 const stackLimit = std::min<uint32>(
+        spell && spell->StackAmount ? spell->StackAmount : 1, 10);
+    float exposure = 0;
+    float stackChance = uptime;
+    for (uint32 stack = 0; stack < stackLimit; ++stack)
+    {
+        exposure += stackChance;
+        stackChance *= uptime;
+    }
+    return exposure;
+}
+
 float ScoreProcPayload(Weights const& w, ItemPrototype const* item, SpellEntry const* spell, float ppm, uint8 depth)
 {
     if (!spell || ppm <= 0 || depth > 2)
         return 0;
 
-    int32 const duration = spell->GetDuration();
-    float const uptime = duration > 0 ?
-        1.0f - std::exp(-ppm * float(duration) / 60000.0f) :
-        std::min(1.0f, ppm / 60.0f);
-    float score = ScoreAura(w, spell, uptime);
+    float const uptime = ProcUptime(spell, ppm);
+    float score = ScoreAura(w, spell, ProcAuraExposure(spell, ppm));
+    if (spell->Id == 18803 && w.caster)
+    {
+        constexpr float savedCastSeconds = 1.0f;
+        float const equivalentHaste = std::min(100.0f,
+            100.0f * ppm * savedCastSeconds / 60.0f);
+        score += equivalentHaste * (w.spell * 4.0f +
+            w.spellCrit * 0.35f) * SecondaryScale();
+    }
 
     float throughput = item && item->IsRangedWeapon() ? w.rangedDps : w.weaponDps;
     if (throughput <= 0)
@@ -1337,14 +1748,38 @@ float ScoreProcPayload(Weights const& w, ItemPrototype const* item, SpellEntry c
 
     for (uint8 i = 0; i < MAX_EFFECT_INDEX; ++i)
     {
-        float const value = std::fabs(float(
-            spell->CalculateSimpleValue(SpellEffectIndex(i))));
+        float const rawValue = float(
+            spell->CalculateSimpleValue(SpellEffectIndex(i)));
+        float const value = std::fabs(rawValue);
         float const perSecond = value * ppm / 60.0f;
         bool const hostileTarget = EffectTargetsHostile(spell, i);
+
+        if (IsScoredAuraEffect(spell->Effect[i]) &&
+            spell->EffectApplyAuraName[i] == SPELL_AURA_PERIODIC_DAMAGE)
+        {
+            uint32 const period = spell->EffectAmplitude[i] ?
+                spell->EffectAmplitude[i] : 5000;
+            if (hostileTarget && rawValue > 0 &&
+                spell->GetDuration() >= int32(period))
+                score += value * 1000.0f / float(period) * uptime *
+                    throughput * WeaponScale();
+            continue;
+        }
 
         switch (spell->Effect[i])
         {
             case SPELL_EFFECT_SCHOOL_DAMAGE:
+            {
+                // A fixed proc-DPS point is less valuable than permanent weapon
+                // DPS, which also scales every white and special attack. Keeping
+                // the distinction generic prevents fast flat-damage procs from
+                // crowding out stat/proc enchants such as Crusader or Agility.
+                float const fixedProcScale = item &&
+                    item->Class == ITEM_CLASS_WEAPON ? 0.68f : 1.0f;
+                score += (hostileTarget ? 1.0f : -1.0f) * perSecond *
+                    throughput * WeaponScale() * fixedProcScale;
+                break;
+            }
             case SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL:
             case SPELL_EFFECT_WEAPON_DAMAGE:
             case SPELL_EFFECT_NORMALIZED_WEAPON_DMG:
@@ -1361,9 +1796,26 @@ float ScoreProcPayload(Weights const& w, ItemPrototype const* item, SpellEntry c
                     damagePerSecond * throughput * WeaponScale();
                 break;
             }
+            case SPELL_EFFECT_ADD_EXTRA_ATTACKS:
+            {
+                if (hostileTarget || rawValue <= 0 || !item ||
+                    item->Class != ITEM_CLASS_WEAPON ||
+                    item->IsRangedWeapon() || !item->Delay ||
+                    w.weaponDps <= 0)
+                    break;
+                float const averageWeaponDamage = WeaponDps(item) *
+                    float(item->Delay) / 1000.0f;
+                float const extraAttacks = std::min(rawValue, 4.0f);
+                float const damagePerSecond = extraAttacks *
+                    averageWeaponDamage * ppm / 60.0f;
+                score += damagePerSecond * w.weaponDps * WeaponScale();
+                break;
+            }
             case SPELL_EFFECT_HEALTH_LEECH:
+                // The damage half is fixed proc damage just like SCHOOL_DAMAGE;
+                // keep the survival/healing half separate and undiscounted.
                 score += (hostileTarget ? 1.0f : -1.0f) *
-                    perSecond * throughput * WeaponScale();
+                    perSecond * throughput * WeaponScale() * 0.68f;
                 if (hostileTarget)
                     score += perSecond * (0.5f + w.sta * 0.1f) * SurvivalScale();
                 break;
@@ -1390,7 +1842,7 @@ float ScoreProcPayload(Weights const& w, ItemPrototype const* item, SpellEntry c
 }
 
 float ScoreEnchantment(Weights const& w, ItemPrototype const* item,
-    SpellItemEnchantmentEntry const* enchant)
+    SpellItemEnchantmentEntry const* enchant, uint8 equipmentSlot = NULL_SLOT)
 {
     if (!item || !enchant)
         return 0;
@@ -1404,14 +1856,19 @@ float ScoreEnchantment(Weights const& w, ItemPrototype const* item,
             case ITEM_ENCHANTMENT_TYPE_COMBAT_SPELL:
             {
                 SpellEntry const* procSpell = sSpellMgr.GetSpellEntry(enchant->spellid[i]);
-                score += ScoreProcPayload(w, item, procSpell,
-                    EnchantProcPpm(item, procSpell, enchant->amount[i]), 0);
+                float const throughput = item->IsRangedWeapon() ?
+                    w.rangedDps : w.weaponDps;
+                if (throughput > 0)
+                    score += ScoreProcPayload(w, item, procSpell,
+                        EnchantProcPpm(item, procSpell, enchant->amount[i]), 0);
                 break;
             }
             case ITEM_ENCHANTMENT_TYPE_DAMAGE:
                 if (item->Delay)
                     score += amount * 1000.0f / float(item->Delay) *
-                        (item->IsRangedWeapon() ? w.rangedDps : w.weaponDps) * WeaponScale();
+                        (item->IsRangedWeapon() ? w.rangedDps : w.weaponDps) *
+                        WeaponScale() * (equipmentSlot ==
+                            EQUIPMENT_SLOT_OFFHAND ? 0.70f : 1.0f);
                 break;
             case ITEM_ENCHANTMENT_TYPE_EQUIP_SPELL:
                 score += ScoreAura(w, sSpellMgr.GetSpellEntry(enchant->spellid[i]), 1.0f);
@@ -1426,6 +1883,24 @@ float ScoreEnchantment(Weights const& w, ItemPrototype const* item,
             default:
                 break;
         }
+    }
+    return score;
+}
+
+float ScoreIntrinsicItemProperties(Weights const& w, Item const* item,
+    uint8 equipmentSlot = NULL_SLOT)
+{
+    if (!item)
+        return 0;
+    float score = 0;
+    for (uint8 slot = PROP_ENCHANTMENT_SLOT_0;
+         slot <= PROP_ENCHANTMENT_SLOT_2; ++slot)
+    {
+        uint32 const enchantId = item->GetEnchantmentId(EnchantmentSlot(slot));
+        if (!enchantId)
+            continue;
+        score += ScoreEnchantment(w, item->GetProto(),
+            sSpellItemEnchantmentStore.LookupEntry(enchantId), equipmentSlot);
     }
     return score;
 }
@@ -1477,10 +1952,18 @@ float ScoreItem(Weights const& w, ItemPrototype const* item)
                 break;
             case ITEM_SPELLTRIGGER_CHANCE_ON_HIT:
             {
+                float const throughput = item->IsRangedWeapon() ?
+                    w.rangedDps : w.weaponDps;
+                if (throughput <= 0)
+                    break;
                 float ppm = item->Spells[i].SpellPPMRate;
-                if (ppm <= 0 && spell && spell->procChance && item->Delay)
-                    ppm = float(spell->procChance) * 600.0f / float(item->Delay);
-                score += ScoreProcPayload(w, item, spell, ppm > 0 ? ppm : 1.0f, 0);
+                if (ppm <= 0 && spell && spell->procChance > 100)
+                    ppm = 1.0f;
+                else if (ppm <= 0 && spell && spell->procChance && item->Delay)
+                    ppm = float(spell->procChance) * 600.0f /
+                        float(item->Delay);
+                if (ppm > 0)
+                    score += ScoreProcPayload(w, item, spell, ppm, 0);
                 break;
             }
             default:
@@ -1535,36 +2018,15 @@ float ScoreItemForPlayer(Weights const& w, Player const* player,
         ScoreSetPotential(w, player, item, cache);
 }
 
-float ScoreItemEnchantments(Weights const& w, Item const* item)
-{
-    if (!item)
-        return 0;
-    float score = 0;
-    EnchantmentSlot const slots[] =
-    {
-        PERM_ENCHANTMENT_SLOT,
-        PROP_ENCHANTMENT_SLOT_0,
-        PROP_ENCHANTMENT_SLOT_1,
-        PROP_ENCHANTMENT_SLOT_2,
-        PROP_ENCHANTMENT_SLOT_3
-    };
-    for (EnchantmentSlot slot : slots)
-    {
-        uint32 const enchantId = item->GetEnchantmentId(slot);
-        if (enchantId)
-            score += ScoreEnchantment(w, item->GetProto(),
-                sSpellItemEnchantmentStore.LookupEntry(enchantId));
-    }
-    return score;
-}
-
 float ScoreItemInstance(Weights const& w, Player const* player,
     Item const* item, AutoProgressionCache const& cache)
 {
     if (!item)
         return 0;
+    // Profession enchants are replaceable and intentionally excluded. Random
+    // property slots are generated as part of the item and remain intrinsic.
     return ScoreItemForPlayer(w, player, item->GetProto(), cache) +
-        ScoreItemEnchantments(w, item);
+        ScoreIntrinsicItemProperties(w, item, item->GetSlot());
 }
 
 bool IsSupportedScoredAura(AuraType aura)
@@ -1575,11 +2037,19 @@ bool IsSupportedScoredAura(AuraType aura)
         case SPELL_AURA_MOD_MELEE_HASTE:
         case SPELL_AURA_MOD_DECREASE_SPEED:
         case SPELL_AURA_MOD_RANGED_HASTE:
+        case SPELL_AURA_MOD_CASTING_SPEED_NOT_STACK:
         case SPELL_AURA_MOD_INCREASE_SPEED:
         case SPELL_AURA_MOD_THREAT:
         case SPELL_AURA_PROC_TRIGGER_SPELL:
         case SPELL_AURA_MOD_DAMAGE_DONE:
+        case SPELL_AURA_MOD_DAMAGE_PERCENT_DONE:
         case SPELL_AURA_MOD_DAMAGE_DONE_CREATURE:
+        case SPELL_AURA_MOD_MELEE_ATTACK_POWER_VERSUS:
+        case SPELL_AURA_MOD_RANGED_ATTACK_POWER_VERSUS:
+        case SPELL_AURA_MOD_DAMAGE_DONE_VERSUS:
+        case SPELL_AURA_MOD_CRIT_PERCENT_VERSUS:
+        case SPELL_AURA_MOD_FLAT_SPELL_DAMAGE_VERSUS:
+        case SPELL_AURA_MOD_HEALTH_REGEN_IN_COMBAT:
         case SPELL_AURA_MOD_HEALING_DONE:
         case SPELL_AURA_MOD_HEALING_DONE_PERCENT:
         case SPELL_AURA_MOD_ATTACK_POWER:
@@ -1596,7 +2066,9 @@ bool IsSupportedScoredAura(AuraType aura)
         case SPELL_AURA_MOD_SHIELD_BLOCKVALUE_PCT:
         case SPELL_AURA_MOD_RESISTANCE:
         case SPELL_AURA_MOD_RESISTANCE_EXCLUSIVE:
+        case SPELL_AURA_MOD_TARGET_RESISTANCE:
         case SPELL_AURA_MOD_POWER_REGEN:
+        case SPELL_AURA_MOD_POWER_REGEN_PERCENT:
         case SPELL_AURA_MOD_MANA_REGEN_INTERRUPT:
         case SPELL_AURA_MOD_INCREASE_HEALTH:
         case SPELL_AURA_MOD_INCREASE_ENERGY:
@@ -1605,6 +2077,7 @@ bool IsSupportedScoredAura(AuraType aura)
         case SPELL_AURA_MOD_SKILL_TALENT:
         case SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE:
         case SPELL_AURA_MOD_STAT:
+        case SPELL_AURA_MOD_SPELL_DAMAGE_OF_STAT_PERCENT:
             return true;
         default:
             return false;
@@ -1621,7 +2094,7 @@ bool HasUnsupportedSetBonusEffects(SpellEntry const* spell)
         if (!spell->Effect[i])
             continue;
         hasEffect = true;
-        if (spell->Effect[i] != SPELL_EFFECT_APPLY_AURA ||
+        if (!IsScoredAuraEffect(spell->Effect[i]) ||
             !IsSupportedScoredAura(AuraType(spell->EffectApplyAuraName[i])))
             return true;
     }
@@ -1654,31 +2127,462 @@ float ScoreExactSetBonuses(Weights const& w, Player const* player,
     return score * sWorld.getConfig(CONFIG_FLOAT_AUTO_EQUIP_SET_BONUS_SCALE);
 }
 
-float ScoreEquipmentPlan(Weights const& w, Player const* player,
+float StaticSpellHitFromAura(SpellEntry const* spell, uint8 depth = 0)
+{
+    if (!spell || depth > 2)
+        return 0;
+    float hit = 0;
+    for (uint8 i = 0; i < MAX_EFFECT_INDEX; ++i)
+    {
+        if (IsScoredAuraEffect(spell->Effect[i]) &&
+            spell->EffectApplyAuraName[i] == SPELL_AURA_MOD_SPELL_HIT_CHANCE &&
+            !EffectTargetsHostile(spell, i))
+            hit += std::max(0.0f, float(
+                spell->CalculateSimpleValue(SpellEffectIndex(i))));
+        if (spell->Effect[i] == SPELL_EFFECT_TRIGGER_SPELL && depth < 2 &&
+            spell->EffectTriggerSpell[i] != spell->Id)
+            hit += StaticSpellHitFromAura(
+                sSpellMgr.GetSpellEntry(spell->EffectTriggerSpell[i]), depth + 1);
+    }
+    return hit;
+}
+float StaticSpellHitFromEnchantment(SpellItemEnchantmentEntry const* enchant)
+{
+    if (!enchant)
+        return 0;
+    float hit = 0;
+    for (uint8 i = 0; i < 3; ++i)
+        if (enchant->type[i] == ITEM_ENCHANTMENT_TYPE_EQUIP_SPELL)
+            hit += StaticSpellHitFromAura(
+                sSpellMgr.GetSpellEntry(enchant->spellid[i]));
+    return hit;
+}
+
+float StaticSpellHitFromIntrinsicProperties(Item const* item)
+{
+    if (!item)
+        return 0;
+    float hit = 0;
+    for (uint8 slot = PROP_ENCHANTMENT_SLOT_0;
+         slot <= PROP_ENCHANTMENT_SLOT_2; ++slot)
+    {
+        uint32 const enchantId = item->GetEnchantmentId(EnchantmentSlot(slot));
+        if (!enchantId)
+            continue;
+        hit += StaticSpellHitFromEnchantment(
+            sSpellItemEnchantmentStore.LookupEntry(enchantId));
+    }
+    return hit;
+}
+
+
+float StaticSpellHitFromItem(ItemPrototype const* item)
+{
+    if (!item)
+        return 0;
+    float hit = 0;
+    for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+        if (item->Spells[i].SpellTrigger == ITEM_SPELLTRIGGER_ON_EQUIP)
+            hit += StaticSpellHitFromAura(
+                sSpellMgr.GetSpellEntry(item->Spells[i].SpellId));
+    return hit;
+}
+
+float ExpectedTemporarySpellHitFromItem(ItemPrototype const* item,
+    Weights const& weights)
+{
+    if (!item)
+        return 0;
+    float expected = 0;
+    for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+    {
+        _ItemSpell const& itemSpell = item->Spells[i];
+        if (!itemSpell.SpellId)
+            continue;
+        SpellEntry const* spell = sSpellMgr.GetSpellEntry(itemSpell.SpellId);
+        float ppm = 0;
+        if (itemSpell.SpellTrigger == ITEM_SPELLTRIGGER_ON_USE)
+            ppm = ItemUsePpm(itemSpell, spell);
+        else if (itemSpell.SpellTrigger == ITEM_SPELLTRIGGER_CHANCE_ON_HIT)
+        {
+            float const throughput = item->IsRangedWeapon() ?
+                weights.rangedDps : weights.weaponDps;
+            if (throughput <= 0)
+                continue;
+            ppm = itemSpell.SpellPPMRate;
+            if (ppm <= 0 && spell && spell->procChance > 100)
+                ppm = 1.0f;
+            else if (ppm <= 0 && spell && spell->procChance && item->Delay)
+                ppm = float(spell->procChance) * 600.0f /
+                    float(item->Delay);
+        }
+        else
+            continue;
+        float const hit = StaticSpellHitFromAura(spell);
+        if (hit <= 0 || ppm <= 0)
+            continue;
+        expected += hit * ProcUptime(spell, ppm);
+    }
+    return expected;
+}
+
+float StaticSpellHitFromExactSets(Player const* player,
     std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> const& plan)
 {
-    float score = 0;
+    std::unordered_map<uint32, uint32> counts;
+    for (ItemPrototype const* item : plan)
+        if (item && item->ItemSet)
+            ++counts[item->ItemSet];
+
+    float hit = 0;
+    for (auto const& count : counts)
+    {
+        ItemSetEntry const* set = sItemSetStore.LookupEntry(count.first);
+        if (!set)
+            continue;
+#if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_6_1
+        if (set->required_skill_id &&
+            player->GetSkillValue(set->required_skill_id) < set->required_skill_value)
+            continue;
+#endif
+        for (uint8 i = 0; i < 8; ++i)
+            if (set->spells[i] && set->items_to_triggerspell[i] <= count.second)
+                hit += StaticSpellHitFromAura(
+                    sSpellMgr.GetSpellEntry(set->spells[i]));
+    }
+    return hit;
+}
+
+float UsefulSpellHit(Weights const& weights, float gearHit)
+{
+    constexpr float levelingTarget = 5.0f;
+    if (gearHit <= 0)
+        return 0;
+    if (!weights.spellHitProfileCount)
+        return std::min(gearHit, levelingTarget);
+
+    float useful = 0;
+    for (uint8 i = 0; i < weights.spellHitProfileCount; ++i)
+    {
+        SpellHitProfile const& profile = weights.spellHitProfiles[i];
+        float const remaining = std::max(0.0f,
+            levelingTarget - profile.talentBonus);
+        useful += profile.share * std::min(gearHit, remaining);
+    }
+    return useful;
+}
+
+using WeaponSkillBonuses = std::unordered_map<uint32, float>;
+
+void CollectStaticWeaponSkillsFromAura(SpellEntry const* spell,
+    WeaponSkillBonuses& bonuses, uint8 depth = 0)
+{
+    if (!spell || depth > 2)
+        return;
+
+    for (uint8 i = 0; i < MAX_EFFECT_INDEX; ++i)
+    {
+        if (IsScoredAuraEffect(spell->Effect[i]) &&
+            (spell->EffectApplyAuraName[i] == SPELL_AURA_MOD_SKILL ||
+             spell->EffectApplyAuraName[i] == SPELL_AURA_MOD_SKILL_TALENT) &&
+            !EffectTargetsHostile(spell, i))
+        {
+            uint32 const skill = uint32(spell->EffectMiscValue[i]);
+            float const amount = float(
+                spell->CalculateSimpleValue(SpellEffectIndex(i)));
+            if (amount > 0 && IsWeaponSkill(skill))
+                bonuses[skill] += amount;
+        }
+
+        if (spell->Effect[i] == SPELL_EFFECT_TRIGGER_SPELL && depth < 2 &&
+            spell->EffectTriggerSpell[i] &&
+            spell->EffectTriggerSpell[i] != spell->Id)
+            CollectStaticWeaponSkillsFromAura(
+                sSpellMgr.GetSpellEntry(spell->EffectTriggerSpell[i]),
+                bonuses, depth + 1);
+    }
+}
+
+void CollectStaticWeaponSkillsFromEnchantment(
+    SpellItemEnchantmentEntry const* enchant, WeaponSkillBonuses& bonuses)
+{
+    if (!enchant)
+        return;
+    for (uint8 i = 0; i < 3; ++i)
+        if (enchant->type[i] == ITEM_ENCHANTMENT_TYPE_EQUIP_SPELL)
+            CollectStaticWeaponSkillsFromAura(
+                sSpellMgr.GetSpellEntry(enchant->spellid[i]), bonuses);
+}
+
+void CollectStaticWeaponSkillsFromIntrinsicProperties(Item const* item,
+    WeaponSkillBonuses& bonuses)
+{
+    if (!item)
+        return;
+    for (uint8 slot = PROP_ENCHANTMENT_SLOT_0;
+         slot <= PROP_ENCHANTMENT_SLOT_2; ++slot)
+    {
+        uint32 const enchantId =
+            item->GetEnchantmentId(EnchantmentSlot(slot));
+        if (enchantId)
+            CollectStaticWeaponSkillsFromEnchantment(
+                sSpellItemEnchantmentStore.LookupEntry(enchantId), bonuses);
+    }
+}
+
+void CollectStaticWeaponSkillsFromItem(ItemPrototype const* item,
+    WeaponSkillBonuses& bonuses)
+{
+    if (!item)
+        return;
+    for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+        if (item->Spells[i].SpellId &&
+            item->Spells[i].SpellTrigger == ITEM_SPELLTRIGGER_ON_EQUIP)
+            CollectStaticWeaponSkillsFromAura(
+                sSpellMgr.GetSpellEntry(item->Spells[i].SpellId), bonuses);
+}
+
+void CollectStaticWeaponSkillsFromExactSets(Player const* player,
+    std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> const& plan,
+    WeaponSkillBonuses& bonuses)
+{
+    std::unordered_map<uint32, uint32> counts;
+    for (ItemPrototype const* item : plan)
+        if (item && item->ItemSet)
+            ++counts[item->ItemSet];
+
+    for (auto const& count : counts)
+    {
+        ItemSetEntry const* set = sItemSetStore.LookupEntry(count.first);
+        if (!set)
+            continue;
+#if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_6_1
+        if (set->required_skill_id &&
+            player->GetSkillValue(set->required_skill_id) <
+                set->required_skill_value)
+            continue;
+#endif
+        for (uint8 i = 0; i < 8; ++i)
+            if (set->spells[i] &&
+                set->items_to_triggerspell[i] <= count.second)
+                CollectStaticWeaponSkillsFromAura(
+                    sSpellMgr.GetSpellEntry(set->spells[i]), bonuses);
+    }
+}
+
+float UsefulWeaponSkill(float bonus)
+{
+    bonus = std::max(0.0f, std::min(bonus, 10.0f));
+    return std::min(bonus, 5.0f) +
+        std::max(0.0f, bonus - 5.0f) * 0.35f;
+}
+
+float PlannedWeaponSkillUsage(Weights const& weights,
+    std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> const& plan,
+    uint32 skill)
+{
+    ItemPrototype const* main = plan[EQUIPMENT_SLOT_MAINHAND];
+    ItemPrototype const* off = plan[EQUIPMENT_SLOT_OFFHAND];
+    ItemPrototype const* ranged = plan[EQUIPMENT_SLOT_RANGED];
+
+    bool const mainWeapon = main && main->Class == ITEM_CLASS_WEAPON;
+    bool const offWeapon = off && off->Class == ITEM_CLASS_WEAPON;
+    uint32 const mainSkill = mainWeapon ? main->GetProficiencySkill() : 0;
+    uint32 const offSkill = offWeapon ? off->GetProficiencySkill() : 0;
+
+    float meleeUsage = 0;
+    if (mainSkill == skill)
+        meleeUsage = offWeapon && offSkill != skill ? 0.65f : 1.0f;
+    if (offSkill == skill)
+        meleeUsage = mainWeapon && mainSkill != skill ?
+            meleeUsage + 0.35f : 1.0f;
+
+    float const meleeScale = std::min(1.0f,
+        std::max(0.0f, weights.weaponDps / 13.0f));
+    float usage = meleeUsage * meleeScale;
+
+    if (ranged && ranged->Class == ITEM_CLASS_WEAPON &&
+        ranged->GetProficiencySkill() == skill)
+    {
+        float const rangedScale = std::min(1.0f,
+            std::max(0.0f, weights.rangedDps / 16.0f));
+        usage = std::max(usage, rangedScale);
+    }
+    return usage;
+}
+
+
+float ScorePlannedWeaponSkills(Weights const& weights, Player const* player,
+    std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> const& plan)
+{
+    if (weights.weaponSkill <= 0)
+        return 0;
+
+    WeaponSkillBonuses itemBonuses;
     for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
     {
         ItemPrototype const* item = plan[slot];
         if (!item)
             continue;
-        Item const* current =
-            player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
-        float itemScore = ScoreItemBaseForPlayer(w, player, item);
+        CollectStaticWeaponSkillsFromItem(item, itemBonuses);
+        Item const* current = player->GetItemByPos(
+            INVENTORY_SLOT_BAG_0, slot);
         if (current && current->GetEntry() == item->ItemId)
-            itemScore += ScoreItemEnchantments(w, current);
+            CollectStaticWeaponSkillsFromIntrinsicProperties(
+                current, itemBonuses);
+    }
+
+    WeaponSkillBonuses setBonuses;
+    CollectStaticWeaponSkillsFromExactSets(player, plan, setBonuses);
+
+    std::set<uint32> skills;
+    uint8 const weaponSlots[] =
+    {
+        EQUIPMENT_SLOT_MAINHAND, EQUIPMENT_SLOT_OFFHAND,
+        EQUIPMENT_SLOT_RANGED
+    };
+    for (uint8 slot : weaponSlots)
+    {
+        ItemPrototype const* weapon = plan[slot];
+        if (weapon && weapon->Class == ITEM_CLASS_WEAPON &&
+            IsWeaponSkill(weapon->GetProficiencySkill()))
+            skills.insert(weapon->GetProficiencySkill());
+    }
+    for (auto const& bonus : itemBonuses)
+        skills.insert(bonus.first);
+    for (auto const& bonus : setBonuses)
+        skills.insert(bonus.first);
+    for (uint8 i = 0; i < weights.weaponSkillTalentProfileCount; ++i)
+        skills.insert(weights.weaponSkillTalentProfiles[i].skillId);
+
+    float score = 0;
+    float const setScale =
+        sWorld.getConfig(CONFIG_FLOAT_AUTO_EQUIP_SET_BONUS_SCALE);
+    for (uint32 skill : skills)
+    {
+        float const usage = PlannedWeaponSkillUsage(weights, plan, skill);
+        if (usage <= 0)
+            continue;
+
+        float talentBonus = 0;
+        for (uint8 i = 0; i < weights.weaponSkillTalentProfileCount; ++i)
+            if (weights.weaponSkillTalentProfiles[i].skillId == skill)
+            {
+                talentBonus = weights.weaponSkillTalentProfiles[i].bonus;
+                break;
+            }
+        float const permanent = std::max(0.0f,
+            float(player->GetSkillBonusPermanent(uint16(skill))) + talentBonus);
+        float const itemBonus = itemBonuses.count(skill) ?
+            itemBonuses[skill] : 0;
+        float const setBonus = setBonuses.count(skill) ?
+            setBonuses[skill] : 0;
+        float const itemUseful =
+            UsefulWeaponSkill(permanent + itemBonus);
+        float const setUseful =
+            UsefulWeaponSkill(permanent + itemBonus + setBonus);
+        score += (itemUseful + (setUseful - itemUseful) * setScale) *
+            weights.weaponSkill * usage * SecondaryScale();
+    }
+    return score;
+}
+
+float ScoreEquipmentPlan(Weights const& w, Player const* player,
+    std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> const& plan)
+{
+    // Spell hit is contextual across the complete set. A fixed 5% target
+    // covers normal leveling enemies up to two levels higher; learned talents
+    // reduce only the spell families they really affect. Weapon skill is also
+    // contextual: only bonuses matching the weapons in this plan are useful.
+    // Strip both from per-item scores and add their whole-plan value below.
+    Weights withoutContext = w;
+    withoutContext.spellHit = 0;
+    withoutContext.weaponSkill = 0;
+    float score = 0;
+    float itemSpellHit = 0;
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        ItemPrototype const* item = plan[slot];
+        if (!item)
+            continue;
+        float itemScore = ScoreItemBaseForPlayer(withoutContext, player, item);
+        Item const* current = player->GetItemByPos(
+            INVENTORY_SLOT_BAG_0, slot);
+        if (current && current->GetEntry() == item->ItemId)
+            itemScore += ScoreIntrinsicItemProperties(withoutContext, current, slot);
         if (slot == EQUIPMENT_SLOT_MAINHAND && w.twoHand)
             itemScore *= item->InventoryType == INVTYPE_2HWEAPON ? 1.20f : 0.90f;
         else if (slot == EQUIPMENT_SLOT_OFFHAND && item->Class == ITEM_CLASS_WEAPON)
             itemScore *= 0.70f;
         score += itemScore;
+        itemSpellHit += StaticSpellHitFromItem(item);
+        if (current && current->GetEntry() == item->ItemId)
+            itemSpellHit += StaticSpellHitFromIntrinsicProperties(current);
     }
     ItemPrototype const* offhand = plan[EQUIPMENT_SLOT_OFFHAND];
     if (w.dualWield && offhand && offhand->Class == ITEM_CLASS_WEAPON)
         score += 8.0f;
-    return score + ScoreExactSetBonuses(w, player, plan);
+    score += ScoreExactSetBonuses(withoutContext, player, plan);
+    score += ScorePlannedWeaponSkills(w, player, plan);
+
+    if (w.spellHit > 0)
+    {
+        float const setSpellHit = StaticSpellHitFromExactSets(player, plan);
+        float temporaryHit = 0;
+        for (ItemPrototype const* item : plan)
+            if (item)
+                temporaryHit += ExpectedTemporarySpellHitFromItem(
+                    item, w);
+
+        float const usefulItems = UsefulSpellHit(w, itemSpellHit);
+        float const usefulWithSets = UsefulSpellHit(w,
+            itemSpellHit + setSpellHit);
+        float const usefulWithTemporary = UsefulSpellHit(w,
+            itemSpellHit + setSpellHit + temporaryHit);
+        float const usefulSets = usefulWithSets - usefulItems;
+        float const usefulTemporary = usefulWithTemporary - usefulWithSets;
+
+        score += (usefulItems + usefulSets *
+            sWorld.getConfig(CONFIG_FLOAT_AUTO_EQUIP_SET_BONUS_SCALE) +
+            usefulTemporary) *
+            w.spellHit * SecondaryScale();
+    }
+    return score;
 }
+
+bool IsPrimaryArmorSlot(uint8 slot)
+{
+    switch (slot)
+    {
+        case EQUIPMENT_SLOT_HEAD:
+        case EQUIPMENT_SLOT_SHOULDERS:
+        case EQUIPMENT_SLOT_CHEST:
+        case EQUIPMENT_SLOT_WAIST:
+        case EQUIPMENT_SLOT_LEGS:
+        case EQUIPMENT_SLOT_FEET:
+        case EQUIPMENT_SLOT_WRISTS:
+        case EQUIPMENT_SLOT_HANDS:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool IsTankArmorClassCorrection(Player const* player, Weights const& weights,
+    uint8 slot, ItemPrototype const* current, ItemPrototype const* candidate)
+{
+    if (!weights.tank || !IsPrimaryArmorSlot(slot) || !current ||
+        !candidate || current->Class != ITEM_CLASS_ARMOR ||
+        candidate->Class != ITEM_CLASS_ARMOR)
+        return false;
+
+    uint32 const highest = player->GetHighestKnownArmorProficiency();
+    return highest && candidate->GetProficiencySkill() == highest &&
+        current->GetProficiencySkill() != highest;
+}
+
+bool Compatible(Player* player, Weights const& weights,
+    ItemPrototype const* main, ItemPrototype const* off);
 
 void ProtectPlanAgainstSetBonusLoss(Player* player, Weights const& w,
     std::array<ItemPrototype const*, EQUIPMENT_SLOT_END>& plan)
@@ -1703,6 +2607,9 @@ void ProtectPlanAgainstSetBonusLoss(Player* player, Weights const& w,
         ScoreEquipmentPlan(w, player, plan) + 0.001f <
         ScoreEquipmentPlan(w, player, currentPlan);
     std::set<uint32> protectedSets;
+    float const contextualWeaponSkillLoss = std::max(0.0f,
+        ScorePlannedWeaponSkills(w, player, currentPlan) -
+        ScorePlannedWeaponSkills(w, player, plan));
     for (auto const& count : currentCounts)
     {
         ItemSetEntry const* set = sItemSetStore.LookupEntry(count.first);
@@ -1725,7 +2632,12 @@ void ProtectPlanAgainstSetBonusLoss(Player* player, Weights const& w,
                 sSpellMgr.GetSpellEntry(set->spells[i]);
             float const bonusScore = ScoreAura(w, spell, 1.0f);
             bool const unsupported = HasUnsupportedSetBonusEffects(spell);
-            if (unsupported || (planScoreLower && bonusScore > 0.001f))
+            WeaponSkillBonuses weaponSkillBonuses;
+            CollectStaticWeaponSkillsFromAura(spell, weaponSkillBonuses);
+            bool const losesContextualWeaponSkill =
+                !weaponSkillBonuses.empty() && contextualWeaponSkillLoss > 0.001f;
+            if (unsupported || (planScoreLower &&
+                (bonusScore > 0.001f || losesContextualWeaponSkill)))
             {
                 protectedSets.insert(count.first);
 #ifdef MANGOS_DEBUG
@@ -1747,15 +2659,24 @@ void ProtectPlanAgainstSetBonusLoss(Player* player, Weights const& w,
     bool protectHands = false;
     for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
     {
-        if (currentPlan[slot] &&
-            protectedSets.count(currentPlan[slot]->ItemSet))
+        if (!currentPlan[slot] ||
+            !protectedSets.count(currentPlan[slot]->ItemSet))
+            continue;
+
+        bool const hand = slot == EQUIPMENT_SLOT_MAINHAND ||
+            slot == EQUIPMENT_SLOT_OFFHAND;
+        if (hand)
         {
-            plan[slot] = currentPlan[slot];
-            protectHands = protectHands || slot == EQUIPMENT_SLOT_MAINHAND ||
-                slot == EQUIPMENT_SLOT_OFFHAND;
+            protectHands = true;
+            continue;
         }
+        if (!IsTankArmorClassCorrection(player, w, slot,
+            currentPlan[slot], plan[slot]))
+            plan[slot] = currentPlan[slot];
     }
-    if (protectHands)
+    if (protectHands && Compatible(player, w,
+        currentPlan[EQUIPMENT_SLOT_MAINHAND],
+        currentPlan[EQUIPMENT_SLOT_OFFHAND]))
     {
         plan[EQUIPMENT_SLOT_MAINHAND] = currentPlan[EQUIPMENT_SLOT_MAINHAND];
         plan[EQUIPMENT_SLOT_OFFHAND] = currentPlan[EQUIPMENT_SLOT_OFFHAND];
@@ -1808,10 +2729,51 @@ struct Candidate
     ItemPrototype const* item;
     float score;
 };
+int64 ScoreSortKey(float score)
+{
+    return int64(std::llround(double(score) * 1000.0));
+}
+
 bool Better(Candidate const& a, Candidate const& b)
 {
-    return std::fabs(a.score - b.score) > 0.001f ? a.score > b.score : a.item->ItemLevel > b.item->ItemLevel;
+    if (ScoreSortKey(a.score) != ScoreSortKey(b.score))
+        return ScoreSortKey(a.score) > ScoreSortKey(b.score);
+    if (a.item->ItemLevel != b.item->ItemLevel)
+        return a.item->ItemLevel > b.item->ItemLevel;
+    return a.item->ItemId < b.item->ItemId;
 }
+void PreferTankArmorClassCandidates(Player const* player,
+    Weights const& weights,
+    std::array<std::vector<Candidate>, EQUIPMENT_SLOT_END>& candidates)
+{
+    if (!weights.tank)
+        return;
+    uint32 const highest = player->GetHighestKnownArmorProficiency();
+    if (!highest)
+        return;
+
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        if (!IsPrimaryArmorSlot(slot))
+            continue;
+        std::vector<Candidate>& list = candidates[slot];
+        bool const hasHighest = std::any_of(list.begin(), list.end(),
+            [highest](Candidate const& candidate)
+            {
+                return candidate.item->Class == ITEM_CLASS_ARMOR &&
+                    candidate.item->GetProficiencySkill() == highest;
+            });
+        if (!hasHighest)
+            continue;
+        list.erase(std::remove_if(list.begin(), list.end(),
+            [highest](Candidate const& candidate)
+            {
+                return candidate.item->Class != ITEM_CLASS_ARMOR ||
+                    candidate.item->GetProficiencySkill() != highest;
+            }), list.end());
+    }
+}
+
 bool Unique(ItemPrototype const* item)
 {
     return item && (item->MaxCount == 1 || (item->Flags & ITEM_FLAG_UNIQUE_EQUIPPED));
@@ -1858,7 +2820,7 @@ bool Compatible(Player* player, Weights const& w, ItemPrototype const* main, Ite
     if (!main)
         return false;
     if (main->InventoryType == INVTYPE_2HWEAPON)
-        return !off;
+        return !w.shield && !off;
     if (!off)
         return !w.shield;
     if (w.shield)
@@ -1967,8 +2929,8 @@ uint32 SelectQuestChoiceReward(Player* player, Quest const* quest,
     std::sort(choices.begin(), choices.end(), [](Choice const& left,
         Choice const& right)
     {
-        if (std::fabs(left.score - right.score) > 0.001f)
-            return left.score > right.score;
+        if (ScoreSortKey(left.score) != ScoreSortKey(right.score))
+            return ScoreSortKey(left.score) > ScoreSortKey(right.score);
         if (left.itemLevel != right.itemLevel)
             return left.itemLevel > right.itemLevel;
         if (left.quality != right.quality)
@@ -1979,7 +2941,7 @@ uint32 SelectQuestChoiceReward(Player* player, Quest const* quest,
     std::vector<uint32> equivalent;
     for (Choice const& choice : choices)
     {
-        if (std::fabs(choice.score - best.score) > 0.001f ||
+        if (ScoreSortKey(choice.score) != ScoreSortKey(best.score) ||
             choice.itemLevel != best.itemLevel ||
             choice.quality != best.quality)
             break;
@@ -2218,8 +3180,9 @@ void EnforceQuestRewardCounts(Player* player, Weights const& weights,
         {
             if (left.keepsCurrent != right.keepsCurrent)
                 return left.keepsCurrent;
-            return std::fabs(left.score - right.score) > 0.001f ?
-                left.score > right.score : left.slot < right.slot;
+            if (ScoreSortKey(left.score) != ScoreSortKey(right.score))
+                return ScoreSortKey(left.score) > ScoreSortKey(right.score);
+            return left.slot < right.slot;
         });
         for (size_t index = planLimit; index < items.size(); ++index)
         {
@@ -2293,8 +3256,9 @@ void EnforceQuestChoiceExclusivity(Player* player, Weights const& weights,
     {
         if (left.keepsCurrent != right.keepsCurrent)
             return left.keepsCurrent;
-        return std::fabs(left.score - right.score) > 0.001f ?
-            left.score > right.score : left.slot < right.slot;
+        if (ScoreSortKey(left.score) != ScoreSortKey(right.score))
+            return ScoreSortKey(left.score) > ScoreSortKey(right.score);
+        return left.slot < right.slot;
     });
 
     std::vector<std::vector<ChoiceGrant>> grants(requests.size());
@@ -2376,6 +3340,17 @@ void ApplyLimitedItemRules(Player* player, Weights const& weights,
         EnforceQuestRewardCounts(player, weights, cache, questRewards, plan);
         EnforcePrototypeMaxCounts(player, plan);
         RemoveDuplicateUniquePlannedItems(player, plan);
+        ItemPrototype const* main = plan[EQUIPMENT_SLOT_MAINHAND];
+        ItemPrototype const* off = plan[EQUIPMENT_SLOT_OFFHAND];
+        if ((main || off) && !Compatible(player, weights, main, off))
+        {
+            // Constraint fallbacks must never resurrect an old hand layout
+            // that violates the current spec (for example Prot 2H/no shield).
+            // Clearing both makes TrySet reject it and lets Backfill choose a
+            // different, fully valid pair.
+            plan[EQUIPMENT_SLOT_MAINHAND] = nullptr;
+            plan[EQUIPMENT_SLOT_OFFHAND] = nullptr;
+        }
     }
 }
 
@@ -2419,6 +3394,296 @@ bool TrySetPlanHands(Player* player, Weights const& weights,
     return true;
 }
 
+void OptimizeContextualPlan(Player* player, Weights const& weights,
+    AutoProgressionCache const& cache, QuestRewardCatalog const& questRewards,
+    std::array<std::vector<Candidate>, EQUIPMENT_SLOT_END> const& candidates,
+    std::array<ItemPrototype const*, EQUIPMENT_SLOT_END>& plan)
+{
+    if (weights.spellHit <= 0 && weights.weaponSkill <= 0)
+        return;
+
+    auto slotPassesThreshold = [&](uint8 slot, ItemPrototype const* candidate)
+    {
+        Item* current = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!current || current->GetEntry() == candidate->ItemId)
+            return true;
+        if (IsTankArmorClassCorrection(player, weights, slot, current->GetProto(), candidate))
+            return true;
+        std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> without = plan;
+        without[slot] = nullptr;
+        std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> currentPlan = without;
+        currentPlan[slot] = current->GetProto();
+        std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> candidatePlan = without;
+        candidatePlan[slot] = candidate;
+        float const baseline = ScoreEquipmentPlan(weights, player, without);
+        return MeetsUpgradeThreshold(
+            std::max(0.0f, ScoreEquipmentPlan(weights, player, currentPlan) - baseline),
+            std::max(0.0f, ScoreEquipmentPlan(weights, player, candidatePlan) - baseline));
+    };
+    auto handsPassThreshold = [&](ItemPrototype const* main,
+        ItemPrototype const* off)
+    {
+        Item* currentMain = player->GetItemByPos(
+            INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND);
+        Item* currentOff = player->GetItemByPos(
+            INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
+        ItemPrototype const* currentMainProto =
+            currentMain ? currentMain->GetProto() : nullptr;
+        ItemPrototype const* currentOffProto =
+            currentOff ? currentOff->GetProto() : nullptr;
+        if ((currentMain || currentOff) && !Compatible(player, weights,
+            currentMainProto, currentOffProto))
+            return true;
+        if ((!currentMain || currentMain->GetProto() == main) &&
+            (!currentOff || currentOff->GetProto() == off))
+            return true;
+        std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> without = plan;
+        without[EQUIPMENT_SLOT_MAINHAND] = nullptr;
+        without[EQUIPMENT_SLOT_OFFHAND] = nullptr;
+        std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> currentPlan = without;
+        currentPlan[EQUIPMENT_SLOT_MAINHAND] =
+            currentMain ? currentMain->GetProto() : nullptr;
+        currentPlan[EQUIPMENT_SLOT_OFFHAND] =
+            currentOff ? currentOff->GetProto() : nullptr;
+        std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> candidatePlan = without;
+        candidatePlan[EQUIPMENT_SLOT_MAINHAND] = main;
+        candidatePlan[EQUIPMENT_SLOT_OFFHAND] = off;
+        float const baseline = ScoreEquipmentPlan(weights, player, without);
+        return MeetsUpgradeThreshold(
+            std::max(0.0f, ScoreEquipmentPlan(weights, player, currentPlan) - baseline),
+            std::max(0.0f, ScoreEquipmentPlan(weights, player, candidatePlan) - baseline));
+    };
+
+    std::vector<ItemPrototype const*> pairedHandCandidates[2];
+    auto buildHandShortlist = [&](uint8 slot,
+        std::vector<ItemPrototype const*>& result)
+    {
+        auto add = [&](ItemPrototype const* item)
+        {
+            if (item && std::find(result.begin(), result.end(), item) == result.end())
+                result.push_back(item);
+        };
+        add(plan[slot]);
+        Item* current = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        add(current ? current->GetProto() : nullptr);
+
+        size_t const perMetric = 20;
+        for (size_t i = 0; i < std::min(perMetric, candidates[slot].size()); ++i)
+            add(candidates[slot][i].item);
+
+        Weights withoutHit = weights;
+        withoutHit.spellHit = 0;
+        withoutHit.weaponSkill = 0;
+        std::vector<Candidate> intrinsic = candidates[slot];
+        for (Candidate& candidate : intrinsic)
+            candidate.score = ScoreItemForPlayer(withoutHit, player,
+                candidate.item, cache);
+        std::sort(intrinsic.begin(), intrinsic.end(), Better);
+        for (size_t i = 0; i < std::min(perMetric, intrinsic.size()); ++i)
+            add(intrinsic[i].item);
+    };
+    buildHandShortlist(EQUIPMENT_SLOT_MAINHAND, pairedHandCandidates[0]);
+    buildHandShortlist(EQUIPMENT_SLOT_OFFHAND, pairedHandCandidates[1]);
+
+    for (uint8 pass = 0; pass < 3; ++pass)
+    {
+        bool changed = false;
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        {
+            if (slot == EQUIPMENT_SLOT_MAINHAND ||
+                slot == EQUIPMENT_SLOT_OFFHAND)
+                continue;
+            float bestScore = ScoreEquipmentPlan(weights, player, plan);
+            std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> bestPlan = plan;
+            for (Candidate const& candidate : candidates[slot])
+            {
+                std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> quick = plan;
+                quick[slot] = candidate.item;
+                if (ScoreEquipmentPlan(weights, player, quick) <=
+                    bestScore + 0.001f ||
+                    !slotPassesThreshold(slot, candidate.item))
+                    continue;
+                std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> trial = plan;
+                if (!TryAddPlanItem(player, weights, cache, questRewards,
+                    slot, candidate.item, trial))
+                    continue;
+                float const score = ScoreEquipmentPlan(weights, player, trial);
+                if (score > bestScore + 0.001f)
+                {
+                    bestScore = score;
+                    bestPlan = trial;
+                }
+            }
+            if (bestPlan != plan)
+            {
+                plan = bestPlan;
+                changed = true;
+            }
+        }
+
+        auto improveHands = [&](ItemPrototype const* main,
+            ItemPrototype const* off, float& bestScore,
+            std::array<ItemPrototype const*, EQUIPMENT_SLOT_END>& bestPlan)
+        {
+            if (!Compatible(player, weights, main, off) ||
+                (off && main->ItemId == off->ItemId && Unique(main)))
+                return;
+            std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> quick = plan;
+            quick[EQUIPMENT_SLOT_MAINHAND] = main;
+            quick[EQUIPMENT_SLOT_OFFHAND] = off;
+            if (ScoreEquipmentPlan(weights, player, quick) <=
+                bestScore + 0.001f)
+                return;
+            if (!handsPassThreshold(main, off))
+                return;
+            std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> trial;
+            if (!TrySetPlanHands(player, weights, cache, questRewards,
+                main, off, plan, trial))
+                return;
+            float const score = ScoreEquipmentPlan(weights, player, trial);
+            if (score > bestScore + 0.001f)
+            {
+                bestScore = score;
+                bestPlan = trial;
+            }
+        };
+
+        float bestHandsScore = ScoreEquipmentPlan(weights, player, plan);
+        std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> bestHandsPlan = plan;
+        ItemPrototype const* plannedOff = plan[EQUIPMENT_SLOT_OFFHAND];
+        for (Candidate const& candidate :
+             candidates[EQUIPMENT_SLOT_MAINHAND])
+        {
+            ItemPrototype const* main = candidate.item;
+            improveHands(main,
+                main->InventoryType == INVTYPE_2HWEAPON ? nullptr : plannedOff,
+                bestHandsScore, bestHandsPlan);
+            if (main->InventoryType != INVTYPE_2HWEAPON)
+                improveHands(main, nullptr, bestHandsScore, bestHandsPlan);
+        }
+        if (bestHandsPlan != plan)
+        {
+            plan = bestHandsPlan;
+            changed = true;
+        }
+
+        bestHandsScore = ScoreEquipmentPlan(weights, player, plan);
+        bestHandsPlan = plan;
+        for (ItemPrototype const* main : pairedHandCandidates[0])
+        {
+            if (!main || main->InventoryType == INVTYPE_2HWEAPON)
+                continue;
+            for (ItemPrototype const* off : pairedHandCandidates[1])
+                improveHands(main, off, bestHandsScore, bestHandsPlan);
+        }
+        if (bestHandsPlan != plan)
+        {
+            plan = bestHandsPlan;
+            changed = true;
+        }
+
+        bestHandsScore = ScoreEquipmentPlan(weights, player, plan);
+        bestHandsPlan = plan;
+        ItemPrototype const* plannedMain = plan[EQUIPMENT_SLOT_MAINHAND];
+        if (plannedMain && plannedMain->InventoryType != INVTYPE_2HWEAPON)
+            for (Candidate const& candidate :
+                 candidates[EQUIPMENT_SLOT_OFFHAND])
+                improveHands(plannedMain, candidate.item,
+                    bestHandsScore, bestHandsPlan);
+        if (bestHandsPlan != plan)
+        {
+            plan = bestHandsPlan;
+            changed = true;
+        }
+        if (!changed)
+            break;
+    }
+}
+
+float MarginalSlotPlanScore(Weights const& weights, Player const* player,
+    std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> const& plan,
+    uint8 slot, ItemPrototype const* item)
+{
+    std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> without = plan;
+    without[slot] = nullptr;
+    if (!item)
+        return 0;
+    std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> with = without;
+    with[slot] = item;
+    return std::max(0.0f, ScoreEquipmentPlan(weights, player, with) -
+        ScoreEquipmentPlan(weights, player, without));
+}
+
+float MarginalHandsPlanScore(Weights const& weights, Player const* player,
+    std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> const& plan,
+    ItemPrototype const* main, ItemPrototype const* off)
+{
+    std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> without = plan;
+    without[EQUIPMENT_SLOT_MAINHAND] = nullptr;
+    without[EQUIPMENT_SLOT_OFFHAND] = nullptr;
+    if (!main && !off)
+        return 0;
+    std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> with = without;
+    with[EQUIPMENT_SLOT_MAINHAND] = main;
+    with[EQUIPMENT_SLOT_OFFHAND] = off;
+    return std::max(0.0f, ScoreEquipmentPlan(weights, player, with) -
+        ScoreEquipmentPlan(weights, player, without));
+}
+
+void EnforceFinalUpgradeThresholds(Player* player, Weights const& weights,
+    std::array<ItemPrototype const*, EQUIPMENT_SLOT_END>& plan)
+{
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        if (slot == EQUIPMENT_SLOT_MAINHAND || slot == EQUIPMENT_SLOT_OFFHAND)
+            continue;
+        Item* current = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!current || (plan[slot] && current->GetEntry() == plan[slot]->ItemId))
+            continue;
+        if (!plan[slot])
+        {
+            plan[slot] = current->GetProto();
+            continue;
+        }
+        float const currentScore = MarginalSlotPlanScore(weights, player,
+            plan, slot, current->GetProto());
+        float const candidateScore = MarginalSlotPlanScore(weights, player,
+            plan, slot, plan[slot]);
+        if (!IsTankArmorClassCorrection(player, weights, slot, current->GetProto(), plan[slot]) &&
+            !MeetsUpgradeThreshold(currentScore, candidateScore))
+            plan[slot] = current->GetProto();
+    }
+
+    Item* currentMain = player->GetItemByPos(
+        INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND);
+    Item* currentOff = player->GetItemByPos(
+        INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
+    bool const mainUnchanged = (!currentMain && !plan[EQUIPMENT_SLOT_MAINHAND]) ||
+        (currentMain && plan[EQUIPMENT_SLOT_MAINHAND] &&
+         currentMain->GetEntry() == plan[EQUIPMENT_SLOT_MAINHAND]->ItemId);
+    bool const offUnchanged = (!currentOff && !plan[EQUIPMENT_SLOT_OFFHAND]) ||
+        (currentOff && plan[EQUIPMENT_SLOT_OFFHAND] &&
+         currentOff->GetEntry() == plan[EQUIPMENT_SLOT_OFFHAND]->ItemId);
+    if ((currentMain || currentOff) && (!mainUnchanged || !offUnchanged) &&
+        Compatible(player, weights,
+            currentMain ? currentMain->GetProto() : nullptr,
+            currentOff ? currentOff->GetProto() : nullptr))
+    {
+        float const currentScore = MarginalHandsPlanScore(weights, player, plan,
+            currentMain ? currentMain->GetProto() : nullptr,
+            currentOff ? currentOff->GetProto() : nullptr);
+        float const candidateScore = MarginalHandsPlanScore(weights, player, plan,
+            plan[EQUIPMENT_SLOT_MAINHAND], plan[EQUIPMENT_SLOT_OFFHAND]);
+        if (!MeetsUpgradeThreshold(currentScore, candidateScore))
+        {
+            plan[EQUIPMENT_SLOT_MAINHAND] =
+                currentMain ? currentMain->GetProto() : nullptr;
+            plan[EQUIPMENT_SLOT_OFFHAND] =
+                currentOff ? currentOff->GetProto() : nullptr;
+        }
+    }
+}
+
 void BackfillEmptyPlanSlots(Player* player, Weights const& weights,
     AutoProgressionCache const& cache, QuestRewardCatalog const& questRewards,
     std::array<std::vector<Candidate>, EQUIPMENT_SLOT_END> const& candidates,
@@ -2426,6 +3691,26 @@ void BackfillEmptyPlanSlots(Player* player, Weights const& weights,
 {
     for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
     {
+        if (weights.tank && IsPrimaryArmorSlot(slot) && plan[slot])
+        {
+            uint32 const highest = player->GetHighestKnownArmorProficiency();
+            bool const hasHighestCandidate = highest && std::any_of(
+                candidates[slot].begin(), candidates[slot].end(),
+                [highest](Candidate const& candidate)
+                {
+                    return candidate.item->Class == ITEM_CLASS_ARMOR &&
+                        candidate.item->GetProficiencySkill() == highest;
+                });
+            if (hasHighestCandidate &&
+                (plan[slot]->Class != ITEM_CLASS_ARMOR ||
+                 plan[slot]->GetProficiencySkill() != highest))
+            {
+                // Quest/unique/max-count fallbacks can restore the currently
+                // equipped lower armor class. Treat that fallback as empty so
+                // the next legal highest-class candidate gets a chance.
+                plan[slot] = nullptr;
+            }
+        }
         if (slot == EQUIPMENT_SLOT_MAINHAND || slot == EQUIPMENT_SLOT_OFFHAND ||
             plan[slot])
             continue;
@@ -2441,6 +3726,14 @@ void BackfillEmptyPlanSlots(Player* player, Weights const& weights,
 
     ItemPrototype const* plannedMain = plan[EQUIPMENT_SLOT_MAINHAND];
     ItemPrototype const* plannedOff = plan[EQUIPMENT_SLOT_OFFHAND];
+    if ((plannedMain || plannedOff) &&
+        !Compatible(player, weights, plannedMain, plannedOff))
+    {
+        plan[EQUIPMENT_SLOT_MAINHAND] = nullptr;
+        plan[EQUIPMENT_SLOT_OFFHAND] = nullptr;
+        plannedMain = nullptr;
+        plannedOff = nullptr;
+    }
     if (plannedMain && plannedMain->InventoryType == INVTYPE_2HWEAPON)
         return;
     if (plannedMain && plannedOff)
@@ -2810,6 +4103,9 @@ uint32 FinalizeEquipmentPlan(Player* player, Weights const& weights,
         if (replace)
             ProtectPlanAgainstSetBonusLoss(player, weights, plan);
         ApplyLimitedItemRules(player, weights, cache, questRewards, plan);
+        if (replace)
+            EnforceFinalUpgradeThresholds(player, weights, plan);
+        ApplyLimitedItemRules(player, weights, cache, questRewards, plan);
         if (plan == before)
             break;
     }
@@ -2822,21 +4118,29 @@ EnchantCandidate const* FindBestImprovement(Player* player,
 {
     EnchantCandidate const* best = nullptr;
     uint32 bestLevel = 0;
+    int64 bestKey = std::numeric_limits<int64>::min();
     bestScore = -std::numeric_limits<float>::max();
     for (EnchantCandidate const& candidate : cache.improvements)
     {
         if (!ImprovementFits(player, item, equipmentSlot, candidate))
             continue;
         float const score = ScoreEnchantment(weights, item,
-            sSpellItemEnchantmentStore.LookupEntry(candidate.enchantId));
+            sSpellItemEnchantmentStore.LookupEntry(candidate.enchantId), equipmentSlot);
         uint32 const level = ImprovementMinimumLevel(candidate);
-        if (!best || score > bestScore + 0.001f ||
-            (std::fabs(score - bestScore) <= 0.001f &&
-             (level > bestLevel || (level == bestLevel && candidate.spellId > best->spellId))))
+        int64 const scoreKey = ScoreSortKey(score);
+        if (!best || scoreKey > bestKey ||
+            (scoreKey == bestKey &&
+             std::make_tuple(level, candidate.spellId,
+                 candidate.enchantId, candidate.sourceItemId,
+                 uint8(candidate.source), candidate.effectIndex) >
+             std::make_tuple(bestLevel, best->spellId,
+                 best->enchantId, best->sourceItemId,
+                 uint8(best->source), best->effectIndex)))
         {
             best = &candidate;
             bestScore = score;
             bestLevel = level;
+            bestKey = scoreKey;
         }
     }
     return best;
@@ -3001,11 +4305,11 @@ std::string DescribeScoredItem(ItemPrototype const* item, float score,
             out << (hasEnchants ? "," : " enchants=") << name << ":" << enchantId;
             hasEnchants = true;
         };
-        addEnchant("permanent", PERM_ENCHANTMENT_SLOT);
+        addEnchant("permanent-ignored", PERM_ENCHANTMENT_SLOT);
         addEnchant("property0", PROP_ENCHANTMENT_SLOT_0);
         addEnchant("property1", PROP_ENCHANTMENT_SLOT_1);
         addEnchant("property2", PROP_ENCHANTMENT_SLOT_2);
-        addEnchant("property3", PROP_ENCHANTMENT_SLOT_3);
+        addEnchant("held-ignored", PROP_ENCHANTMENT_SLOT_3);
     }
     out << " source=" << ItemSourceDescription(GetCachedItemSources(item, cache));
     return out.str();
@@ -3017,6 +4321,840 @@ float UpgradePercent(float currentScore, float candidateScore)
         return candidateScore > 0 ? 100.0f : 0;
     return (candidateScore / currentScore - 1.0f) * 100.0f;
 }
+
+thread_local bool gAuditExecutionActive = false;
+uint32 gNextAuditItemLowGuid = 0xF0000000u;
+
+struct AuditExecutionGuard
+{
+    AuditExecutionGuard() : previous(gAuditExecutionActive)
+    {
+        gAuditExecutionActive = true;
+    }
+
+    ~AuditExecutionGuard()
+    {
+        gAuditExecutionActive = previous;
+    }
+
+    bool previous;
+};
+
+struct AuditProfile
+{
+    uint8 classId = 0;
+    uint8 raceId = 0;
+    uint8 tree = 0;
+};
+
+struct AuditMatrixState
+{
+    uint64 runId = 0;
+    std::vector<AuditProfile> profiles;
+    std::atomic<bool> cancelRequested{ false };
+    std::atomic<bool> finishing{ false };
+    std::atomic<bool> finished{ false };
+    std::atomic<uint32> currentProfile{ 0 };
+    std::atomic<uint32> currentLevel{ 0 };
+    std::atomic<uint32> completedSteps{ 0 };
+    std::atomic<uint32> errors{ 0 };
+    uint32 delayMs = 0;
+    uint32 startedMs = 0;
+    uint32 profileStartedMs = 0;
+    uint32 profileErrorStart = 0;
+    uint64 profileHash = 1469598103934665603ULL;
+    uint64 aggregateHash = 1469598103934665603ULL;
+    bool beginLogged = false;
+    std::string result;
+    std::string reason;
+    uint64 configHash = 0;
+    uint64 catalogHash = 0;
+    std::shared_ptr<AutoProgressionCache const> cacheSnapshot;
+    std::unique_ptr<WorldSession> session;
+    std::unique_ptr<Player> player;
+};
+
+std::mutex gAuditMatrixMutex;
+std::shared_ptr<AuditMatrixState> gAuditMatrix;
+std::atomic<uint32> gAuditRunSequence{ 0 };
+
+char const* AuditClassName(uint8 classId)
+{
+    switch (classId)
+    {
+        case CLASS_WARRIOR: return "warrior";
+        case CLASS_PALADIN: return "paladin";
+        case CLASS_HUNTER: return "hunter";
+        case CLASS_ROGUE: return "rogue";
+        case CLASS_PRIEST: return "priest";
+        case CLASS_SHAMAN: return "shaman";
+        case CLASS_MAGE: return "mage";
+        case CLASS_WARLOCK: return "warlock";
+        case CLASS_DRUID: return "druid";
+        default: return "unknown";
+    }
+}
+
+char const* AuditTreeName(uint8 classId, uint8 tree)
+{
+    static char const* const warrior[] =
+        { "arms", "fury", "protection" };
+    static char const* const paladin[] =
+        { "holy", "protection", "retribution" };
+    static char const* const hunter[] =
+        { "beastmastery", "marksmanship", "survival" };
+    static char const* const rogue[] =
+        { "assassination", "combat", "subtlety" };
+    static char const* const priest[] =
+        { "discipline", "holy", "shadow" };
+    static char const* const shaman[] =
+        { "elemental", "enhancement", "restoration" };
+    static char const* const mage[] =
+        { "arcane", "fire", "frost" };
+    static char const* const warlock[] =
+        { "affliction", "demonology", "destruction" };
+    static char const* const druid[] =
+        { "balance", "feral", "restoration" };
+    if (tree >= 3)
+        return "unknown";
+    switch (classId)
+    {
+        case CLASS_WARRIOR: return warrior[tree];
+        case CLASS_PALADIN: return paladin[tree];
+        case CLASS_HUNTER: return hunter[tree];
+        case CLASS_ROGUE: return rogue[tree];
+        case CLASS_PRIEST: return priest[tree];
+        case CLASS_SHAMAN: return shaman[tree];
+        case CLASS_MAGE: return mage[tree];
+        case CLASS_WARLOCK: return warlock[tree];
+        case CLASS_DRUID: return druid[tree];
+        default: return "unknown";
+    }
+}
+
+uint8 DefaultAuditRace(uint8 classId)
+{
+    switch (classId)
+    {
+        case CLASS_WARRIOR: return RACE_ORC;
+        case CLASS_PALADIN: return RACE_HUMAN;
+        case CLASS_HUNTER: return RACE_DWARF;
+        case CLASS_ROGUE: return RACE_HUMAN;
+        case CLASS_PRIEST: return RACE_HUMAN;
+        case CLASS_SHAMAN: return RACE_ORC;
+        case CLASS_MAGE: return RACE_GNOME;
+        case CLASS_WARLOCK: return RACE_GNOME;
+        case CLASS_DRUID: return RACE_NIGHTELF;
+        default: return 0;
+    }
+}
+
+std::string LowerAuditToken(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(),
+        [](unsigned char c) { return char(std::tolower(c)); });
+    return value;
+}
+
+uint8 ParseAuditClass(std::string const& token)
+{
+    uint8 const classes[] =
+    {
+        CLASS_WARRIOR, CLASS_PALADIN, CLASS_HUNTER, CLASS_ROGUE,
+        CLASS_PRIEST, CLASS_SHAMAN, CLASS_MAGE, CLASS_WARLOCK,
+        CLASS_DRUID
+    };
+    for (uint8 classId : classes)
+        if (token == AuditClassName(classId))
+            return classId;
+    return 0;
+}
+
+bool ParseAuditTree(uint8 classId, std::string const& token, uint8& tree)
+{
+    if (token.size() == 1 && token[0] >= '0' && token[0] <= '2')
+    {
+        tree = uint8(token[0] - '0');
+        return true;
+    }
+    for (uint8 candidate = 0; candidate < 3; ++candidate)
+        if (token == AuditTreeName(classId, candidate))
+        {
+            tree = candidate;
+            return true;
+        }
+    if (classId == CLASS_WARRIOR && token == "prot")
+        tree = 2;
+    else if (classId == CLASS_PALADIN && token == "prot")
+        tree = 1;
+    else if (classId == CLASS_HUNTER && token == "bm")
+        tree = 0;
+    else if (classId == CLASS_PRIEST && token == "disc")
+        tree = 0;
+    else if (classId == CLASS_SHAMAN && token == "enhance")
+        tree = 1;
+    else if (classId == CLASS_DRUID && token == "resto")
+        tree = 2;
+    else
+        return false;
+    return true;
+}
+
+void AddAllAuditProfiles(std::vector<AuditProfile>& profiles)
+{
+    uint8 const classes[] =
+    {
+        CLASS_WARRIOR, CLASS_PALADIN, CLASS_HUNTER, CLASS_ROGUE,
+        CLASS_PRIEST, CLASS_SHAMAN, CLASS_MAGE, CLASS_WARLOCK,
+        CLASS_DRUID
+    };
+    for (uint8 classId : classes)
+        for (uint8 tree = 0; tree < 3; ++tree)
+            profiles.push_back({ classId, DefaultAuditRace(classId), tree });
+}
+
+void MixAuditHash(uint64& hash, uint32 value)
+{
+    for (uint8 byte = 0; byte < 4; ++byte)
+    {
+        hash ^= uint8(value >> (byte * 8));
+        hash *= 1099511628211ULL;
+    }
+}
+
+uint64 AuditConfigurationHash()
+{
+    uint64 hash = 1469598103934665603ULL;
+    for (uint32 index = 0; index < CONFIG_UINT32_VALUE_COUNT; ++index)
+        MixAuditHash(hash, sWorld.getConfig(eConfigUInt32Values(index)));
+    for (uint32 index = 0; index < CONFIG_INT32_VALUE_COUNT; ++index)
+        MixAuditHash(hash, uint32(sWorld.getConfig(eConfigInt32Values(index))));
+    for (uint32 index = 0; index < CONFIG_FLOAT_VALUE_COUNT; ++index)
+    {
+        float const value = sWorld.getConfig(eConfigFloatValues(index));
+        uint32 bits = 0;
+        std::memcpy(&bits, &value, sizeof(bits));
+        MixAuditHash(hash, bits);
+    }
+    for (uint32 index = 0; index < CONFIG_BOOL_VALUE_COUNT; ++index)
+        MixAuditHash(hash, sWorld.getConfig(eConfigBoolValues(index)) ? 1u : 0u);
+    MixAuditHash(hash, uint32(sWorld.GetWowPatch()));
+    return hash;
+}
+
+uint64 AuditCatalogHash(AutoProgressionCache const& cache)
+{
+    uint64 hash = 1469598103934665603ULL;
+    std::vector<uint32> equipment = cache.equipmentItems;
+    std::sort(equipment.begin(), equipment.end());
+    for (uint32 itemId : equipment)
+        MixAuditHash(hash, itemId);
+
+    std::vector<std::pair<uint32, uint32>> sources(
+        cache.itemSources.begin(), cache.itemSources.end());
+    std::sort(sources.begin(), sources.end());
+    for (auto const& source : sources)
+    {
+        MixAuditHash(hash, source.first);
+        MixAuditHash(hash, source.second);
+    }
+
+    std::vector<EnchantCandidate> improvements = cache.improvements;
+    std::sort(improvements.begin(), improvements.end(),
+        [](EnchantCandidate const& left, EnchantCandidate const& right)
+    {
+        if (left.spellId != right.spellId)
+            return left.spellId < right.spellId;
+        if (left.enchantId != right.enchantId)
+            return left.enchantId < right.enchantId;
+        if (left.sourceItemId != right.sourceItemId)
+            return left.sourceItemId < right.sourceItemId;
+        if (left.source != right.source)
+            return uint8(left.source) < uint8(right.source);
+        return left.effectIndex < right.effectIndex;
+    });
+    for (EnchantCandidate const& candidate : improvements)
+    {
+        MixAuditHash(hash, candidate.spellId);
+        MixAuditHash(hash, candidate.enchantId);
+        MixAuditHash(hash, candidate.sourceItemId);
+        MixAuditHash(hash, uint32(candidate.source));
+        MixAuditHash(hash, candidate.effectIndex);
+    }
+
+    for (uint8 classId = 0; classId < 12; ++classId)
+    {
+        std::vector<TrainerSource> trainers = cache.trainers.classes[classId];
+        std::sort(trainers.begin(), trainers.end(),
+            [](TrainerSource const& left, TrainerSource const& right)
+        {
+            if (left.id != right.id)
+                return left.id < right.id;
+            return left.isTemplate < right.isTemplate;
+        });
+        for (TrainerSource const& trainer : trainers)
+        {
+            MixAuditHash(hash, classId);
+            MixAuditHash(hash, trainer.id);
+            MixAuditHash(hash, trainer.isTemplate ? 1u : 0u);
+        }
+    }
+    std::vector<TrainerSource> weapons = cache.trainers.weapons;
+    std::sort(weapons.begin(), weapons.end(),
+        [](TrainerSource const& left, TrainerSource const& right)
+    {
+        if (left.id != right.id)
+            return left.id < right.id;
+        return left.isTemplate < right.isTemplate;
+    });
+    for (TrainerSource const& trainer : weapons)
+    {
+        MixAuditHash(hash, 12);
+        MixAuditHash(hash, trainer.id);
+        MixAuditHash(hash, trainer.isTemplate ? 1u : 0u);
+    }
+    return hash;
+}
+
+void WriteAuditLog(std::string const& payload)
+{
+    sLog.Out(LOG_BASIC, LOG_LVL_BASIC, "AP_AUDIT|%s", payload.c_str());
+}
+
+uint32 CurrentTalentRank(Player const* player, TalentEntry const* talent)
+{
+    for (int8 rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
+        if (talent->RankID[rank] && player->HasSpell(talent->RankID[rank]))
+            return uint32(rank + 1);
+    return 0;
+}
+
+uint32 AuditTalentTreeCapacity(Player const* player, uint8 tree)
+{
+    uint32 capacity = 0;
+    for (uint32 id = 0; id < sTalentStore.GetNumRows(); ++id)
+    {
+        TalentEntry const* talent = sTalentStore.LookupEntry(id);
+        if (!talent)
+            continue;
+        TalentTabEntry const* tab =
+            sTalentTabStore.LookupEntry(talent->TalentTab);
+        if (!tab || !(tab->ClassMask & player->GetClassMask()) ||
+            TalentTreeIndex(tab) != tree)
+            continue;
+        for (uint8 rank = 0; rank < MAX_TALENT_RANK; ++rank)
+            if (talent->RankID[rank])
+                ++capacity;
+    }
+    return capacity;
+}
+
+uint32 HighestDependentTalentRow(uint32 talentId)
+{
+    uint32 row = 0;
+    for (uint32 id = 0; id < sTalentStore.GetNumRows(); ++id)
+    {
+        TalentEntry const* candidate = sTalentStore.LookupEntry(id);
+        if (candidate && candidate->DependsOn == talentId)
+            row = std::max(row, candidate->Row);
+    }
+    return row;
+}
+
+bool LearnNextAuditTalent(Player* player, uint8 requestedTree,
+    uint32& learnedTalentId, uint32& learnedRank)
+{
+    struct Candidate
+    {
+        TalentEntry const* talent;
+        uint32 nextRank;
+        uint32 dependentRow;
+    };
+    for (uint8 offset = 0; offset < 3; ++offset)
+    {
+        uint8 const tree = uint8((requestedTree + offset) % 3);
+        std::vector<Candidate> candidates;
+        for (uint32 id = 0; id < sTalentStore.GetNumRows(); ++id)
+        {
+            TalentEntry const* talent = sTalentStore.LookupEntry(id);
+            if (!talent)
+                continue;
+            TalentTabEntry const* tab =
+                sTalentTabStore.LookupEntry(talent->TalentTab);
+            if (!tab || !(tab->ClassMask & player->GetClassMask()) ||
+                TalentTreeIndex(tab) != tree)
+                continue;
+            uint32 const nextRank = CurrentTalentRank(player, talent);
+            if (nextRank >= MAX_TALENT_RANK ||
+                !talent->RankID[nextRank])
+                continue;
+            candidates.push_back({ talent, nextRank,
+                HighestDependentTalentRow(talent->TalentID) });
+        }
+        std::sort(candidates.begin(), candidates.end(),
+            [](Candidate const& left, Candidate const& right)
+        {
+            if (left.talent->Row != right.talent->Row)
+                return left.talent->Row > right.talent->Row;
+            if (left.dependentRow != right.dependentRow)
+                return left.dependentRow > right.dependentRow;
+            if (left.talent->Col != right.talent->Col)
+                return left.talent->Col < right.talent->Col;
+            return left.talent->TalentID < right.talent->TalentID;
+        });
+        for (Candidate const& candidate : candidates)
+            if (player->LearnTalent(candidate.talent->TalentID,
+                    candidate.nextRank))
+            {
+                learnedTalentId = candidate.talent->TalentID;
+                learnedRank = candidate.nextRank + 1;
+                return true;
+            }
+    }
+    return false;
+}
+
+std::string AuditGearSnapshot(Player const* player, uint64& levelHash)
+{
+    std::ostringstream out;
+    bool first = true;
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        Item const* item = player->GetItemByPos(
+            INVENTORY_SLOT_BAG_0, slot);
+        uint32 const itemId = item ? item->GetEntry() : 0;
+        uint32 const enchantId = item ?
+            item->GetEnchantmentId(PERM_ENCHANTMENT_SLOT) : 0;
+        if (!first)
+            out << ",";
+        out << uint32(slot) << ":" << itemId << "@" << enchantId;
+        first = false;
+        MixAuditHash(levelHash, slot);
+        MixAuditHash(levelHash, itemId);
+        MixAuditHash(levelHash, enchantId);
+    }
+    return out.str();
+}
+
+uint64 AuditSpellHash(Player const* player)
+{
+    std::vector<uint32> spells;
+    for (auto const& entry : player->GetSpellMap())
+        if (entry.second.state != PLAYERSPELL_REMOVED &&
+            !entry.second.disabled)
+            spells.push_back(entry.first);
+    std::sort(spells.begin(), spells.end());
+    uint64 hash = 1469598103934665603ULL;
+    for (uint32 spellId : spells)
+        MixAuditHash(hash, spellId);
+    return hash;
+}
+
+uint64 AuditSkillHash(Player const* player)
+{
+    uint64 hash = 1469598103934665603ULL;
+    for (uint16 skillId = 1; skillId < MAX_SKILL_TYPE; ++skillId)
+    {
+        if (!player->HasSkill(skillId))
+            continue;
+        MixAuditHash(hash, skillId);
+        MixAuditHash(hash, player->GetSkillValuePure(skillId));
+        MixAuditHash(hash, player->GetSkillMaxPure(skillId));
+        MixAuditHash(hash, uint16(player->GetSkillBonusPermanent(skillId)));
+        MixAuditHash(hash, uint16(player->GetSkillBonusTemporary(skillId)));
+    }
+    return hash;
+}
+
+void AuditViolation(AuditMatrixState& state, AuditProfile const& profile,
+    uint32 level, char const* code, std::string const& detail)
+{
+    state.errors.fetch_add(1);
+    std::ostringstream out;
+    out << "schema=1|run=" << state.runId <<
+        "|event=violation|profile=" << state.currentProfile.load() <<
+        "|class=" << AuditClassName(profile.classId) <<
+        "|tree=" << AuditTreeName(profile.classId, profile.tree) <<
+        "|race=" << uint32(profile.raceId) << "|level=" << level <<
+        "|code=" << code << "|detail=" << detail;
+    WriteAuditLog(out.str());
+}
+
+uint32 ValidateAuditLevel(AuditMatrixState& state,
+    AuditProfile const& profile, Player* player, uint32 level)
+{
+    uint32 const before = state.errors.load();
+    std::array<uint32, 3> const points = TalentTreePoints(player);
+    uint32 const expectedPoints = level >= 10 ? level - 9 : 0;
+    uint32 const actualPoints = points[0] + points[1] + points[2];
+    if (actualPoints != expectedPoints || player->GetFreeTalentPoints() != 0)
+    {
+        std::ostringstream detail;
+        detail << "expected=" << expectedPoints << ",actual=" << actualPoints <<
+            ",free=" << player->GetFreeTalentPoints();
+        AuditViolation(state, profile, level, "talent_point_count",
+            detail.str());
+    }
+    uint32 const expectedTargetPoints = std::min(expectedPoints,
+        AuditTalentTreeCapacity(player, profile.tree));
+    if (points[profile.tree] != expectedTargetPoints)
+    {
+        std::ostringstream detail;
+        detail << "expected_target=" << expectedTargetPoints <<
+            ",actual_target=" << points[profile.tree] <<
+            ",total=" << actualPoints;
+        AuditViolation(state, profile, level, "talent_target_progression",
+            detail.str());
+    }
+    if (level >= 10 && AutoProgressionTalentTree(player) != profile.tree)
+    {
+        std::ostringstream detail;
+        detail << "expected=" << uint32(profile.tree) << ",actual=" <<
+            AutoProgressionTalentTree(player);
+        AuditViolation(state, profile, level, "talent_tree_mismatch",
+            detail.str());
+    }
+
+    Weights const weights = GetWeights(player);
+    Item* main = player->GetItemByPos(
+        INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND);
+    Item* off = player->GetItemByPos(
+        INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
+    if (!main)
+        AuditViolation(state, profile, level, "missing_mainhand",
+            "no mainhand item equipped after AutoEquip");
+    if (weights.shield && (!off ||
+            off->GetProto()->InventoryType != INVTYPE_SHIELD))
+        AuditViolation(state, profile, level, "missing_shield",
+            "shield profile has no shield equipped after AutoEquip");
+    if ((main || off) && !Compatible(player, weights,
+            main ? main->GetProto() : nullptr,
+            off ? off->GetProto() : nullptr))
+        AuditViolation(state, profile, level, "invalid_hands",
+            "main/offhand topology does not match the active profile");
+
+    std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> plan = {};
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!item)
+            continue;
+        plan[slot] = item->GetProto();
+        if (item->GetProto()->RequiredLevel > level ||
+            player->CanUseItem(item->GetProto(), false) != EQUIP_ERR_OK)
+        {
+            std::ostringstream detail;
+            detail << "slot=" << uint32(slot) << ",item=" << item->GetEntry();
+            AuditViolation(state, profile, level, "illegal_item",
+                detail.str());
+        }
+    }
+
+    std::shared_ptr<AutoProgressionCache const> const cache =
+        EnsureAutoProgressionCache();
+    float const planScore = ScoreEquipmentPlan(weights, player, plan);
+    if (!std::isfinite(planScore))
+        AuditViolation(state, profile, level, "non_finite_score",
+            "equipment plan score is not finite");
+
+    uint32 const remainingTrainerSpells =
+        CountAvailableTrainerSpells(player, *cache);
+    if (remainingTrainerSpells)
+    {
+        std::ostringstream detail;
+        detail << "remaining=" << remainingTrainerSpells;
+        AuditViolation(state, profile, level, "trainer_spells_remaining",
+            detail.str());
+    }
+
+    if (sWorld.getConfig(CONFIG_BOOL_AUTO_LEARN_MAX_WEAPON_SKILLS))
+    {
+        uint16 const expected =
+            uint16(std::min<uint32>(level * 5, 300));
+        uint16 const skills[] =
+        {
+            SKILL_SWORDS, SKILL_AXES, SKILL_BOWS, SKILL_GUNS,
+            SKILL_MACES, SKILL_2H_SWORDS, SKILL_STAVES,
+            SKILL_2H_MACES, SKILL_UNARMED, SKILL_2H_AXES,
+            SKILL_DAGGERS, SKILL_THROWN, SKILL_CROSSBOWS,
+            SKILL_WANDS, SKILL_POLEARMS, SKILL_FIST_WEAPONS,
+            SKILL_DEFENSE
+        };
+        for (uint16 skill : skills)
+        {
+            uint16 const value = player->GetSkillValuePure(skill);
+            uint16 const maximum = player->GetSkillMaxPure(skill);
+            if (!value && !maximum)
+                continue;
+            if (value != expected || maximum != expected)
+            {
+                std::ostringstream detail;
+                detail << "skill=" << skill << ",expected=" << expected <<
+                    ",value=" << value << ",max=" << maximum;
+                AuditViolation(state, profile, level,
+                    "combat_skill_not_maxed", detail.str());
+            }
+        }
+    }
+
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!item)
+            continue;
+        float bestScore = 0;
+        EnchantCandidate const* best = FindBestImprovement(player,
+            item->GetProto(), slot, weights, *cache, bestScore);
+        uint32 const actual =
+            item->GetEnchantmentId(PERM_ENCHANTMENT_SLOT);
+        float actualScore = 0;
+        if (actual)
+            actualScore = ScoreEnchantment(weights, item->GetProto(),
+                sSpellItemEnchantmentStore.LookupEntry(actual), slot);
+        if (best && bestScore > actualScore + 0.001f &&
+            actual != best->enchantId)
+        {
+            std::ostringstream detail;
+            detail << "slot=" << uint32(slot) << ",item=" <<
+                item->GetEntry() << ",expected=" << best->enchantId <<
+                ",actual=" << actual << ",best_score=" << bestScore <<
+                ",actual_score=" << actualScore;
+            AuditViolation(state, profile, level, "enchant_mismatch",
+                detail.str());
+        }
+    }
+    return state.errors.load() - before;
+}
+
+bool CreateAuditProfile(AuditMatrixState& state,
+    AuditProfile const& profile, std::string& error)
+{
+    state.session.reset(new WorldSession(0, nullptr, SEC_PLAYER, 0,
+        LOCALE_enUS));
+    state.player.reset(new Player(state.session.get()));
+    uint32 const profileIndex = state.currentProfile.load();
+    uint32 const guid = 0xE0000000u +
+        uint32(profile.classId) * 16u + uint32(profile.tree);
+    std::ostringstream name;
+    name << "APM" << uint32(profile.classId) << uint32(profile.tree);
+    {
+        AuditExecutionGuard guard;
+        if (!state.player->Create(guid, name.str(), profile.raceId,
+                profile.classId, GENDER_MALE, 0, 0, 0, 0, 0))
+        {
+            error = "Player::Create failed";
+            return false;
+        }
+        state.player->AddStartingItems();
+    }
+    if (!state.player->IsSavingDisabled() ||
+        state.player->IsInWorld() || state.session->GetPlayer() ||
+        state.player->GetLevel() != 1)
+    {
+        error = "synthetic player safety invariant failed";
+        return false;
+    }
+
+    state.profileStartedMs = WorldTimer::getMSTime();
+    state.profileErrorStart = state.errors.load();
+    state.profileHash = 1469598103934665603ULL;
+    state.currentLevel.store(0);
+    Weights const weights = GetWeights(state.player.get());
+    std::ostringstream out;
+    out << "schema=1|run=" << state.runId <<
+        "|event=profile_begin|profile=" << profileIndex <<
+        "|class=" << AuditClassName(profile.classId) <<
+        "|class_id=" << uint32(profile.classId) <<
+        "|tree=" << AuditTreeName(profile.classId, profile.tree) <<
+        "|tree_id=" << uint32(profile.tree) <<
+        "|race=" << uint32(profile.raceId) <<
+        "|fallback_tree=" << AutoProgressionTalentTree(
+            state.player.get()) <<
+        "|tank=" << weights.tank << "|shield=" << weights.shield <<
+        "|dual_wield=" << weights.dualWield <<
+        "|two_hand=" << weights.twoHand;
+    WriteAuditLog(out.str());
+    return true;
+}
+
+void DestroyAuditProfile(AuditMatrixState& state)
+{
+    state.player.reset();
+    state.session.reset();
+}
+
+void FinishAuditMatrix(AuditMatrixState& state, char const* result,
+    std::string const& reason)
+{
+    bool expected = false;
+    if (!state.finishing.compare_exchange_strong(expected, true))
+        return;
+    DestroyAuditProfile(state);
+    state.result = result;
+    state.reason = reason;
+    std::ostringstream out;
+    out << "schema=1|run=" << state.runId <<
+        "|event=matrix_end|result=" << result <<
+        "|reason=" << (reason.empty() ? "none" : reason) <<
+        "|profiles=" << state.currentProfile.load() <<
+        "|levels=" << state.completedSteps.load() <<
+        "|errors=" << state.errors.load() <<
+        "|hash=" << state.aggregateHash <<
+        "|duration_ms=" <<
+            WorldTimer::getMSTimeDiffToNow(state.startedMs);
+    WriteAuditLog(out.str());
+    state.finished.store(true);
+}
+
+bool ProcessAuditLevel(AuditMatrixState& state,
+    AuditProfile const& profile, std::string& error)
+{
+    Player* player = state.player.get();
+    uint32 const previousLevel = state.currentLevel.load();
+    uint32 const level = previousLevel ? previousLevel + 1 : 1;
+    uint32 learned = 0;
+    uint32 equipped = 0;
+    uint32 enchanted = 0;
+    uint32 learnedTalentId = 0;
+    uint32 learnedTalentRank = 0;
+    uint32 const stepStarted = WorldTimer::getMSTime();
+    std::array<uint32, EQUIPMENT_SLOT_END> beforeItems = {};
+    std::array<uint32, EQUIPMENT_SLOT_END> beforeEnchants = {};
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        if (Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+        {
+            beforeItems[slot] = item->GetEntry();
+            beforeEnchants[slot] =
+                item->GetEnchantmentId(PERM_ENCHANTMENT_SLOT);
+        }
+
+    {
+        AuditExecutionGuard guard;
+        if (level > 1)
+            player->GiveLevel(level);
+        learned += PlayerAutoProgression::LearnAvailableTrainerSpells(player);
+        if (level >= 10)
+        {
+            if (player->GetFreeTalentPoints() != 1 ||
+                !LearnNextAuditTalent(player, profile.tree,
+                    learnedTalentId, learnedTalentRank))
+            {
+                std::ostringstream reason;
+                reason << "could not spend exactly one talent point at level " <<
+                    level << " (free=" << player->GetFreeTalentPoints() << ")";
+                error = reason.str();
+                return false;
+            }
+            learned +=
+                PlayerAutoProgression::LearnAvailableTrainerSpells(player);
+        }
+        equipped = PlayerAutoProgression::EquipBestItems(player);
+        enchanted = PlayerAutoProgression::EnchantBestItems(player);
+    }
+
+    std::array<uint32, 3> const points = TalentTreePoints(player);
+    uint64 levelHash = 1469598103934665603ULL;
+    MixAuditHash(levelHash, profile.classId);
+    MixAuditHash(levelHash, profile.tree);
+    MixAuditHash(levelHash, level);
+    MixAuditHash(levelHash, learnedTalentId);
+    MixAuditHash(levelHash, learnedTalentRank);
+    std::string const gear = AuditGearSnapshot(player, levelHash);
+    uint32 gearCount = 0;
+    std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> auditPlan = {};
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        if (Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+        {
+            ++gearCount;
+            auditPlan[slot] = item->GetProto();
+        }
+    Weights const auditWeights = GetWeights(player);
+    float const planScore = ScoreEquipmentPlan(auditWeights, player, auditPlan);
+    uint64 const spellsHash = AuditSpellHash(player);
+    uint64 const skillsHash = AuditSkillHash(player);
+    MixAuditHash(levelHash, profile.raceId);
+    MixAuditHash(levelHash, uint32(spellsHash));
+    MixAuditHash(levelHash, uint32(spellsHash >> 32));
+    MixAuditHash(levelHash, uint32(skillsHash));
+    MixAuditHash(levelHash, uint32(skillsHash >> 32));
+    std::ostringstream decisions;
+    decisions << std::fixed << std::setprecision(2);
+    bool hasDecision = false;
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        uint32 const itemId = item ? item->GetEntry() : 0;
+        uint32 const enchantId = item ?
+            item->GetEnchantmentId(PERM_ENCHANTMENT_SLOT) : 0;
+        if (itemId == beforeItems[slot] &&
+            enchantId == beforeEnchants[slot])
+            continue;
+        if (hasDecision)
+            decisions << ",";
+        float const itemScore = item ? ScoreItemForPlayer(auditWeights,
+            player, item->GetProto(), *state.cacheSnapshot) : 0;
+        float enchantScore = 0;
+        if (item && enchantId)
+            enchantScore = ScoreEnchantment(auditWeights, item->GetProto(),
+                sSpellItemEnchantmentStore.LookupEntry(enchantId), slot);
+        decisions << uint32(slot) << ":" << beforeItems[slot] << "@" <<
+            beforeEnchants[slot] << ">" << itemId << "@" << enchantId <<
+            ":item=" << itemScore << ":enchant=" << enchantScore;
+        hasDecision = true;
+    }
+    if (!hasDecision)
+        decisions << "none";
+    MixAuditHash(state.profileHash, uint32(levelHash));
+    MixAuditHash(state.profileHash, uint32(levelHash >> 32));
+
+    uint32 const levelErrors =
+        ValidateAuditLevel(state, profile, player, level);
+    std::ostringstream out;
+    out << "schema=1|run=" << state.runId <<
+        "|event=level|profile=" << state.currentProfile.load() <<
+        "|class=" << AuditClassName(profile.classId) <<
+        "|tree=" << AuditTreeName(profile.classId, profile.tree) <<
+        "|race=" << uint32(profile.raceId) <<
+        "|level=" << level <<
+        "|detected_tree=" << AutoProgressionTalentTree(player) <<
+        "|points=" << points[0] << "," << points[1] << "," << points[2] <<
+        "|free=" << player->GetFreeTalentPoints() <<
+        "|talent=" << learnedTalentId << ":" << learnedTalentRank <<
+        "|learned=" << learned << "|equipped=" << equipped <<
+        "|enchanted=" << enchanted << "|errors=" << levelErrors <<
+        "|gear_count=" << gearCount << "|plan_score=" << planScore <<
+        "|spells_hash=" << spellsHash << "|skills_hash=" << skillsHash <<
+        "|changes=" << decisions.str() <<
+        "|gear=" << gear << "|hash=" << levelHash <<
+        "|duration_ms=" << WorldTimer::getMSTimeDiffToNow(stepStarted);
+    WriteAuditLog(out.str());
+
+    state.currentLevel.store(level);
+    state.completedSteps.fetch_add(1);
+    if (level < 60)
+        return true;
+
+    uint32 const profileErrors =
+        state.errors.load() - state.profileErrorStart;
+    MixAuditHash(state.aggregateHash, uint32(state.profileHash));
+    MixAuditHash(state.aggregateHash, uint32(state.profileHash >> 32));
+    std::ostringstream end;
+    end << "schema=1|run=" << state.runId <<
+        "|event=profile_end|profile=" << state.currentProfile.load() <<
+        "|class=" << AuditClassName(profile.classId) <<
+        "|tree=" << AuditTreeName(profile.classId, profile.tree) <<
+        "|result=" << (profileErrors ? "failed" : "ok") <<
+        "|errors=" << profileErrors << "|hash=" << state.profileHash <<
+        "|duration_ms=" <<
+            WorldTimer::getMSTimeDiffToNow(state.profileStartedMs);
+    WriteAuditLog(end.str());
+
+    DestroyAuditProfile(state);
+    state.currentProfile.fetch_add(1);
+    state.currentLevel.store(0);
+    return true;
+}
+
 }
 
 namespace PlayerAutoProgression
@@ -3044,7 +5182,7 @@ CacheReadGuard::~CacheReadGuard()
 uint32 LearnAvailableTrainerSpells(Player* player)
 {
     CacheReadGuard cacheRead;
-    if (!player || !player->IsInWorld())
+    if (!player || (!player->IsInWorld() && !IsAuditExecution()))
         return 0;
 #ifdef MANGOS_DEBUG
     uint32 const debugStarted = WorldTimer::getMSTime();
@@ -3088,7 +5226,7 @@ uint32 LearnAvailableTrainerSpells(Player* player)
 uint32 EquipBestItems(Player* player)
 {
     CacheReadGuard cacheRead;
-    if (!player || !player->IsInWorld() ||
+    if (!player || (!player->IsInWorld() && !IsAuditExecution()) ||
         player->GetLevel() < sWorld.getConfig(CONFIG_UINT32_AUTO_EQUIP_MIN_LEVEL))
         return 0;
 
@@ -3130,6 +5268,7 @@ uint32 EquipBestItems(Player* player)
             }
     }
 
+    PreferTankArmorClassCandidates(player, weights, candidates);
     for (auto& list : candidates)
         std::sort(list.begin(), list.end(), Better);
 
@@ -3282,23 +5421,27 @@ uint32 EquipBestItems(Player* player)
                 plan[slot] = current->GetProto();
                 continue;
             }
-            if (!MeetsUpgradeThreshold(ScoreItemInstance(weights, player, current, cache),
-                ScoreItemForPlayer(weights, player, plan[slot], cache)))
+            float const currentScore = MarginalSlotPlanScore(weights, player,
+                plan, slot, current->GetProto());
+            float const candidateScore = MarginalSlotPlanScore(weights, player,
+                plan, slot, plan[slot]);
+            if (!IsTankArmorClassCorrection(player, weights, slot, current->GetProto(), plan[slot]) &&
+                !MeetsUpgradeThreshold(currentScore, candidateScore))
                 plan[slot] = current->GetProto();
         }
 
         Item* currentMain = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND);
         Item* currentOff = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
-        float currentHands = ScoreItemInstance(weights, player, currentMain, cache);
-        if (currentMain && weights.twoHand)
-            currentHands *= currentMain->GetProto()->InventoryType == INVTYPE_2HWEAPON ? 1.20f : 0.90f;
-        if (currentOff)
-            currentHands += ScoreItemInstance(weights, player, currentOff, cache) *
-                (currentOff->GetProto()->Class == ITEM_CLASS_WEAPON ? 0.70f : 1.0f);
-        if (weights.dualWield && currentOff &&
-            currentOff->GetProto()->Class == ITEM_CLASS_WEAPON)
-            currentHands += 8.0f;
-        if ((currentMain || currentOff) && !MeetsUpgradeThreshold(currentHands, best))
+        float const currentHands = MarginalHandsPlanScore(weights, player, plan,
+            currentMain ? currentMain->GetProto() : nullptr,
+            currentOff ? currentOff->GetProto() : nullptr);
+        float const plannedHands = MarginalHandsPlanScore(weights, player, plan,
+            plan[EQUIPMENT_SLOT_MAINHAND], plan[EQUIPMENT_SLOT_OFFHAND]);
+        if ((currentMain || currentOff) &&
+            Compatible(player, weights,
+                currentMain ? currentMain->GetProto() : nullptr,
+                currentOff ? currentOff->GetProto() : nullptr) &&
+            !MeetsUpgradeThreshold(currentHands, plannedHands))
         {
             plan[EQUIPMENT_SLOT_MAINHAND] = currentMain ? currentMain->GetProto() : nullptr;
             plan[EQUIPMENT_SLOT_OFFHAND] = currentOff ? currentOff->GetProto() : nullptr;
@@ -3333,7 +5476,17 @@ uint32 EquipBestItems(Player* player)
         plan);
     ApplyLimitedItemRules(player, weights, cache, questRewards, plan);
 
+    if (replace)
+    {
+        OptimizeContextualPlan(player, weights, cache, questRewards, candidates,
+            plan);
+        ApplyLimitedItemRules(player, weights, cache, questRewards, plan);
+        ProtectPlanAgainstSetBonusLoss(player, weights, plan);
+        ApplyLimitedItemRules(player, weights, cache, questRewards, plan);
+    }
     bool const deleteReplaced = sWorld.getConfig(CONFIG_BOOL_AUTO_EQUIP_DELETE_REPLACED_ITEMS);
+    BackfillEmptyPlanSlots(player, weights, cache, questRewards, candidates,
+        plan);
 #ifdef MANGOS_DEBUG
     uint32 const debugBlockedSlots =
 #endif
@@ -3477,7 +5630,7 @@ uint32 EquipBestItems(Player* player)
 uint32 EnchantBestItems(Player* player)
 {
     CacheReadGuard cacheRead;
-    if (!player || !player->IsInWorld())
+    if (!player || (!player->IsInWorld() && !IsAuditExecution()))
         return 0;
 
 #ifdef MANGOS_DEBUG
@@ -3518,7 +5671,7 @@ uint32 EnchantBestItems(Player* player)
         float currentScore = 0;
         if (currentEnchantId)
             currentScore = ScoreEnchantment(weights, item->GetProto(),
-                sSpellItemEnchantmentStore.LookupEntry(currentEnchantId));
+                sSpellItemEnchantmentStore.LookupEntry(currentEnchantId), slot);
         if (currentEnchantId && bestScore <= currentScore + 0.001f)
             continue;
 
@@ -3558,7 +5711,7 @@ void BuildStatus(Player* player, std::vector<std::string>& lines)
     std::ostringstream out;
     out << "Auto progression for " << player->GetName() << ": level " <<
         uint32(player->GetLevel()) << ", class " << uint32(player->GetClass()) <<
-        ", talent tree " << LFGMgr::GetHighestTalentTree(player) << ".";
+        ", talent tree " << AutoProgressionTalentTree(player) << ".";
     lines.push_back(out.str());
 
     out.str("");
@@ -3645,6 +5798,7 @@ void BuildPreview(Player* player, std::vector<std::string>& lines)
                 }
         }
     }
+    PreferTankArmorClassCandidates(player, weights, candidates);
     for (auto& list : candidates)
         std::sort(list.begin(), list.end(), Better);
 
@@ -3791,9 +5945,13 @@ void BuildPreview(Player* player, std::vector<std::string>& lines)
         Item* current = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
         if (!current)
             continue;
+        float const currentScore = MarginalSlotPlanScore(weights, player,
+            plan, slot, current->GetProto());
+        float const candidateScore = MarginalSlotPlanScore(weights, player,
+            plan, slot, plan[slot]);
         if (!replace || !plan[slot] ||
-            !MeetsUpgradeThreshold(ScoreItemInstance(weights, player, current, cache),
-                ScoreItemForPlayer(weights, player, plan[slot], cache)))
+            (!IsTankArmorClassCorrection(player, weights, slot, current->GetProto(), plan[slot]) &&
+             !MeetsUpgradeThreshold(currentScore, candidateScore)))
             plan[slot] = current->GetProto();
     }
 
@@ -3809,19 +5967,17 @@ void BuildPreview(Player* player, std::vector<std::string>& lines)
             plan[EQUIPMENT_SLOT_MAINHAND]->InventoryType == INVTYPE_2HWEAPON)
             plan[EQUIPMENT_SLOT_OFFHAND] = nullptr;
     }
-    else if (currentMain || currentOff)
+    else if ((currentMain || currentOff) &&
+        Compatible(player, weights,
+            currentMain ? currentMain->GetProto() : nullptr,
+            currentOff ? currentOff->GetProto() : nullptr))
     {
-        float currentHands = ScoreItemInstance(weights, player, currentMain, cache);
-        if (currentMain && weights.twoHand)
-            currentHands *= currentMain->GetProto()->InventoryType == INVTYPE_2HWEAPON ?
-                1.20f : 0.90f;
-        if (currentOff)
-            currentHands += ScoreItemInstance(weights, player, currentOff, cache) *
-                (currentOff->GetProto()->Class == ITEM_CLASS_WEAPON ? 0.70f : 1.0f);
-        if (weights.dualWield && currentOff &&
-            currentOff->GetProto()->Class == ITEM_CLASS_WEAPON)
-            currentHands += 8.0f;
-        if (!MeetsUpgradeThreshold(currentHands, bestHands))
+        float const currentHands = MarginalHandsPlanScore(weights, player, plan,
+            currentMain ? currentMain->GetProto() : nullptr,
+            currentOff ? currentOff->GetProto() : nullptr);
+        float const plannedHands = MarginalHandsPlanScore(weights, player, plan,
+            plan[EQUIPMENT_SLOT_MAINHAND], plan[EQUIPMENT_SLOT_OFFHAND]);
+        if (!MeetsUpgradeThreshold(currentHands, plannedHands))
         {
             plan[EQUIPMENT_SLOT_MAINHAND] = currentMain ? currentMain->GetProto() : nullptr;
             plan[EQUIPMENT_SLOT_OFFHAND] = currentOff ? currentOff->GetProto() : nullptr;
@@ -3846,6 +6002,16 @@ void BuildPreview(Player* player, std::vector<std::string>& lines)
     BackfillEmptyPlanSlots(player, weights, cache, questRewards, candidates,
         plan);
     ApplyLimitedItemRules(player, weights, cache, questRewards, plan);
+    if (replace)
+    {
+        OptimizeContextualPlan(player, weights, cache, questRewards, candidates,
+            plan);
+        ApplyLimitedItemRules(player, weights, cache, questRewards, plan);
+        ProtectPlanAgainstSetBonusLoss(player, weights, plan);
+        ApplyLimitedItemRules(player, weights, cache, questRewards, plan);
+    }
+    BackfillEmptyPlanSlots(player, weights, cache, questRewards, candidates,
+        plan);
 #ifdef MANGOS_DEBUG
     debugBlockedSlots =
 #endif
@@ -3874,16 +6040,33 @@ void BuildPreview(Player* player, std::vector<std::string>& lines)
         if ((!current && !candidate) ||
             (current && candidate && current->GetEntry() == candidate->ItemId))
             continue;
-        float const currentScore = ScoreItemInstance(weights, player, current, cache);
-        float const candidateScore = candidate ?
-            ScoreItemForPlayer(weights, player, candidate, cache) : 0;
+        bool const hands = slot == EQUIPMENT_SLOT_MAINHAND ||
+            slot == EQUIPMENT_SLOT_OFFHAND;
+        float currentScore = 0;
+        float candidateScore = 0;
+        if (hands)
+        {
+            currentScore = MarginalHandsPlanScore(weights, player, plan,
+                currentMain ? currentMain->GetProto() : nullptr,
+                currentOff ? currentOff->GetProto() : nullptr);
+            candidateScore = MarginalHandsPlanScore(weights, player, plan,
+                plan[EQUIPMENT_SLOT_MAINHAND], plan[EQUIPMENT_SLOT_OFFHAND]);
+        }
+        else
+        {
+            currentScore = MarginalSlotPlanScore(weights, player, plan, slot,
+                current ? current->GetProto() : nullptr);
+            candidateScore = MarginalSlotPlanScore(weights, player, plan, slot,
+                candidate);
+        }
         std::ostringstream out;
         out << EquipmentSlotName(slot) << ": " <<
             DescribeScoredItem(current ? current->GetProto() : nullptr,
                 currentScore, cache, current) <<
             " -> " << DescribeScoredItem(candidate, candidateScore, cache, nullptr);
         if (candidate)
-            out << " (" << std::showpos << std::fixed << std::setprecision(1) <<
+            out << (hands ? " (hand-pair " : " (") << std::showpos <<
+                std::fixed << std::setprecision(1) <<
                 UpgradePercent(currentScore, candidateScore) << "%)";
         else
             out << " (removed for hand compatibility)";
@@ -3908,7 +6091,7 @@ void BuildPreview(Player* player, std::vector<std::string>& lines)
         uint32 const currentId = keepsCurrent ?
             currentItem->GetEnchantmentId(PERM_ENCHANTMENT_SLOT) : 0;
         float currentScore = currentId ? ScoreEnchantment(weights, plannedItem,
-            sSpellItemEnchantmentStore.LookupEntry(currentId)) : 0;
+            sSpellItemEnchantmentStore.LookupEntry(currentId), slot) : 0;
         if (currentId == best->enchantId ||
             (currentId && !sWorld.getConfig(CONFIG_BOOL_AUTO_ENCHANT_REPLACE_EXISTING)) ||
             (currentId && bestScore <= currentScore + 0.001f))
@@ -4025,6 +6208,8 @@ bool RunOrDeferActions(Player* player, uint8 requestedActions,
 
 void OnLevelUp(Player* player)
 {
+    if (IsAuditExecution())
+        return;
     if (!player || !player->GetSession() || !player->IsInWorld())
         return;
 
@@ -4052,6 +6237,8 @@ void OnLevelUp(Player* player)
 
 void OnTalentLearned(Player* player)
 {
+    if (IsAuditExecution())
+        return;
     if (!player || !player->GetSession() || !player->IsInWorld())
         return;
 
@@ -4121,6 +6308,278 @@ void OnPlayerUpdate(Player* player, uint32 diff)
             "PlayerAutoProgression: %s completed deferred update: learned %u spells, equipped %u items and enchanted %u items.",
             player->GetName(), learned, equipped, enchanted);
 }
+bool IsAuditExecution()
+{
+    return gAuditExecutionActive;
+}
+
+uint32 GenerateAuditItemLowGuid()
+{
+    MANGOS_ASSERT(gAuditExecutionActive);
+    MANGOS_ASSERT(gNextAuditItemLowGuid < 0xFFFFFFFEu);
+    return gNextAuditItemLowGuid++;
+}
+
+bool StartAuditMatrix(char const* args, std::string& message)
+{
+    std::istringstream input(args ? args : "");
+    std::string first;
+    std::string second;
+    std::string extra;
+    input >> first;
+    first = LowerAuditToken(first);
+    if (first.empty())
+    {
+        message = "Usage: .autoprogression audit start all OR <class> <tree>.";
+        return false;
+    }
+
+    std::vector<AuditProfile> profiles;
+    if (first == "all")
+    {
+        if (input >> extra)
+        {
+            message = "The 'all' mode accepts no additional arguments.";
+            return false;
+        }
+        AddAllAuditProfiles(profiles);
+    }
+    else
+    {
+        input >> second;
+        second = LowerAuditToken(second);
+        if (second.empty() || (input >> extra))
+        {
+            message = "Usage: .autoprogression audit start <class> <tree>.";
+            return false;
+        }
+        uint8 const classId = ParseAuditClass(first);
+        uint8 tree = 0;
+        if (!classId || !ParseAuditTree(classId, second, tree))
+        {
+            message = "Unknown class/tree combination. Use English class and talent-tree names.";
+            return false;
+        }
+        profiles.push_back({ classId, DefaultAuditRace(classId), tree });
+    }
+
+    if (sWorld.getConfig(CONFIG_UINT32_MAX_PLAYER_LEVEL) != 60 ||
+        sWorld.getConfig(CONFIG_UINT32_START_PLAYER_LEVEL) != 1 ||
+        std::fabs(sWorld.getConfig(CONFIG_FLOAT_RATE_TALENT) - 1.0f) >
+            0.001f)
+    {
+        message = "Audit requires MaxPlayerLevel=60, StartPlayerLevel=1 and Rate.Talent=1.";
+        return false;
+    }
+    if (sWorld.getConfig(CONFIG_UINT32_AUTO_EQUIP_MIN_LEVEL) != 1 ||
+        !sWorld.getConfig(CONFIG_BOOL_AUTO_LEARN_CLASS_TRAINERS) ||
+        !sWorld.getConfig(CONFIG_BOOL_AUTO_LEARN_WEAPON_TRAINERS) ||
+        !sWorld.getConfig(CONFIG_BOOL_AUTO_LEARN_MAX_WEAPON_SKILLS) ||
+        !sWorld.getConfig(CONFIG_BOOL_AUTO_EQUIP_REPLACE_EXISTING) ||
+        !sWorld.getConfig(CONFIG_BOOL_AUTO_EQUIP_DELETE_REPLACED_ITEMS) ||
+        !sWorld.getConfig(CONFIG_BOOL_AUTO_ENCHANT_REPLACE_EXISTING) ||
+        sWorld.getConfig(CONFIG_BOOL_AUTO_EQUIP_REQUIRE_DISCOVERED))
+    {
+        message = "Audit requires trainer/weapon learning, MaxWeaponSkills, AutoEquip.MinLevel=1, ReplaceExisting, DeleteReplacedItems, AutoEnchant.ReplaceExisting and RequireDiscovered=0.";
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(gAuditMatrixMutex);
+    if (gAuditMatrix && !gAuditMatrix->finished.load())
+    {
+        message = "An auto-progression audit is already running.";
+        return false;
+    }
+
+    std::shared_ptr<AuditMatrixState> state =
+        std::make_shared<AuditMatrixState>();
+    state->runId = uint64(std::time(nullptr)) * 1000ULL +
+        uint64(gAuditRunSequence.fetch_add(1) % 1000);
+    state->profiles = std::move(profiles);
+    state->configHash = AuditConfigurationHash();
+    state->cacheSnapshot = EnsureAutoProgressionCache();
+    state->catalogHash = AuditCatalogHash(*state->cacheSnapshot);
+    state->startedMs = WorldTimer::getMSTime();
+    gAuditMatrix = state;
+
+    std::ostringstream out;
+    out << "Started auto-progression audit " << state->runId << " with " <<
+        state->profiles.size() << " profile(s) and " <<
+        state->profiles.size() * 60 << " level steps. Results use AP_AUDIT in Server.log.";
+    message = out.str();
+    return true;
+}
+
+void BuildAuditMatrixStatus(std::vector<std::string>& lines)
+{
+    lines.clear();
+    std::shared_ptr<AuditMatrixState> state;
+    {
+        std::lock_guard<std::mutex> lock(gAuditMatrixMutex);
+        state = gAuditMatrix;
+    }
+    if (!state)
+    {
+        lines.push_back("No auto-progression audit has been started.");
+        return;
+    }
+
+    std::ostringstream out;
+    if (state->finished.load())
+    {
+        out << "Audit " << state->runId << " finished: result=" <<
+            state->result << ", reason=" <<
+            (state->reason.empty() ? "none" : state->reason) <<
+            ", levels=" << state->completedSteps.load() << ", errors=" <<
+            state->errors.load() << ", hash=" << state->aggregateHash << ".";
+        lines.push_back(out.str());
+        return;
+    }
+
+    uint32 const profileIndex = state->currentProfile.load();
+    out << "Audit " << state->runId << " running: profile " <<
+        (profileIndex + 1) << "/" << state->profiles.size() << ", level " <<
+        state->currentLevel.load() << "/60, completed " <<
+        state->completedSteps.load() << "/" << state->profiles.size() * 60 <<
+        ", errors=" << state->errors.load() << ".";
+    lines.push_back(out.str());
+    if (profileIndex < state->profiles.size())
+    {
+        AuditProfile const& profile = state->profiles[profileIndex];
+        out.str("");
+        out.clear();
+        out << "Current profile: " << AuditClassName(profile.classId) << "/" <<
+            AuditTreeName(profile.classId, profile.tree) << ", race " <<
+            uint32(profile.raceId) << ".";
+        lines.push_back(out.str());
+    }
+}
+
+bool CancelAuditMatrix(std::string& message)
+{
+    std::shared_ptr<AuditMatrixState> state;
+    {
+        std::lock_guard<std::mutex> lock(gAuditMatrixMutex);
+        state = gAuditMatrix;
+    }
+    if (!state || state->finished.load())
+    {
+        message = "No auto-progression audit is currently running.";
+        return false;
+    }
+    state->cancelRequested.store(true);
+    std::ostringstream out;
+    out << "Cancellation requested for audit " << state->runId << ".";
+    message = out.str();
+    return true;
+}
+
+void UpdateAuditMatrix(uint32 diff)
+{
+    std::shared_ptr<AuditMatrixState> state;
+    {
+        std::lock_guard<std::mutex> lock(gAuditMatrixMutex);
+        state = gAuditMatrix;
+    }
+    if (!state || state->finished.load())
+        return;
+    if (state->cancelRequested.load())
+    {
+        FinishAuditMatrix(*state, "cancelled", "operator_request");
+        return;
+    }
+
+    state->delayMs += diff;
+    if (state->delayMs < 50)
+        return;
+    state->delayMs = 0;
+
+    if (!state->beginLogged)
+    {
+        state->beginLogged = true;
+        std::ostringstream begin;
+        begin << "schema=1|run=" << state->runId <<
+            "|event=matrix_begin|revision=" << REVISION_HASH <<
+            "|patch=" << uint32(sWorld.GetWowPatch()) <<
+            "|profiles=" << state->profiles.size() <<
+            "|levels=" << state->profiles.size() * 60 <<
+            "|mode=forced_core" <<
+            "|config_hash=" << state->configHash <<
+            "|cache_index_hash=" << state->catalogHash <<
+            "|talent_policy=deepest_legal_target_then_next_tree_v1" <<
+            "|quest_rewards=" <<
+                sWorld.getConfig(
+                    CONFIG_BOOL_AUTO_EQUIP_INCLUDE_QUEST_REWARDS) <<
+            "|min_upgrade=" <<
+                sWorld.getConfig(
+                    CONFIG_FLOAT_AUTO_EQUIP_MIN_UPGRADE_PERCENT);
+        WriteAuditLog(begin.str());
+    }
+    std::shared_ptr<AutoProgressionCache const> const currentCache =
+        EnsureAutoProgressionCache();
+    if (currentCache.get() != state->cacheSnapshot.get() ||
+        AuditConfigurationHash() != state->configHash)
+    {
+        FinishAuditMatrix(*state, "failed", "environment_changed");
+        return;
+    }
+
+    uint32 const profileIndex = state->currentProfile.load();
+    if (profileIndex >= state->profiles.size())
+    {
+        FinishAuditMatrix(*state,
+            state->errors.load() ? "completed_with_errors" : "success", "");
+        return;
+    }
+
+    AuditProfile const& profile = state->profiles[profileIndex];
+    std::string error;
+    if (!state->player && !CreateAuditProfile(*state, profile, error))
+    {
+        FinishAuditMatrix(*state, "failed", error);
+        return;
+    }
+    if (!ProcessAuditLevel(*state, profile, error))
+    {
+        uint32 const failedLevel = state->currentLevel.load() ?
+            state->currentLevel.load() + 1 : 1;
+        AuditViolation(*state, profile, failedLevel, "profile_aborted", error);
+        MixAuditHash(state->profileHash, 0xFFFFFFFFu);
+        MixAuditHash(state->profileHash, failedLevel);
+        MixAuditHash(state->aggregateHash, uint32(state->profileHash));
+        MixAuditHash(state->aggregateHash,
+            uint32(state->profileHash >> 32));
+        std::ostringstream end;
+        end << "schema=1|run=" << state->runId <<
+            "|event=profile_end|profile=" << profileIndex <<
+            "|class=" << AuditClassName(profile.classId) <<
+            "|tree=" << AuditTreeName(profile.classId, profile.tree) <<
+            "|result=aborted|level=" << failedLevel <<
+            "|errors=" << (state->errors.load() -
+                state->profileErrorStart) <<
+            "|reason=" << error << "|hash=" << state->profileHash;
+        WriteAuditLog(end.str());
+        DestroyAuditProfile(*state);
+        state->currentProfile.fetch_add(1);
+        state->currentLevel.store(0);
+        return;
+    }
+    if (state->currentProfile.load() >= state->profiles.size())
+        FinishAuditMatrix(*state,
+            state->errors.load() ? "completed_with_errors" : "success", "");
+}
+
+void ShutdownAuditMatrix()
+{
+    std::shared_ptr<AuditMatrixState> state;
+    {
+        std::lock_guard<std::mutex> lock(gAuditMatrixMutex);
+        state = gAuditMatrix;
+    }
+    if (state && !state->finished.load())
+        FinishAuditMatrix(*state, "cancelled", "server_shutdown");
+}
+
 
 void InvalidateCaches()
 {

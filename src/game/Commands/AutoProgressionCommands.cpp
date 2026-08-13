@@ -66,3 +66,32 @@ bool ChatHandler::HandleAutoProgressionApplyCommand(char* args)
         GetNameLink(target).c_str(), learned, equipped, enchanted);
     return true;
 }
+
+bool ChatHandler::HandleAutoProgressionAuditStartCommand(char* args)
+{
+    std::string message;
+    bool const started = PlayerAutoProgression::StartAuditMatrix(args, message);
+    SendSysMessage(message.c_str());
+    if (!started)
+        SetSentErrorMessage(true);
+    return started;
+}
+
+bool ChatHandler::HandleAutoProgressionAuditStatusCommand(char* /*args*/)
+{
+    std::vector<std::string> lines;
+    PlayerAutoProgression::BuildAuditMatrixStatus(lines);
+    for (std::string const& line : lines)
+        SendSysMessage(line.c_str());
+    return true;
+}
+
+bool ChatHandler::HandleAutoProgressionAuditCancelCommand(char* /*args*/)
+{
+    std::string message;
+    bool const cancelled = PlayerAutoProgression::CancelAuditMatrix(message);
+    SendSysMessage(message.c_str());
+    if (!cancelled)
+        SetSentErrorMessage(true);
+    return cancelled;
+}

@@ -205,6 +205,9 @@ class ChatHandler
         bool HandleAutoProgressionStatusCommand(char* args);
         bool HandleAutoProgressionPreviewCommand(char* args);
         bool HandleAutoProgressionApplyCommand(char* args);
+        bool HandleAutoProgressionAuditStartCommand(char* args);
+        bool HandleAutoProgressionAuditStatusCommand(char* args);
+        bool HandleAutoProgressionAuditCancelCommand(char* args);
 
         //Cheats
         bool HandleCheatStatusCommand(char *);
