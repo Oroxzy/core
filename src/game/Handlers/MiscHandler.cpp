@@ -592,8 +592,9 @@ void WorldSession::HandleReclaimCorpseOpcode(WorldPackets::Misc::ReclaimCorpse c
         return;
 
     // Prevent exploit: die with hellfire during battleground preparation, and resurrect after the door.
+    // No corpse reclaiming in arenas at all (dead players are out until the match ends).
     if (BattleGround const* bg = GetPlayer()->GetBattleGround())
-        if (bg->GetStatus() != STATUS_IN_PROGRESS)
+        if (bg->GetStatus() != STATUS_IN_PROGRESS || bg->IsArena())
             return;
     // resurrect
     GetPlayer()->ResurrectPlayer(GetPlayer()->InBattleGround() ? 1.0f : 0.5f);
@@ -615,6 +616,16 @@ void WorldSession::HandleResurrectResponseOpcode(WorldPackets::Misc::ResurrectRe
 
     if (!GetPlayer()->IsRessurectRequestedBy(packet.resurrectorGuid))
         return;
+
+    // no resurrections during a running arena match (dead players are out)
+    if (BattleGround const* bg = GetPlayer()->GetBattleGround())
+    {
+        if (bg->IsArena() && bg->GetStatus() == STATUS_IN_PROGRESS)
+        {
+            GetPlayer()->ClearResurrectRequestData();
+            return;
+        }
+    }
 
     GetPlayer()->ResurrectUsingRequestData();     // will call SpawnCorpseBones
 }

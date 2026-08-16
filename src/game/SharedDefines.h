@@ -1644,7 +1644,26 @@ enum Maps
     MAP_AHN_QIRAJ_RUINS     = 509,
     MAP_ARATHI_BASIN        = 529,
     MAP_AHN_QIRAJ_TEMPLE    = 531,
-    MAP_NAXXRAMAS           = 533
+    MAP_NAXXRAMAS           = 533,
+
+    // Custom arena maps (TBC / WotLK arenas backported to the 1.12 client, requires client patch).
+    // One map copy per team size so that each size gets its own battleground type / queue.
+    MAP_ARENA_NAGRAND_1V1       = 556,
+    MAP_ARENA_NAGRAND_2V2       = 557,
+    MAP_ARENA_NAGRAND_3V3       = 558,
+    MAP_ARENA_NAGRAND_5V5       = 559,
+    MAP_ARENA_BLADES_EDGE_1V1   = 560,
+    MAP_ARENA_BLADES_EDGE_2V2   = 561,
+    MAP_ARENA_BLADES_EDGE_3V3   = 562,
+    MAP_ARENA_BLADES_EDGE_5V5   = 563,
+    MAP_ARENA_LORDAERON_1V1     = 570,
+    MAP_ARENA_LORDAERON_2V2     = 571,
+    MAP_ARENA_LORDAERON_3V3     = 572,
+    MAP_ARENA_LORDAERON_5V5     = 573,
+    MAP_ARENA_DALARAN_1V1       = 617,
+    MAP_ARENA_DALARAN_2V2       = 618,
+    MAP_ARENA_DALARAN_3V3       = 619,
+    MAP_ARENA_DALARAN_5V5       = 620,
 };
 
 // Indexes of BattlemasterList.dbc
@@ -1654,17 +1673,129 @@ enum BattleGroundTypeId
     BATTLEGROUND_AV            = 1,
     BATTLEGROUND_WS            = 2,
     BATTLEGROUND_AB            = 3,
+
+    // Custom arenas. Ordering matters: 4 consecutive ids (1v1, 2v2, 3v3, 5v5) per arena map,
+    // see GetArenaTypeForBattleGroundTypeId / GetArenaBattleGroundTypeId.
+    BATTLEGROUND_NA_1V1        = 4,                         // Nagrand Arena
+    BATTLEGROUND_NA_2V2        = 5,
+    BATTLEGROUND_NA_3V3        = 6,
+    BATTLEGROUND_NA_5V5        = 7,
+    BATTLEGROUND_BE_1V1        = 8,                         // Blade's Edge Arena
+    BATTLEGROUND_BE_2V2        = 9,
+    BATTLEGROUND_BE_3V3        = 10,
+    BATTLEGROUND_BE_5V5        = 11,
+    BATTLEGROUND_RL_1V1        = 12,                        // Ruins of Lordaeron
+    BATTLEGROUND_RL_2V2        = 13,
+    BATTLEGROUND_RL_3V3        = 14,
+    BATTLEGROUND_RL_5V5        = 15,
+    BATTLEGROUND_DS_1V1        = 16,                        // Dalaran Sewers
+    BATTLEGROUND_DS_2V2        = 17,
+    BATTLEGROUND_DS_3V3        = 18,
+    BATTLEGROUND_DS_5V5        = 19,
 };
-#define MAX_BATTLEGROUND_TYPE_ID 4
+#define MAX_BATTLEGROUND_TYPE_ID 20
+
+#define BATTLEGROUND_ARENA_FIRST BATTLEGROUND_NA_1V1
+#define BATTLEGROUND_ARENA_LAST  BATTLEGROUND_DS_5V5
+
+// Team size of an arena match.
+enum ArenaType : uint8
+{
+    ARENA_TYPE_NONE = 0,
+    ARENA_TYPE_1V1  = 1,
+    ARENA_TYPE_2V2  = 2,
+    ARENA_TYPE_3V3  = 3,
+    ARENA_TYPE_5V5  = 5,
+};
+#define ARENA_TYPES_COUNT 4                                 // 1v1, 2v2, 3v3, 5v5
+
+// The arena "family" (which map is played), independent of the team size.
+enum ArenaMapType : uint8
+{
+    ARENA_MAP_NAGRAND       = 0,
+    ARENA_MAP_BLADES_EDGE   = 1,
+    ARENA_MAP_LORDAERON     = 2,
+    ARENA_MAP_DALARAN       = 3,
+};
+#define ARENA_MAPS_COUNT 4
+
+inline bool IsArenaBattleGroundTypeId(BattleGroundTypeId bgTypeId)
+{
+    return bgTypeId >= BATTLEGROUND_ARENA_FIRST && bgTypeId <= BATTLEGROUND_ARENA_LAST;
+}
+
+// Index 0..3 of the arena team size (1v1 = 0, 2v2 = 1, 3v3 = 2, 5v5 = 3).
+inline uint8 GetArenaTypeIndex(ArenaType type)
+{
+    switch (type)
+    {
+        case ARENA_TYPE_1V1: return 0;
+        case ARENA_TYPE_2V2: return 1;
+        case ARENA_TYPE_3V3: return 2;
+        case ARENA_TYPE_5V5: return 3;
+        default:             return 0;
+    }
+}
+
+inline ArenaType GetArenaTypeByIndex(uint8 index)
+{
+    static ArenaType const types[ARENA_TYPES_COUNT] = { ARENA_TYPE_1V1, ARENA_TYPE_2V2, ARENA_TYPE_3V3, ARENA_TYPE_5V5 };
+    return index < ARENA_TYPES_COUNT ? types[index] : ARENA_TYPE_NONE;
+}
+
+inline ArenaType GetArenaTypeForBattleGroundTypeId(BattleGroundTypeId bgTypeId)
+{
+    if (!IsArenaBattleGroundTypeId(bgTypeId))
+        return ARENA_TYPE_NONE;
+    return GetArenaTypeByIndex((bgTypeId - BATTLEGROUND_ARENA_FIRST) % ARENA_TYPES_COUNT);
+}
+
+inline ArenaMapType GetArenaMapTypeForBattleGroundTypeId(BattleGroundTypeId bgTypeId)
+{
+    return ArenaMapType((bgTypeId - BATTLEGROUND_ARENA_FIRST) / ARENA_TYPES_COUNT);
+}
+
+inline BattleGroundTypeId GetArenaBattleGroundTypeId(ArenaMapType map, ArenaType type)
+{
+    return BattleGroundTypeId(BATTLEGROUND_ARENA_FIRST + uint32(map) * ARENA_TYPES_COUNT + GetArenaTypeIndex(type));
+}
+
+inline char const* GetArenaTypeName(ArenaType type)
+{
+    switch (type)
+    {
+        case ARENA_TYPE_1V1: return "1v1";
+        case ARENA_TYPE_2V2: return "2v2";
+        case ARENA_TYPE_3V3: return "3v3";
+        case ARENA_TYPE_5V5: return "5v5";
+        default:             return "unknown";
+    }
+}
 
 inline BattleGroundTypeId GetBattleGroundTypeIdByMapId(uint32 mapId)
 {
     switch(mapId)
     {
-        case MAP_ALTERAC_VALLEY: return BATTLEGROUND_AV;
-        case MAP_WARSONG_GULCH:  return BATTLEGROUND_WS;
-        case MAP_ARATHI_BASIN:   return BATTLEGROUND_AB;
-        default:                 return BATTLEGROUND_TYPE_NONE;
+        case MAP_ALTERAC_VALLEY:            return BATTLEGROUND_AV;
+        case MAP_WARSONG_GULCH:             return BATTLEGROUND_WS;
+        case MAP_ARATHI_BASIN:              return BATTLEGROUND_AB;
+        case MAP_ARENA_NAGRAND_1V1:         return BATTLEGROUND_NA_1V1;
+        case MAP_ARENA_NAGRAND_2V2:         return BATTLEGROUND_NA_2V2;
+        case MAP_ARENA_NAGRAND_3V3:         return BATTLEGROUND_NA_3V3;
+        case MAP_ARENA_NAGRAND_5V5:         return BATTLEGROUND_NA_5V5;
+        case MAP_ARENA_BLADES_EDGE_1V1:     return BATTLEGROUND_BE_1V1;
+        case MAP_ARENA_BLADES_EDGE_2V2:     return BATTLEGROUND_BE_2V2;
+        case MAP_ARENA_BLADES_EDGE_3V3:     return BATTLEGROUND_BE_3V3;
+        case MAP_ARENA_BLADES_EDGE_5V5:     return BATTLEGROUND_BE_5V5;
+        case MAP_ARENA_LORDAERON_1V1:       return BATTLEGROUND_RL_1V1;
+        case MAP_ARENA_LORDAERON_2V2:       return BATTLEGROUND_RL_2V2;
+        case MAP_ARENA_LORDAERON_3V3:       return BATTLEGROUND_RL_3V3;
+        case MAP_ARENA_LORDAERON_5V5:       return BATTLEGROUND_RL_5V5;
+        case MAP_ARENA_DALARAN_1V1:         return BATTLEGROUND_DS_1V1;
+        case MAP_ARENA_DALARAN_2V2:         return BATTLEGROUND_DS_2V2;
+        case MAP_ARENA_DALARAN_3V3:         return BATTLEGROUND_DS_3V3;
+        case MAP_ARENA_DALARAN_5V5:         return BATTLEGROUND_DS_5V5;
+        default:                            return BATTLEGROUND_TYPE_NONE;
     }
 }
 
@@ -1672,11 +1803,32 @@ inline uint32 GetBattleGrounMapIdByTypeId(BattleGroundTypeId bgTypeId)
 {
     switch(bgTypeId)
     {
-        case BATTLEGROUND_AV:   return MAP_ALTERAC_VALLEY;
-        case BATTLEGROUND_WS:   return MAP_WARSONG_GULCH;
-        case BATTLEGROUND_AB:   return MAP_ARATHI_BASIN;
-        default:                return 0;   //none
+        case BATTLEGROUND_AV:       return MAP_ALTERAC_VALLEY;
+        case BATTLEGROUND_WS:       return MAP_WARSONG_GULCH;
+        case BATTLEGROUND_AB:       return MAP_ARATHI_BASIN;
+        case BATTLEGROUND_NA_1V1:   return MAP_ARENA_NAGRAND_1V1;
+        case BATTLEGROUND_NA_2V2:   return MAP_ARENA_NAGRAND_2V2;
+        case BATTLEGROUND_NA_3V3:   return MAP_ARENA_NAGRAND_3V3;
+        case BATTLEGROUND_NA_5V5:   return MAP_ARENA_NAGRAND_5V5;
+        case BATTLEGROUND_BE_1V1:   return MAP_ARENA_BLADES_EDGE_1V1;
+        case BATTLEGROUND_BE_2V2:   return MAP_ARENA_BLADES_EDGE_2V2;
+        case BATTLEGROUND_BE_3V3:   return MAP_ARENA_BLADES_EDGE_3V3;
+        case BATTLEGROUND_BE_5V5:   return MAP_ARENA_BLADES_EDGE_5V5;
+        case BATTLEGROUND_RL_1V1:   return MAP_ARENA_LORDAERON_1V1;
+        case BATTLEGROUND_RL_2V2:   return MAP_ARENA_LORDAERON_2V2;
+        case BATTLEGROUND_RL_3V3:   return MAP_ARENA_LORDAERON_3V3;
+        case BATTLEGROUND_RL_5V5:   return MAP_ARENA_LORDAERON_5V5;
+        case BATTLEGROUND_DS_1V1:   return MAP_ARENA_DALARAN_1V1;
+        case BATTLEGROUND_DS_2V2:   return MAP_ARENA_DALARAN_2V2;
+        case BATTLEGROUND_DS_3V3:   return MAP_ARENA_DALARAN_3V3;
+        case BATTLEGROUND_DS_5V5:   return MAP_ARENA_DALARAN_5V5;
+        default:                    return 0;   //none
     }
+}
+
+inline bool IsArenaMapId(uint32 mapId)
+{
+    return IsArenaBattleGroundTypeId(GetBattleGroundTypeIdByMapId(mapId));
 }
 
 enum MailResponseType

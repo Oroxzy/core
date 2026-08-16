@@ -21,6 +21,8 @@
 #include "Totem.h"
 #include "CreatureAI.h"
 #include "Chat.h"
+#include "Player.h"
+#include "BattleGround.h"
 #include "Spell.h"
 #include "SpellAuras.h"
 #include "World.h"
@@ -773,6 +775,17 @@ int32 SpellCaster::DealHeal(Unit* pVictim, uint32 addhealth, SpellEntry const* s
 
     if (IsCreature() && ((Creature*)this)->IsTotem())
         pHealer = pUnit->GetOwner();
+
+    // Arena scoreboard: effective healing done by players (and their pets/totems). Overheal is not counted.
+    if (gain > 0 && pHealer && pUnit && IsArenaMapId(GetMapId()))
+    {
+        if (Player* pHealerPlayer = pUnit->GetCharmerOrOwnerPlayerOrPlayerItself())
+        {
+            if (BattleGround* bg = pHealerPlayer->GetBattleGround())
+                if (bg->IsArena() && bg->GetStatus() == STATUS_IN_PROGRESS)
+                    bg->UpdatePlayerScore(pHealerPlayer, SCORE_HEALING_DONE, uint32(gain));
+        }
+    }
 
     if (IsPlayer() || pVictim->IsPlayer())
         pHealer->SendHealSpellLog(pVictim, spellProto->Id, addhealth, critical);

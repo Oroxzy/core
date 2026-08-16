@@ -67,7 +67,9 @@ public:
     void Verify(LootStore const& lootstore, uint32 id, uint32 group_id) const;
     void CheckLootRefs(LootIdSet* ref_set) const;
     void CollectItemIds(std::set<uint32>& itemIds,
-        bool includeRestricted) const;
+        bool includeRestricted,
+        LootConditionedItemMap* conditioned = nullptr,
+        std::vector<uint32> const& inheritedConditions = std::vector<uint32>()) const;
 private:
     LootStoreItemList ExplicitlyChanced;                // Entries with chances defined in DB
     LootStoreItemList EqualChanced;                     // Zero chances - every entry takes the same chance
@@ -222,7 +224,7 @@ LootTemplate const* LootStore::GetLootFor(uint32 loot_id) const
 }
 
 void LootStore::CollectItemIds(uint32 lootId, std::set<uint32>& itemIds,
-    bool includeRestricted) const
+    bool includeRestricted, LootConditionedItemMap* conditioned) const
 {
     LootTemplate const* lootTemplate = GetLootFor(lootId);
     if (!lootTemplate)
@@ -232,11 +234,12 @@ void LootStore::CollectItemIds(uint32 lootId, std::set<uint32>& itemIds,
     if (this == &LootTemplates_Reference)
         referencePath.insert(uint64(lootId) << 8);
 
-    lootTemplate->CollectItemIds(itemIds, referencePath, 0, includeRestricted);
+    lootTemplate->CollectItemIds(itemIds, referencePath, 0, includeRestricted,
+        conditioned);
 }
 
 void LootStore::CollectAllItemIds(std::set<uint32>& itemIds,
-    bool includeRestricted) const
+    bool includeRestricted, LootConditionedItemMap* conditioned) const
 {
     for (const auto& itr : m_LootTemplates)
     {
@@ -244,7 +247,8 @@ void LootStore::CollectAllItemIds(std::set<uint32>& itemIds,
         if (this == &LootTemplates_Reference)
             referencePath.insert(uint64(itr.first) << 8);
 
-        itr.second->CollectItemIds(itemIds, referencePath, 0, includeRestricted);
+        itr.second->CollectItemIds(itemIds, referencePath, 0, includeRestricted,
+            conditioned);
     }
 }
 
@@ -1118,18 +1122,47 @@ void LootTemplate::LootGroup::AddEntry(LootStoreItem& item)
     }
 }
 
+namespace
+{
+// Shared classification for a plain loot entry (see LootStore::CollectItemIds).
+void CollectLootEntryItem(LootStoreItem const& item, std::set<uint32>& itemIds,
+    bool includeRestricted, LootConditionedItemMap* conditioned,
+    std::vector<uint32> const& inheritedConditions)
+{
+    if (item.mincountOrRef <= 0 || !item.itemid)
+        return;
+    if (includeRestricted)
+    {
+        itemIds.insert(item.itemid);
+        return;
+    }
+    if (item.needs_quest)
+        return;
+    if (!item.conditionId && inheritedConditions.empty())
+    {
+        itemIds.insert(item.itemid);
+        return;
+    }
+    if (!conditioned)
+        return;
+    std::vector<uint32> chain = inheritedConditions;
+    if (item.conditionId)
+        chain.push_back(item.conditionId);
+    (*conditioned)[item.itemid].push_back(std::move(chain));
+}
+}
+
 void LootTemplate::LootGroup::CollectItemIds(std::set<uint32>& itemIds,
-    bool includeRestricted) const
+    bool includeRestricted, LootConditionedItemMap* conditioned,
+    std::vector<uint32> const& inheritedConditions) const
 {
     for (const auto& item : ExplicitlyChanced)
-        if (item.mincountOrRef > 0 && item.itemid &&
-            (includeRestricted || (!item.needs_quest && !item.conditionId)))
-            itemIds.insert(item.itemid);
+        CollectLootEntryItem(item, itemIds, includeRestricted, conditioned,
+            inheritedConditions);
 
     for (const auto& item : EqualChanced)
-        if (item.mincountOrRef > 0 && item.itemid &&
-            (includeRestricted || (!item.needs_quest && !item.conditionId)))
-            itemIds.insert(item.itemid);
+        CollectLootEntryItem(item, itemIds, includeRestricted, conditioned,
+            inheritedConditions);
 }
 
 // Rolls an item from the group, returns nullptr if all miss their chances
@@ -1284,12 +1317,14 @@ void LootTemplate::AddEntry(LootStoreItem& item)
 
 void LootTemplate::CollectItemIds(std::set<uint32>& itemIds,
     std::set<uint64>& referencePath, uint8 groupId,
-    bool includeRestricted) const
+    bool includeRestricted, LootConditionedItemMap* conditioned,
+    std::vector<uint32> const& inheritedConditions) const
 {
     if (groupId)
     {
         if (groupId <= Groups.size())
-            Groups[groupId - 1].CollectItemIds(itemIds, includeRestricted);
+            Groups[groupId - 1].CollectItemIds(itemIds, includeRestricted,
+                conditioned, inheritedConditions);
         return;
     }
 
@@ -1297,10 +1332,8 @@ void LootTemplate::CollectItemIds(std::set<uint32>& itemIds,
     {
         if (item.mincountOrRef > 0)
         {
-            if (!includeRestricted && (item.needs_quest || item.conditionId))
-                continue;
-            if (item.itemid)
-                itemIds.insert(item.itemid);
+            CollectLootEntryItem(item, itemIds, includeRestricted, conditioned,
+                inheritedConditions);
             continue;
         }
 
@@ -1308,9 +1341,15 @@ void LootTemplate::CollectItemIds(std::set<uint32>& itemIds,
             continue;
 
         // A negative ChanceOrQuestChance is valid for references at runtime and
-        // does not turn the referenced contents into quest-only loot.
-        if (!includeRestricted && item.conditionId)
-            continue;
+        // does not turn the referenced contents into quest-only loot. A
+        // condition on the reference applies to everything it contains.
+        std::vector<uint32> chain = inheritedConditions;
+        if (item.conditionId && !includeRestricted)
+        {
+            if (!conditioned)
+                continue;
+            chain.push_back(item.conditionId);
+        }
 
         uint32 const referenceId = uint32(-int64(item.mincountOrRef));
         uint64 const referenceKey = (uint64(referenceId) << 8) | uint64(item.group);
@@ -1319,13 +1358,14 @@ void LootTemplate::CollectItemIds(std::set<uint32>& itemIds,
 
         if (LootTemplate const* referenced = LootTemplates_Reference.GetLootFor(referenceId))
             referenced->CollectItemIds(itemIds, referencePath, item.group,
-                includeRestricted);
+                includeRestricted, conditioned, chain);
 
         referencePath.erase(referenceKey);
     }
 
     for (const auto& group : Groups)
-        group.CollectItemIds(itemIds, includeRestricted);
+        group.CollectItemIds(itemIds, includeRestricted, conditioned,
+            inheritedConditions);
 }
 
 // Rolls for every item in the template and adds the rolled items the the loot

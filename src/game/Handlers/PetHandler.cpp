@@ -30,6 +30,7 @@
 #include "CreatureAI.h"
 #include "Pet.h"
 #include "Group.h"
+#include "BattleGround.h"
 #include "Utilities/Random.h"
 
 void WorldSession::HandlePetAction(WorldPackets::Pet::PetAction const& packet)
@@ -75,6 +76,11 @@ void WorldSession::HandlePetAction(WorldPackets::Pet::PetAction const& packet)
         sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "WorldSession::HandlePetAction: object (GUID: %u TypeId: %u) is considered pet-like but doesn't have a charminfo!", pCharmedUnit->GetGUIDLow(), pCharmedUnit->GetTypeId());
         return;
     }
+
+    // arena: pets are only commanded while the match is running
+    if (BattleGround const* bg = _player->GetBattleGround())
+        if (bg->IsArena() && bg->GetStatus() != STATUS_IN_PROGRESS)
+            return;
 
     switch (flag)
     {

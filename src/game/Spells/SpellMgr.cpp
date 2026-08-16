@@ -29,6 +29,9 @@
 #include "ScriptMgr.h"
 #include "Unit.h"
 #include "BattleGround.h"
+#include "Arena.h"
+#include "Player.h"
+#include "Chat.h"
 
 using namespace Spells;
 
@@ -2656,6 +2659,14 @@ SpellCastResult SpellMgr::GetSpellAllowedInLocationError(SpellEntry const* spell
 #endif
 
     uint32 mapId = caster ? caster->GetMapId() : (player ? player->GetMapId() : 0);
+
+    // Arena: spells disabled by `disabled_arena_spells` for this arena size
+    if (player && player->InArena() && sArenaMgr.IsSpellDisabled(spellInfo->Id, player->GetArenaType()))
+    {
+        if (player->GetSession())
+            ChatHandler(player->GetSession()).PSendSysMessage("|cffffffff|Hspell:%u|h[%s]|h|r is not allowed in %s arenas.", spellInfo->Id, spellInfo->SpellName[0].c_str(), GetArenaTypeName(player->GetArenaType()));
+        return SPELL_FAILED_NOT_HERE;
+    }
 
     switch (spellInfo->Id)
     {

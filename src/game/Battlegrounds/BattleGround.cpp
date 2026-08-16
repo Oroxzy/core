@@ -38,6 +38,7 @@
 #include "Chat.h"
 #include "Utilities/Random.h"
 #include "ScriptMgr.h"
+#include "Arena.h"
 
 namespace MaNGOS
 {
@@ -315,7 +316,8 @@ void BattleGround::Update(uint32 diff)
     /*********************************************************/
 
     // if less then minimum players are in on one side, then start premature finish timer
-    if (GetTypeID() != BATTLEGROUND_AV && GetStatus() == STATUS_IN_PROGRESS && sBattleGroundMgr.GetPrematureFinishTime() && (GetPlayersCountByTeam(ALLIANCE) < GetMinPlayersPerTeam() || GetPlayersCountByTeam(HORDE) < GetMinPlayersPerTeam()))
+    // (arenas end immediately when a team has no alive players left, see Arena::CheckWinConditions)
+    if (GetTypeID() != BATTLEGROUND_AV && !IsArena() && GetStatus() == STATUS_IN_PROGRESS && sBattleGroundMgr.GetPrematureFinishTime() && (GetPlayersCountByTeam(ALLIANCE) < GetMinPlayersPerTeam() || GetPlayersCountByTeam(HORDE) < GetMinPlayersPerTeam()))
     {
         if (!m_prematureCountDown)
         {
@@ -422,7 +424,7 @@ void BattleGround::Update(uint32 diff)
             SetStatus(STATUS_IN_PROGRESS);
             SetStartDelayTime(m_startDelayTimes[BG_STARTING_EVENT_FOURTH]);
 
-            PlaySoundToAll(SOUND_BG_START);
+            PlaySoundToAll(IsArena() ? uint32(SOUND_ARENA_MATCH_START) : uint32(SOUND_BG_START));
 
             //Announce BG starting
             if (sWorld.getConfig(CONFIG_BOOL_BATTLEGROUND_QUEUE_ANNOUNCER_START))
@@ -632,6 +634,10 @@ int32 BattleGround::GetWinnerText(Team winner) const
             return (winner == HORDE ? BCT_BG_WS_H_WINS : BCT_BG_WS_A_WINS);
         case BATTLEGROUND_AB:
             return (winner == HORDE ? BCT_BG_AB_H_WINS : BCT_BG_AB_A_WINS);
+        default:
+            if (IsArena())
+                return winner == HORDE ? BCT_ARENA_RED_TEAM_WINS : (winner == ALLIANCE ? BCT_ARENA_BLUE_TEAM_WINS : 0);
+            break;
     }
     return 0;
 }
@@ -654,16 +660,20 @@ void BattleGround::EndBattleGround(Team winner)
 
     if (winner == ALLIANCE)
     {
-        PlaySoundToAll(SOUND_ALLIANCE_WINS);                // alliance wins sound
+        PlaySoundToAll(IsArena() ? uint32(SOUND_ARENA_MATCH_END) : uint32(SOUND_ALLIANCE_WINS));  // alliance wins sound
         SetWinner(WINNER_ALLIANCE);
     }
     else if (winner == HORDE)
     {
-        PlaySoundToAll(SOUND_HORDE_WINS);                   // horde wins sound
+        PlaySoundToAll(IsArena() ? uint32(SOUND_ARENA_MATCH_END) : uint32(SOUND_HORDE_WINS));     // horde wins sound
         SetWinner(WINNER_HORDE);
     }
     else
+    {
+        if (IsArena())
+            PlaySoundToAll(SOUND_ARENA_MATCH_END);
         SetWinner(WINNER_NONE);
+    }
 
     SetStatus(STATUS_WAIT_LEAVE);
     SetEndTime(TIME_TO_AUTOREMOVE);
@@ -930,6 +940,8 @@ void BattleGround::RemovePlayerAtLeave(ObjectGuid guid, bool transport, bool sen
 
     Player* pPlayer = sObjectMgr.GetPlayer(guid);
 
+    bool const wasSpectator = pPlayer && pPlayer->IsArenaSpectator();
+
     // should remove spirit of redemption
     if (pPlayer && pPlayer->HasAuraType(SPELL_AURA_SPIRIT_OF_REDEMPTION))
         pPlayer->RemoveSpellsCausingAura(SPELL_AURA_MOD_SHAPESHIFT);
@@ -941,6 +953,10 @@ void BattleGround::RemovePlayerAtLeave(ObjectGuid guid, bool transport, bool sen
     }
 
     RemovePlayer(pPlayer, guid);                                // BG subclass specific code
+
+    // arena spectators (participants and visitors) become normal players again
+    if (pPlayer && pPlayer->IsArenaSpectator())
+        pPlayer->SetArenaSpectator(false);
 
     if (participant) // if the player was a match participant, remove auras, calc rating, update queue
     {
@@ -985,6 +1001,12 @@ void BattleGround::RemovePlayerAtLeave(ObjectGuid guid, bool transport, bool sen
 
     if (pPlayer)
     {
+        // arena visitors got a fake "in progress" status entry so they can use the leave button: clear it
+        if (wasSpectator && !participant && sendPacket)
+            for (uint8 slot = 0; slot < PLAYER_MAX_BATTLEGROUND_QUEUES; ++slot)
+                if (pPlayer->GetBattleGroundQueueTypeId(slot) == BATTLEGROUND_QUEUE_NONE)
+                    pPlayer->GetSession()->SendPacket(sBattleGroundMgr.BuildBattleGroundStatusPacket(this, slot, STATUS_NONE, 0, 0));
+
         // Do next only if found in battleground
         pPlayer->SetBattleGroundId(0, BATTLEGROUND_TYPE_NONE);  // We're not in BG.
         // reset destination bg team
@@ -1764,19 +1786,24 @@ void BattleGround::HandleKillPlayer(Player* pVictim, Player* pKiller)
     // - Apres la fin du buff - a ce moment la killer=nullptr
 
     // add +1 kills to group and +1 killing_blows to killer
-    if (pKiller && pVictim->GetFactionTemplateId() != pKiller->GetFactionTemplateId())
+    // (compare battleground teams, not faction templates: arenas can be mixed / same faction)
+    Team const killerTeam = pKiller ? GetPlayerTeam(pKiller->GetObjectGuid()) : TEAM_NONE;
+    if (pKiller && killerTeam != TEAM_NONE && killerTeam != GetPlayerTeam(pVictim->GetObjectGuid()))
     {
         UpdatePlayerScore(pKiller, SCORE_HONORABLE_KILLS, 1);
         UpdatePlayerScore(pKiller, SCORE_KILLING_BLOWS, 1);
 
         for (const auto& itr : m_players)
         {
+            if (itr.second.playerTeam != killerTeam)
+                continue;
+
             Player* pPlayer = sObjectMgr.GetPlayer(itr.first);
 
             if (!pPlayer || pPlayer == pKiller)
                 continue;
 
-            if (pPlayer->GetTeam() == pKiller->GetTeam() && pPlayer->IsAtGroupRewardDistance(pVictim))
+            if (pPlayer->IsAtGroupRewardDistance(pVictim))
                 UpdatePlayerScore(pPlayer, SCORE_HONORABLE_KILLS, 1);
         }
     }
@@ -1829,7 +1856,8 @@ uint32 BattleGround::GetAlivePlayersCountByTeam(Team team) const
         if (itr.second.playerTeam == team)
         {
             Player* player = sObjectMgr.GetPlayer(itr.first);
-            if (player && player->IsAlive())
+            // dead arena participants are turned into (alive) spectators, they don't count
+            if (player && player->IsAlive() && !player->IsArenaSpectator())
                 ++count;
         }
     }

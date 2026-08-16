@@ -2502,6 +2502,11 @@ bool BattleGroundMap::Add(Player* player)
 void BattleGroundMap::Remove(Player* player, bool remove)
 {
     sLog.Out(LOG_BASIC, LOG_LVL_DETAIL, "MAP: Removing player '%s' from bg '%u' of map '%s' before relocating to other map", player->GetName(), GetInstanceId(), GetMapName());
+
+    // arena spectators never leave the map as spectators (safety net for teleports / logout)
+    if (player->IsArenaSpectator())
+        player->SetArenaSpectator(false);
+
     Map::Remove(player, remove);
 }
 

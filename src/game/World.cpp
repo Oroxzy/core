@@ -54,6 +54,7 @@
 #include "CreatureAIRegistry.h"
 #include "Policies/SingletonImp.h"
 #include "BattleGroundMgr.h"
+#include "Arena.h"
 #include "VMapFactory.h"
 #include "GameEventMgr.h"
 #include "PoolManager.h"
@@ -559,6 +560,12 @@ void World::LoadConfigSettings(bool reload)
     setConfig(CONFIG_BOOL_AUTO_LEARN_CLASS_TRAINERS, "PlayerAutoProgression.AutoLearn.ClassTrainers", true);
     setConfig(CONFIG_BOOL_AUTO_LEARN_WEAPON_TRAINERS, "PlayerAutoProgression.AutoLearn.WeaponTrainers", true);
     setConfig(CONFIG_BOOL_AUTO_LEARN_MAX_WEAPON_SKILLS, "PlayerAutoProgression.AutoLearn.MaxWeaponSkills", true);
+    setConfig(CONFIG_BOOL_AUTO_LEARN_CLASS_QUEST_SPELLS, "PlayerAutoProgression.AutoLearn.ClassQuestSpells", true);
+    setConfig(CONFIG_BOOL_AUTO_LEARN_CLASS_QUEST_ITEMS, "PlayerAutoProgression.AutoLearn.ClassQuestItems", true);
+    setConfig(CONFIG_BOOL_AUTO_LEARN_SPELL_BOOKS, "PlayerAutoProgression.AutoLearn.SpellBooks", true);
+    setConfig(CONFIG_BOOL_AUTO_TALENT_ON_LEVEL_UP, "PlayerAutoProgression.AutoTalent.OnLevelUp", false);
+    setConfig(CONFIG_BOOL_AUTO_TALENT_ON_LOGIN, "PlayerAutoProgression.AutoTalent.OnLogin", false);
+    setConfig(CONFIG_BOOL_AUTO_PROGRESSION_APPLY_TO_BOTS, "PlayerAutoProgression.ApplyToBots", false);
     setConfig(CONFIG_BOOL_AUTO_EQUIP_ON_LEVEL_UP, "PlayerAutoProgression.AutoEquip.OnLevelUp", true);
     setConfig(CONFIG_BOOL_AUTO_EQUIP_ON_TALENT_LEARN, "PlayerAutoProgression.AutoEquip.OnTalentLearn", true);
     setConfig(CONFIG_BOOL_AUTO_EQUIP_ON_LOGIN, "PlayerAutoProgression.AutoEquip.OnLogin", false);
@@ -575,6 +582,9 @@ void World::LoadConfigSettings(bool reload)
     setConfig(CONFIG_BOOL_AUTO_EQUIP_SOURCE_DUNGEON_LOOT, "PlayerAutoProgression.AutoEquip.Source.DungeonLoot", true);
     setConfig(CONFIG_BOOL_AUTO_EQUIP_SOURCE_RAID_LOOT, "PlayerAutoProgression.AutoEquip.Source.RaidLoot", true);
     setConfig(CONFIG_BOOL_AUTO_EQUIP_SOURCE_OTHER, "PlayerAutoProgression.AutoEquip.Source.Other", true);
+    setConfig(CONFIG_BOOL_AUTO_EQUIP_SUPPLY_AMMO, "PlayerAutoProgression.AutoEquip.SupplyAmmo", true);
+    setConfig(CONFIG_BOOL_AUTO_EQUIP_MAIL_REPLACED_ITEMS, "PlayerAutoProgression.AutoEquip.MailReplacedItems", true);
+    setConfig(CONFIG_BOOL_AUTO_EQUIP_MARK_GENERATED_ITEMS, "PlayerAutoProgression.AutoEquip.MarkGeneratedItems", true);
     setConfig(CONFIG_BOOL_AUTO_ENCHANT_ON_LEVEL_UP, "PlayerAutoProgression.AutoEnchant.OnLevelUp", true);
     setConfig(CONFIG_BOOL_AUTO_ENCHANT_ON_TALENT_LEARN, "PlayerAutoProgression.AutoEnchant.OnTalentLearn", true);
     setConfig(CONFIG_BOOL_AUTO_ENCHANT_ON_LOGIN, "PlayerAutoProgression.AutoEnchant.OnLogin", false);
@@ -618,7 +628,10 @@ void World::LoadConfigSettings(bool reload)
     setConfigMinMax(CONFIG_UINT32_AUTO_EQUIP_MIN_LEVEL, "PlayerAutoProgression.AutoEquip.MinLevel", 1, 1, 60);
     setConfigMinMax(CONFIG_UINT32_AUTO_EQUIP_MAX_QUALITY, "PlayerAutoProgression.AutoEquip.MaxQuality", 5, 0, 5);
     setConfigMinMax(CONFIG_UINT32_AUTO_EQUIP_MAX_ITEM_LEVEL_BONUS, "PlayerAutoProgression.AutoEquip.MaxItemLevelBonus", 10, 0, 100);
+    setConfigMinMax(CONFIG_UINT32_AUTO_EQUIP_CANDIDATE_ITEM_LEVEL_WINDOW, "PlayerAutoProgression.AutoEquip.CandidateItemLevelWindow", 20, 0, 100);
+    setConfigMinMax(CONFIG_UINT32_AUTO_EQUIP_DELETE_REPLACED_MAX_QUALITY, "PlayerAutoProgression.AutoEquip.DeleteReplacedItemsMaxQuality", 3, 0, 6);
     setConfigMinMax(CONFIG_UINT32_AUTO_PROGRESSION_TALENT_DEBOUNCE_MS, "PlayerAutoProgression.TalentDebounceMs", 750, 0, 10000);
+    setConfigMinMax(CONFIG_UINT32_AUTO_PROGRESSION_AUDIT_STEP_INTERVAL_MS, "PlayerAutoProgression.Audit.StepIntervalMs", 50, 0, 60000);
     setConfig(CONFIG_BOOL_GRID_UNLOAD, "GridUnload", true);
     setConfig(CONFIG_BOOL_CLEANUP_TERRAIN, "CleanupTerrain", true);
     setConfigPos(CONFIG_UINT32_INTERVAL_SAVE, "PlayerSave.Interval", 15 * MINUTE * IN_MILLISECONDS);
@@ -1293,6 +1306,21 @@ void World::LoadConfigSettings(bool reload)
 
     setConfig(CONFIG_UINT32_CREATURE_SUMMON_LIMIT, "MaxCreatureSummonLimit", DEFAULT_CREATURE_SUMMON_LIMIT);
 
+    // Arena (custom)
+    setConfig(CONFIG_BOOL_ARENA_ENABLED, "Arena.Enable", false);
+    setConfigMinMax(CONFIG_UINT32_ARENA_MAX_ITEM_LEVEL, "Arena.MaxItemLevel", 92, 1, 999);
+    setConfigMinMax(CONFIG_UINT32_ARENA_MAX_ITEM_PATCH, "Arena.MaxItemPatch", 10, 0, 10);
+    setConfig(CONFIG_BOOL_ARENA_ALLOW_ITEM_SWAP, "Arena.AllowItemSwap", false);
+    setConfig(CONFIG_BOOL_ARENA_ALLOW_TRINKET_SWAP, "Arena.AllowTrinketSwap", true);
+    setConfigMinMax(CONFIG_UINT32_ARENA_TIME_LIMIT_MINUTES, "Arena.TimeLimitMinutes", 25, 1, 120);
+    setConfigMinMax(CONFIG_UINT32_ARENA_READY_START_DELAY_SECONDS, "Arena.ReadyStartDelaySeconds", 10, 3, 60);
+    setConfigMinMax(CONFIG_UINT32_ARENA_INVITE_ACCEPT_TIME_SECONDS, "Arena.InviteAcceptTimeSeconds", 30, 10, 80);
+    setConfigMinMax(CONFIG_UINT32_ARENA_MIN_LEVEL, "Arena.MinLevel", 19, 1, PLAYER_MAX_LEVEL);
+    setConfig(CONFIG_BOOL_ARENA_ANNOUNCE_QUEUE, "Arena.AnnounceQueue", true);
+    setConfig(CONFIG_BOOL_ARENA_1V1_BLOCK_HEALER_SPECS, "Arena.1v1.BlockHealerSpecs", false);
+    setConfig(CONFIG_BOOL_ARENA_LEAVE_QUEUES_ON_LOGOUT, "Arena.LeaveQueuesOnLogout", true);
+    setConfig(CONFIG_BOOL_ARENA_RESET_ALL_COOLDOWNS, "Arena.ResetAllCooldowns", false);
+
     // Smartlog data
     sLog.InitSmartlogEntries(sConfig.GetStringDefault("Smartlog.ExtraEntries", ""));
     sLog.InitSmartlogGuids(sConfig.GetStringDefault("Smartlog.ExtraGuids", ""));
@@ -1861,6 +1889,10 @@ void World::SetInitialWorldSettings()
     sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "Starting BattleGround System");
     sBattleGroundMgr.CreateInitialBattleGrounds();
     CheckLootTemplates_Reference(ids_set);
+
+    // Custom arenas: disabled spells / item restrictions (only loaded when Arena.Enable is set).
+    sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "Loading arena data ...");
+    sArenaMgr.LoadFromDB();
 
     sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "Starting ZoneScripts");
     sZoneScriptMgr.InitZoneScripts();

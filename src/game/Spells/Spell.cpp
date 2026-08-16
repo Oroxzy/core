@@ -5428,6 +5428,10 @@ SpellCastResult Spell::CheckCast(bool strict)
     if (!m_IsTriggeredSpell && m_casterUnit && !m_casterUnit->IsStandingUp() && !(m_spellInfo->Attributes & SPELL_ATTR_ALLOW_WHILE_SITTING))
         return SPELL_FAILED_NOT_STANDING;
 
+    // Arena spectators are pure observers: no spells, no items
+    if (!m_IsTriggeredSpell && m_caster->IsPlayer() && m_caster->ToPlayer()->IsArenaSpectator() && !m_spellInfo->HasAttribute(SPELL_ATTR_PASSIVE))
+        return SPELL_FAILED_NOT_HERE;
+
     // check cooldowns to prevent cheating (ignore passive spells, that client side visual only)
     if (!m_IsTriggeredSpell && m_caster->IsPlayer() && !m_spellInfo->HasAttribute(SPELL_ATTR_PASSIVE)
         && !m_spellInfo->IsAutoRepeatRangedSpell() // auto shot managed by attack timer

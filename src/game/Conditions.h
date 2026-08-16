@@ -331,6 +331,19 @@ class ConditionEntry
         {
             return m_condition == CONDITION_TEAM ? Team(m_value1) : TEAM_CROSSFACTION;
         }
+        ConditionType GetType() const { return m_condition; }
+        int32 GetValue(uint8 index) const
+        {
+            switch (index)
+            {
+                case 0: return m_value1;
+                case 1: return m_value2;
+                case 2: return m_value3;
+                case 3: return m_value4;
+                default: return 0;
+            }
+        }
+        bool IsReversed() const { return (m_flags & CONDITION_FLAG_REVERSE_RESULT) != 0; }
     private:
         void DisableCondition() { m_condition = CONDITION_NONE; m_flags ^= CONDITION_FLAG_REVERSE_RESULT; }
         bool CheckParamRequirements(WorldObject const* target, Map const* map, WorldObject const* source) const;

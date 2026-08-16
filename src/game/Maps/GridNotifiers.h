@@ -1232,7 +1232,8 @@ namespace MaNGOS
             WorldObject const& GetFocusObject() const { return *i_obj; }
             bool operator()(Player* u)
             {
-                return u->IsAlive() && i_obj->IsWithinDistInMap(u, i_range, b_3dDist);
+                // arena spectators are invisible observers and never trigger anything
+                return u->IsAlive() && !u->IsArenaSpectator() && i_obj->IsWithinDistInMap(u, i_range, b_3dDist);
             }
         private:
             WorldObject const* i_obj;

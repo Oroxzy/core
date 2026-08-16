@@ -2114,8 +2114,8 @@ uint32 Group::CanJoinBattleGroundQueue(BattleGroundTypeId bgTypeId, BattleGround
         // offline member? don't let join
         if (!member || !member->IsInWorld())
             return BG_JOIN_ERR_OFFLINE_MEMBER;
-        // don't allow cross-faction join as group
-        if (member->GetTeam() != team)
+        // don't allow cross-faction join as group (arenas are played cross faction)
+        if (member->GetTeam() != team && !IsArenaBattleGroundTypeId(bgTypeId))
             return BG_JOIN_ERR_MIXED_FACTION;
         // not in the same battleground level bracket, don't let join
         if (member->GetBattleGroundBracketIdFromLevel(bgTypeId) != bracket_id)

@@ -49,8 +49,6 @@ namespace PlayerAutoProgression
     void ShutdownAuditMatrix();
     bool IsAuditExecution();
     uint32 GenerateAuditItemLowGuid();
-
-    void InvalidateCaches();
 }
 
 #endif

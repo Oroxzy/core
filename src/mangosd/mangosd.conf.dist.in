@@ -2939,9 +2939,14 @@ AHBot.itemcount = 50
 # PLAYER AUTO PROGRESSION
 #
 # Level-up and talent-learn triggers default to on; login and talent-reset triggers default to off. Trainer learning
-# reuses the normal GREEN trainer-state checks, but does not charge copper. Talent points are never assigned
-# automatically. AutoEquip scans loaded item prototypes and uses the character's class plus highest-spend talent tree.
-# Replaced gear is permanently deleted by default.
+# reuses the normal GREEN trainer-state checks, but does not charge copper. AutoLearn also covers the spells that only
+# class quests teach (stances, pets, poisons, forms, totem ranks, priest racials, class mounts) and the class spell
+# books that no trainer offers. Talent points are only assigned when AutoTalent is enabled (off by default).
+# AutoEquip scans loaded item prototypes and uses the character's class plus highest-spend talent tree.
+# Replaced gear up to Rare quality is permanently deleted by default; rarer pieces are moved into the bags.
+# An update that had to be deferred (combat, death) is remembered in characters.extra_flags and resumed at the next
+# login; a brand-new character receives its level-1 progression (level-up switches) at its first login.
+# PlayerBots keep their own premade spec/gear pipeline unless ApplyToBots is enabled.
 # GM inspection is available through .autoprogression status [player], .autoprogression preview [player], and the
 # administrator-only .autoprogression apply [player]. Preview is read-only and explains scores and planned changes.
 # Debug builds emit one aggregated performance line per cache rebuild and auto-progression operation when
@@ -2951,20 +2956,48 @@ AHBot.itemcount = 50
 #        Delay in milliseconds used to coalesce rapid talent changes before talent-triggered learning, equipment and
 #        enchantment re-evaluation. Each additional talent change restarts the delay. Range: 0-10000. Default: 750.
 #
+#    PlayerAutoProgression.ApplyToBots
+#        If enabled, PartyBots/BattleBots are auto-progressed like players. Their premade spec and gear templates are
+#        then replaced by auto-progression results. Default: 0.
+#
 #    PlayerAutoProgression.AutoLearn.OnLevelUp
 #    PlayerAutoProgression.AutoLearn.OnTalentLearn
 #    PlayerAutoProgression.AutoLearn.OnLogin
-#        Learn every currently available spell from class and/or weapon trainers after the respective event.
-#        Default: 1 for OnLevelUp and OnTalentLearn; 0 for OnLogin.
+#        Learn every currently available spell from class and/or weapon trainers, class quests and spell books after
+#        the respective event. Default: 1 for OnLevelUp and OnTalentLearn; 0 for OnLogin.
 #
 #    PlayerAutoProgression.AutoLearn.ClassTrainers
 #    PlayerAutoProgression.AutoLearn.WeaponTrainers
 #        Select trainer source groups. Normal race, class, level, spell-chain and skill prerequisites still apply.
 #        Default: 1 for each switch.
 #
-#    PlayerAutoProgression.AutoLearn.MaxWeaponSkills
-#        Set every known weapon skill and Defense to the current level cap (level * 5, maximum 300).
+#    PlayerAutoProgression.AutoLearn.ClassQuestSpells
+#        Learn the spells rewarded by class-restricted quests (RewSpell/RewSpellCast) once the character meets the
+#        quest MinLevel and race requirement, without completing the quest. Covers e.g. warrior stances, Taunt and
+#        Sunder Armor, hunter Tame Beast/pet skills, rogue Poisons, warlock demons and mounts, druid forms, shaman
+#        rank-1 totems, priest racial spells and paladin Redemption/mounts. The quest itself remains available.
 #        Default: 1.
+#
+#    PlayerAutoProgression.AutoLearn.ClassQuestItems
+#        Hand out reagent items rewarded by class quests that spells require as totems (the four shaman totems).
+#        Without them the client refuses every totem cast. Default: 1.
+#
+#    PlayerAutoProgression.AutoLearn.SpellBooks
+#        Learn class abilities taught by obtainable items (AQ40 tomes, Dire Maul codices, Tranquilizing Shot,
+#        Polymorph variants, ...). Class, level, reputation and previous-rank requirements apply and the item must be
+#        obtainable through an enabled AutoEquip source (loot, vendor, crafted, quest options). Default: 1.
+#
+#    PlayerAutoProgression.AutoLearn.MaxWeaponSkills
+#        Set every known weapon skill, Defense, Poisons and Lockpicking to the current level cap (level * 5,
+#        maximum 300). Poison recipes at trainers require Poisons skill values up to 280. Default: 1.
+#
+#    PlayerAutoProgression.AutoTalent.OnLevelUp
+#    PlayerAutoProgression.AutoTalent.OnLogin
+#        Spend all free talent points after the respective event using the audit policy (deepest legal talent in the
+#        active tree, then the next tree). The active tree is the one the character already invests in; the class
+#        fallback tree is used only when no talent has been spent yet. Talent-triggered gear updates run once, at the
+#        end of the same pass. .autoprogression apply also spends talents when either switch is enabled.
+#        Default: 0 for both.
 #
 #    PlayerAutoProgression.AutoEquip.OnLevelUp
 #    PlayerAutoProgression.AutoEquip.OnTalentLearn
@@ -2983,6 +3016,11 @@ AHBot.itemcount = 50
 #    PlayerAutoProgression.AutoEquip.MaxItemLevelBonus
 #        Maximum item-level lead for items without a RequiredLevel. Items with RequiredLevel use that requirement.
 #
+#    PlayerAutoProgression.AutoEquip.CandidateItemLevelWindow
+#        Ignore catalog items whose ItemLevel is more than this many levels below the character level. Such items
+#        cannot beat level-appropriate gear but cost scoring and plan-optimization time on every run. Currently
+#        equipped items are always evaluated. 0 disables the pruning. Range: 0-100. Default: 20.
+#
 #    PlayerAutoProgression.AutoEquip.RequireDiscovered
 #        If enabled, only item prototypes already discovered by players are considered.
 #
@@ -2996,6 +3034,28 @@ AHBot.itemcount = 50
 #    PlayerAutoProgression.AutoEquip.DeleteReplacedItems
 #        If enabled together with ReplaceExisting, replaced gear is permanently destroyed instead of moved into bags.
 #        This avoids bag-space requirements, but also permanently removes existing enchants. Indestructible items are kept.
+#        Default: 1.
+#
+#    PlayerAutoProgression.AutoEquip.DeleteReplacedItemsMaxQuality
+#        Highest item quality DeleteReplacedItems may destroy for gear the character did not get from AutoEquip.
+#        Gear generated by AutoEquip (see MarkGeneratedItems) is always destroyed; other replaced items above this
+#        quality are moved into the bags or, when the bags are full, mailed to the character (see MailReplacedItems),
+#        so player-farmed epics are never lost silently.
+#        0=Poor, 1=Common, 2=Uncommon, 3=Rare, 4=Epic, 5=Legendary, 6=Artifact. Default: 3.
+#
+#    PlayerAutoProgression.AutoEquip.MarkGeneratedItems
+#        Record the character as creator of every item AutoEquip generates. The item tooltip then shows
+#        "Made by <character>", and DeleteReplacedItems can tell generated gear apart from farmed gear. Items the
+#        character crafted personally carry the same mark. Default: 1.
+#
+#    PlayerAutoProgression.AutoEquip.MailReplacedItems
+#        When a replaced item must be kept (see DeleteReplacedItemsMaxQuality) but the bags are full, mail it to the
+#        character instead of skipping the upgrade. Default: 1.
+#
+#    PlayerAutoProgression.AutoEquip.SupplyAmmo
+#        Store a full stack of the best obtainable ammunition for an equipped bow, crossbow or gun and select it as
+#        active ammo whenever the character holds less than one stack. Ammunition of the right type that is at least
+#        as good is kept and selected instead; obsolete stacks are removed. Follows the acquisition source switches.
 #        Default: 1.
 #
 #    PlayerAutoProgression.AutoEquip.IncludeQuestRewards
@@ -3022,9 +3082,13 @@ AHBot.itemcount = 50
 #    PlayerAutoProgression.AutoEquip.Source.Other
 #        Select eligible acquisition sources: vendors, crafted items, outdoor-world loot, dungeon loot, raid loot,
 #        or items with none of those classified sources. Items with multiple sources remain eligible when at least
-#        one source is enabled. Quest-/condition-bound drops and condition-bound vendor entries are never treated as
-#        freely available; unspawned unconditional loot templates are classified as Other. Personally quest-gated reward
-#        eligibility is controlled by IncludeQuestRewards; tradeable BoE quest rewards have their own switch above.
+#        one source is enabled. Quest drops are never treated as freely available; conditioned loot and vendor entries
+#        (faction-split raid loot such as the tier 2 helms and legs, patch- and event-gated drops, reputation vendors)
+#        count once the character meets the condition. Unspawned unconditional loot templates and items produced by
+#        using another obtainable item are classified as Other. Bind-on-pickup items without any known source (promotional/TCG gear, deprecated rows)
+#        are never considered, and class-conjured gear (warlock Spellstones/Firestones) is only available to the class
+#        that creates it. Personally quest-gated reward eligibility is controlled by IncludeQuestRewards; tradeable BoE
+#        quest rewards have their own switch above.
 #        Default: 1 for each source.
 #
 #    PlayerAutoProgression.AutoEquip.MinimumUpgradePercent
@@ -3073,15 +3137,28 @@ AHBot.itemcount = 50
 # quest-unlock restrictions. It simulates an external artisan/NPC service: source items, recipes, professions,
 # currency and reagents are not consumed.
 #
+#    PlayerAutoProgression.Audit.StepIntervalMs
+#        Interval between audit level steps (.autoprogression audit). Every step processes one complete level for the
+#        synthetic character synchronously on the world thread, so the audit noticeably loads a live realm; run it on
+#        an idle server or raise the interval. Range: 0-60000. Default: 50.
+#
 ###################################################################################################################
 PlayerAutoProgression.TalentDebounceMs = 750
+PlayerAutoProgression.ApplyToBots = 0
+PlayerAutoProgression.Audit.StepIntervalMs = 50
 
 PlayerAutoProgression.AutoLearn.OnLevelUp = 1
 PlayerAutoProgression.AutoLearn.OnTalentLearn = 1
 PlayerAutoProgression.AutoLearn.OnLogin = 0
 PlayerAutoProgression.AutoLearn.ClassTrainers = 1
 PlayerAutoProgression.AutoLearn.WeaponTrainers = 1
+PlayerAutoProgression.AutoLearn.ClassQuestSpells = 1
+PlayerAutoProgression.AutoLearn.ClassQuestItems = 1
+PlayerAutoProgression.AutoLearn.SpellBooks = 1
 PlayerAutoProgression.AutoLearn.MaxWeaponSkills = 1
+
+PlayerAutoProgression.AutoTalent.OnLevelUp = 0
+PlayerAutoProgression.AutoTalent.OnLogin = 0
 
 PlayerAutoProgression.AutoEquip.OnLevelUp = 1
 PlayerAutoProgression.AutoEquip.OnTalentLearn = 1
@@ -3090,10 +3167,15 @@ PlayerAutoProgression.AutoEquip.OnTalentReset = 0
 PlayerAutoProgression.AutoEquip.MinLevel = 1
 PlayerAutoProgression.AutoEquip.MaxQuality = 5
 PlayerAutoProgression.AutoEquip.MaxItemLevelBonus = 10
+PlayerAutoProgression.AutoEquip.CandidateItemLevelWindow = 20
 PlayerAutoProgression.AutoEquip.RequireDiscovered = 0
 PlayerAutoProgression.AutoEquip.IgnoreItemsWithoutStatsAndArmor = 0
 PlayerAutoProgression.AutoEquip.ReplaceExisting = 1
 PlayerAutoProgression.AutoEquip.DeleteReplacedItems = 1
+PlayerAutoProgression.AutoEquip.DeleteReplacedItemsMaxQuality = 3
+PlayerAutoProgression.AutoEquip.MarkGeneratedItems = 1
+PlayerAutoProgression.AutoEquip.MailReplacedItems = 1
+PlayerAutoProgression.AutoEquip.SupplyAmmo = 1
 PlayerAutoProgression.AutoEquip.IncludeQuestRewards = 0
 PlayerAutoProgression.AutoEquip.AllowBoEQuestRewardsWithoutQuest = 1
 PlayerAutoProgression.AutoEquip.Source.Vendor = 1
@@ -3233,3 +3315,85 @@ DynamicRespawn.AffectRespawnTimeBelow = 0
 DynamicRespawn.AffectLevelBelow = 0
 DynamicRespawn.PlayersThreshold = 0
 DynamicRespawn.PlayersMaxLevelDiff = 0
+
+###################################################################################################
+# ARENA SETTINGS (custom, requires the client patch and sql/arena/world_arena.sql)
+#
+#    Arena.Enable
+#        Enable the custom arenas (Nagrand, Blade's Edge, Ruins of Lordaeron, Dalaran Sewers in
+#        1v1, 2v2, 3v3 and 5v5). When disabled the arena battleground templates are not created.
+#        Default: 0 (disabled)
+#                 1 (enabled)
+#
+#    Arena.MaxItemLevel
+#        Highest item level allowed inside the arena. Items above are unequipped when entering.
+#        Default: 92
+#
+#    Arena.MaxItemPatch
+#        Newest content patch whose items are allowed inside the arena.
+#        0 = 1.2, 1 = 1.3, 2 = 1.4, 3 = 1.5, 4 = 1.6, 5 = 1.7, 6 = 1.8, 7 = 1.9, 8 = 1.10, 9 = 1.11, 10 = 1.12
+#        Default: 10 (everything)
+#
+#    Arena.AllowItemSwap
+#        Allow changing armor while the match is running (weapons, offhands and ranged slots can always be swapped).
+#        Default: 0 (disabled)
+#                 1 (enabled)
+#
+#    Arena.AllowTrinketSwap
+#        Allow changing trinkets while the match is running.
+#        Default: 1 (enabled)
+#                 0 (disabled)
+#
+#    Arena.TimeLimitMinutes
+#        Match length. When the time is up the team with the most damage done wins.
+#        Default: 25
+#
+#    Arena.ReadyStartDelaySeconds
+#        Countdown after all players told the arena watcher that they are ready.
+#        Default: 10
+#
+#    Arena.InviteAcceptTimeSeconds
+#        Time the players have to accept the arena invitation.
+#        Default: 30
+#
+#    Arena.MinLevel
+#        Minimum level to queue for the arena (the level brackets themselves are the standard
+#        battleground brackets 10-19, 20-29, ..., 60).
+#        Default: 19
+#
+#    Arena.AnnounceQueue
+#        The arena announcer npc (600044) next to the arena orb yells when somebody queues up.
+#        Default: 1 (enabled)
+#                 0 (disabled)
+#
+#    Arena.1v1.BlockHealerSpecs
+#        Players with 31 or more talent points in a healing tree can not queue for 1v1.
+#        Default: 0 (disabled)
+#                 1 (enabled)
+#
+#    Arena.LeaveQueuesOnLogout
+#        Remove players from arena queues immediately when they log out (instead of the normal
+#        battleground grace period).
+#        Default: 1 (enabled)
+#                 0 (disabled)
+#
+#    Arena.ResetAllCooldowns
+#        Reset all spell cooldowns when entering the arena and when the gates open.
+#        Default: 0 (only cooldowns shorter than 10 minutes are reset, like TBC)
+#                 1 (all cooldowns)
+#
+###################################################################################################
+
+Arena.Enable = 0
+Arena.MaxItemLevel = 92
+Arena.MaxItemPatch = 10
+Arena.AllowItemSwap = 0
+Arena.AllowTrinketSwap = 1
+Arena.TimeLimitMinutes = 25
+Arena.ReadyStartDelaySeconds = 10
+Arena.InviteAcceptTimeSeconds = 30
+Arena.MinLevel = 19
+Arena.AnnounceQueue = 1
+Arena.1v1.BlockHealerSpecs = 0
+Arena.LeaveQueuesOnLogout = 1
+Arena.ResetAllCooldowns = 0

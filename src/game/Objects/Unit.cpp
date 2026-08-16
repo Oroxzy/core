@@ -757,6 +757,24 @@ uint32 Unit::DealDamage(Unit* pVictim, uint32 damage, CleanDamage const* cleanDa
         duel_hasEnded = true;
     }
 
+    // Arena scoreboard: damage done by players (and their pets/summons) to enemy players (and their pets/summons).
+    // Overkill is not counted.
+    if (pVictim != this && damage && IsArenaMapId(GetMapId()) && IsCharmerOrOwnerPlayerOrPlayerItself() && pVictim->IsCharmerOrOwnerPlayerOrPlayerItself())
+    {
+        if (Player* pDealer = GetCharmerOrOwnerPlayerOrPlayerItself())
+        {
+            if (BattleGround* bg = pDealer->GetBattleGround())
+            {
+                if (bg->IsArena() && bg->GetStatus() == STATUS_IN_PROGRESS)
+                {
+                    Player* pVictimPlayer = pVictim->GetCharmerOrOwnerPlayerOrPlayerItself();
+                    if (pVictimPlayer && pVictimPlayer->GetBGTeam() != pDealer->GetBGTeam())
+                        bg->UpdatePlayerScore(pDealer, SCORE_DAMAGE_DONE, std::min(damage, health));
+                }
+            }
+        }
+    }
+
     // Enter combat or extend leash timer.
     if (ShouldEnterCombat())
     {
@@ -4226,6 +4244,25 @@ void Unit::RemoveAllAurasOnDeath()
         if (!iter->second->IsPassive() && !iter->second->IsDeathPersistent())
         {
             RemoveSpellAuraHolder(iter->second, AURA_REMOVE_BY_DEATH);
+            iter = m_spellAuraHolders.begin();
+        }
+        else
+            ++iter;
+    }
+}
+
+void Unit::RemoveShortDurationBuffs(uint32 maxRemainingMs)
+{
+    for (SpellAuraHolderMap::iterator iter = m_spellAuraHolders.begin(); iter != m_spellAuraHolders.end();)
+    {
+        SpellAuraHolder* holder = iter->second;
+        SpellEntry const* spellProto = holder->GetSpellProto();
+        if (!holder->IsPassive() && !holder->IsPermanent() && holder->IsPositive() && !holder->IsDeathPersistent() &&
+            holder->GetAuraDuration() >= 0 && uint32(holder->GetAuraDuration()) <= maxRemainingMs &&
+            !spellProto->HasAttribute(SPELL_ATTR_NO_IMMUNITIES) &&
+            !spellProto->HasAura(SPELL_AURA_MOD_INVISIBILITY))
+        {
+            RemoveSpellAuraHolder(holder, AURA_REMOVE_BY_DEFAULT);
             iter = m_spellAuraHolders.begin();
         }
         else

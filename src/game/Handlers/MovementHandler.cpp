@@ -140,6 +140,9 @@ void WorldSession::HandleMoveWorldportAck()
         {
             if (_player->IsInvitedForBattleGroundInstance(_player->GetBattleGroundId()))
                 bg->AddPlayer(_player);
+            // arena visitors (arena orb "spectate") become invisible spectators on arrival
+            else if (bg->IsArena() && !bg->IsPlayerInBattleGround(_player->GetObjectGuid()) && !_player->IsGameMaster())
+                _player->SetArenaSpectator(true);
         }
     }
 

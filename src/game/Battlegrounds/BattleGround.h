@@ -96,6 +96,7 @@ class BattleGround
         // Get methods:
         char const* GetName() const         { return m_name; }
         BattleGroundTypeId GetTypeID() const { return m_typeId; }
+        bool IsArena() const                { return IsArenaBattleGroundTypeId(m_typeId); }
         BattleGroundBracketId GetBracketId() const { return m_bracketId; }
         // the instanceId check is also used to determine a bg-template
         // that's why the m_map hack is here..

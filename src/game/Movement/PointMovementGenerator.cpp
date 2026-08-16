@@ -289,8 +289,12 @@ void ChargeMovementGenerator<T>::ComputePath(T& attacker, Unit& victim)
     Player* victimPlayer = sWorld.getConfig(CONFIG_BOOL_ENABLE_MOVEMENT_EXTRAPOLATION_CHARGE) ?
         victim.ToPlayer() : nullptr;
 
+    // Dalaran Sewers arena: the extrapolated position ends below the pipes / map, charge lands under the floor
+    bool const inDalaranArena = victimPlayer && IsArenaMapId(victimPlayer->GetMapId()) &&
+        GetArenaMapTypeForBattleGroundTypeId(GetBattleGroundTypeIdByMapId(victimPlayer->GetMapId())) == ARENA_MAP_DALARAN;
+
     // Improved path to victim future estimated position
-    if (victimPlayer && victimPlayer->IsMoving() && victimPlayer->IsMovedByPlayer())
+    if (victimPlayer && victimPlayer->IsMoving() && victimPlayer->IsMovedByPlayer() && !inDalaranArena)
     {
         // We need to account for:
         // 1. Time for stun aura to be applied (spell batching)

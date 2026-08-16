@@ -132,6 +132,7 @@ enum BattleGroundStartTimeIntervals
     BG_START_DELAY_2M               = 120000,               // ms (2 minutes)
     BG_START_DELAY_1M               = 60000,                // ms (1 minute)
     BG_START_DELAY_30S              = 30000,                // ms (30 seconds)
+    BG_START_DELAY_15S              = 15000,                // ms (15 seconds), arenas
     BG_START_DELAY_NONE             = 0,                    // ms
 };
 
@@ -165,8 +166,25 @@ enum BattleGroundQueueTypeId
     BATTLEGROUND_QUEUE_AV       = 1,
     BATTLEGROUND_QUEUE_WS       = 2,
     BATTLEGROUND_QUEUE_AB       = 3,
+    // Custom arenas: one queue per battleground type, same order as BattleGroundTypeId.
+    BATTLEGROUND_QUEUE_NA_1V1   = 4,
+    BATTLEGROUND_QUEUE_NA_2V2   = 5,
+    BATTLEGROUND_QUEUE_NA_3V3   = 6,
+    BATTLEGROUND_QUEUE_NA_5V5   = 7,
+    BATTLEGROUND_QUEUE_BE_1V1   = 8,
+    BATTLEGROUND_QUEUE_BE_2V2   = 9,
+    BATTLEGROUND_QUEUE_BE_3V3   = 10,
+    BATTLEGROUND_QUEUE_BE_5V5   = 11,
+    BATTLEGROUND_QUEUE_RL_1V1   = 12,
+    BATTLEGROUND_QUEUE_RL_2V2   = 13,
+    BATTLEGROUND_QUEUE_RL_3V3   = 14,
+    BATTLEGROUND_QUEUE_RL_5V5   = 15,
+    BATTLEGROUND_QUEUE_DS_1V1   = 16,
+    BATTLEGROUND_QUEUE_DS_2V2   = 17,
+    BATTLEGROUND_QUEUE_DS_3V3   = 18,
+    BATTLEGROUND_QUEUE_DS_5V5   = 19,
 };
-#define MAX_BATTLEGROUND_QUEUE_TYPES 4
+#define MAX_BATTLEGROUND_QUEUE_TYPES 20
 
 enum BattleGroundBracketId                                  // bracketId for level ranges
 {
@@ -183,6 +201,9 @@ enum ScoreType
     SCORE_DEATHS                = 2,
     SCORE_HONORABLE_KILLS       = 3,
     SCORE_BONUS_HONOR           = 4,
+    //Arena
+    SCORE_DAMAGE_DONE           = 5,
+    SCORE_HEALING_DONE          = 6,
     //WS
     SCORE_FLAG_CAPTURES         = 7,
     SCORE_FLAG_RETURNS          = 8,

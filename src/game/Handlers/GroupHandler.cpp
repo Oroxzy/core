@@ -80,6 +80,11 @@ void WorldSession::HandleGroupInviteOpcode(WorldPackets::Group::GroupInvite cons
         return;
     }
 
+    // Arena spectators do not interact with anybody (in either direction: party frames
+    // of a spectating group member would leak enemy positions and health)
+    if (GetPlayer()->IsArenaSpectator() || player->IsArenaSpectator())
+        return;
+
     // Just ignore us
     if (player->GetSocial()->HasIgnore(GetPlayer()->GetObjectGuid()))
     {

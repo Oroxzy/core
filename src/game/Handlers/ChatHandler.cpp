@@ -184,7 +184,8 @@ void WorldSession::HandleChatMessageOpcode(WorldPackets::Chat::ChatMessage const
         else
         {
             // Send message in universal language if crossfaction chat is enabled and player is using default faction languages.
-            if (sWorld.getConfig(CONFIG_BOOL_ALLOW_TWO_SIDE_INTERACTION_CHAT) && (packet.lang == LANG_COMMON || packet.lang == LANG_ORCISH))
+            // Arena teams can be mixed, everybody inside an arena understands each other.
+            if ((sWorld.getConfig(CONFIG_BOOL_ALLOW_TWO_SIDE_INTERACTION_CHAT) || (_player && _player->InArena())) && (packet.lang == LANG_COMMON || packet.lang == LANG_ORCISH))
                 const_cast<uint32&>(packet.lang) = LANG_UNIVERSAL;
             else
             {
@@ -248,6 +249,10 @@ void WorldSession::HandleChatMessageOpcode(WorldPackets::Chat::ChatMessage const
             if (a->isMuted(GetAccountId(), true, packet.type))
                 return;
     }
+
+    // Arena spectators are invisible observers: no local chat
+    if (_player && _player->IsArenaSpectator() && (packet.type == CHAT_MSG_SAY || packet.type == CHAT_MSG_YELL || packet.type == CHAT_MSG_EMOTE))
+        return;
 
     // Message handling
     switch (packet.type)

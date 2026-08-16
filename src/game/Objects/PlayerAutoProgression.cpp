@@ -1,10 +1,14 @@
 #include "PlayerAutoProgression.h"
 
+#include "Bag.h"
+#include "Conditions.h"
 #include "Creature.h"
+#include "Database/DatabaseEnv.h"
 #include "DBCStores.h"
 #include "GameEventMgr.h"
 #include "Item.h"
 #include "LootMgr.h"
+#include "Mail.h"
 #include "Map.h"
 #include "SQLStorages.h"
 #include "Log.h"
@@ -99,7 +103,38 @@ enum ItemSourceMask : uint32
     ITEM_SOURCE_DUNGEON_LOOT = 0x10,
     ITEM_SOURCE_RAID_LOOT = 0x20,
     ITEM_SOURCE_OTHER = 0x40,
-    ITEM_SOURCE_RESTRICTED = 0x80
+    ITEM_SOURCE_RESTRICTED = 0x80,
+    // Created by a class spell (warlock Spellstones/Firestones): only the
+    // creating class can ever hold these; see classCreatedItems.
+    ITEM_SOURCE_CLASS_CREATED = 0x100
+};
+
+// A class quest that hands out spells and/or class reagents (shaman totems).
+struct ClassQuestGrant
+{
+    uint32 questId = 0;
+    uint32 minLevel = 0;
+    uint32 requiredClasses = 0;
+    uint32 requiredRaces = 0;
+    std::vector<uint32> spells;
+    std::vector<uint32> items;
+};
+
+// An obtainable item that teaches class spells on use (tomes, codices, ...).
+struct SpellBook
+{
+    uint32 itemId = 0;
+    std::vector<uint32> spells;
+};
+
+// A loot/vendor source that only applies when every listed condition holds
+// for the character (faction-split raid loot such as the tier 2 helms and
+// legs, patch-gated drops, game-event loot, reputation vendors, ...).
+struct ConditionalItemSource
+{
+    uint32 source = 0;
+    ConditionSource context = CONDITION_FROM_LOOT;
+    std::vector<uint32> conditions;
 };
 
 struct AutoProgressionCache
@@ -107,7 +142,12 @@ struct AutoProgressionCache
     TrainerCache trainers;
     std::vector<EnchantCandidate> improvements;
     std::vector<uint32> equipmentItems;
+    std::vector<uint32> ammoItems;
+    std::vector<ClassQuestGrant> classQuestGrants;
+    std::vector<SpellBook> spellBooks;
     std::unordered_map<uint32, uint32> itemSources;
+    std::unordered_map<uint32, uint32> classCreatedItems; // item -> creator class mask
+    std::unordered_map<uint32, std::vector<ConditionalItemSource>> conditionalSources;
     std::unordered_map<uint32, std::vector<QuestRewardSource>> rewardQuests;
     std::set<uint32> activeQuestRewardItems;
     std::unordered_map<uint32, uint32> itemSetSizes;
@@ -131,6 +171,14 @@ AutoProgressionCacheState& GetAutoProgressionCacheState()
     return state;
 }
 
+// Per-thread nesting information. Readers may nest freely (only the outermost
+// guard registers with the shared state) and a reader may also be entered from
+// inside an update on the same thread. An update entered while the same thread
+// still holds a read guard cannot wait for the readers to drain without
+// deadlocking, so that case is logged and treated as nested.
+thread_local uint32 tCacheReadDepth = 0;
+thread_local bool tCacheReadRegistered = false;
+
 void BeginCacheUpdate()
 {
     AutoProgressionCacheState& state = GetAutoProgressionCacheState();
@@ -138,6 +186,16 @@ void BeginCacheUpdate()
     std::thread::id const current = std::this_thread::get_id();
     if (state.activeUpdates && state.updateThread == current)
     {
+        ++state.activeUpdates;
+        state.dirty = true;
+        return;
+    }
+    if (tCacheReadRegistered)
+    {
+        sLog.Out(LOG_BASIC, LOG_LVL_ERROR,
+            "PlayerAutoProgression: cache update requested while the same thread holds a read guard; proceeding without exclusive access.");
+        if (state.activeUpdates == 0)
+            state.updateThread = current;
         ++state.activeUpdates;
         state.dirty = true;
         return;
@@ -170,17 +228,35 @@ void EndCacheUpdate()
 
 void BeginCacheRead()
 {
+    if (tCacheReadDepth++ > 0)
+        return;
+
     AutoProgressionCacheState& state = GetAutoProgressionCacheState();
     std::unique_lock<std::mutex> lock(state.mutex);
+    if (state.activeUpdates && state.updateThread == std::this_thread::get_id())
+    {
+        // Reading from inside an update on the same thread: the update already
+        // owns exclusive access, registering as reader would self-deadlock.
+        tCacheReadRegistered = false;
+        return;
+    }
     state.condition.wait(lock, [&state]()
     {
         return state.activeUpdates == 0 && state.waitingUpdates == 0;
     });
     ++state.activeReaders;
+    tCacheReadRegistered = true;
 }
 
 void EndCacheRead()
 {
+    MANGOS_ASSERT(tCacheReadDepth > 0);
+    if (--tCacheReadDepth > 0)
+        return;
+    if (!tCacheReadRegistered)
+        return;
+    tCacheReadRegistered = false;
+
     AutoProgressionCacheState& state = GetAutoProgressionCacheState();
     {
         std::lock_guard<std::mutex> lock(state.mutex);
@@ -193,8 +269,24 @@ enum PendingAutoProgressionAction : uint8
 {
     PENDING_AUTO_LEARN = 0x01,
     PENDING_AUTO_EQUIP = 0x02,
-    PENDING_AUTO_ENCHANT = 0x04
+    PENDING_AUTO_ENCHANT = 0x04,
+    PENDING_AUTO_TALENT = 0x08
 };
+
+bool AutoTalentEnabled()
+{
+    return sWorld.getConfig(CONFIG_BOOL_AUTO_TALENT_ON_LEVEL_UP) ||
+        sWorld.getConfig(CONFIG_BOOL_AUTO_TALENT_ON_LOGIN);
+}
+
+// Bots keep their own premade spec/gear pipeline unless explicitly opted in.
+bool AutoProgressionAppliesTo(Player const* player)
+{
+    if (!player || !player->GetSession())
+        return false;
+    return !player->IsBot() ||
+        sWorld.getConfig(CONFIG_BOOL_AUTO_PROGRESSION_APPLY_TO_BOTS);
+}
 
 ImprovementSource GetItemImprovementSource(uint32 spellId)
 {
@@ -559,10 +651,40 @@ void MarkVendorItems(AutoProgressionCache& cache, VendorItemData const* items,
     if (!items)
         return;
     for (VendorItem const* item : items->m_items)
-        if (item && item->item)
-            cache.itemSources[item->item] |=
-                vendorAvailable && !item->conditionId ?
-                ITEM_SOURCE_VENDOR : ITEM_SOURCE_RESTRICTED;
+    {
+        if (!item || !item->item)
+            continue;
+        if (vendorAvailable && !item->conditionId)
+            cache.itemSources[item->item] |= ITEM_SOURCE_VENDOR;
+        else
+        {
+            cache.itemSources[item->item] |= ITEM_SOURCE_RESTRICTED;
+            // Reputation/faction/event vendors: available once the character
+            // meets the condition (evaluated per character, see
+            // ResolveItemSources).
+            if (vendorAvailable)
+                cache.conditionalSources[item->item].push_back(
+                    { ITEM_SOURCE_VENDOR, CONDITION_FROM_VENDOR, { item->conditionId } });
+        }
+    }
+}
+
+// Conditioned loot keeps its RESTRICTED marker (quest drops stay excluded) and
+// additionally records the condition chains that unlock it per character.
+void MarkConditionalItems(AutoProgressionCache& cache,
+    LootConditionedItemMap const& conditioned, uint32 source)
+{
+    if (!source)
+        return;
+    for (auto const& entry : conditioned)
+    {
+        if (!entry.first)
+            continue;
+        cache.itemSources[entry.first] |= ITEM_SOURCE_RESTRICTED;
+        for (std::vector<uint32> const& chain : entry.second)
+            cache.conditionalSources[entry.first].push_back(
+                { source, CONDITION_FROM_LOOT, chain });
+    }
 }
 
 struct CreatureMapSourceCollector
@@ -693,25 +815,29 @@ std::set<uint32> MarkLootSources(AutoProgressionCache& cache)
                 vendorAvailable);
         std::set<uint32> items;
         std::set<uint32> allItems;
+        LootConditionedItemMap conditioned;
         if (info->loot_id)
         {
-            LootTemplates_Creature.CollectItemIds(info->loot_id, items);
+            LootTemplates_Creature.CollectItemIds(info->loot_id, items, false, &conditioned);
             LootTemplates_Creature.CollectItemIds(info->loot_id, allItems, true);
         }
         if (info->pickpocket_loot_id)
         {
-            LootTemplates_Pickpocketing.CollectItemIds(info->pickpocket_loot_id, items);
+            LootTemplates_Pickpocketing.CollectItemIds(info->pickpocket_loot_id, items,
+                false, &conditioned);
             LootTemplates_Pickpocketing.CollectItemIds(
                 info->pickpocket_loot_id, allItems, true);
         }
         if (info->skinning_loot_id)
         {
-            LootTemplates_Skinning.CollectItemIds(info->skinning_loot_id, items);
+            LootTemplates_Skinning.CollectItemIds(info->skinning_loot_id, items,
+                false, &conditioned);
             LootTemplates_Skinning.CollectItemIds(
                 info->skinning_loot_id, allItems, true);
         }
         MarkItems(cache.itemSources, allItems, ITEM_SOURCE_RESTRICTED);
         MarkItems(cache.itemSources, items, source);
+        MarkConditionalItems(cache, conditioned, source);
     }
 
     std::unordered_map<uint32, uint32> gameObjectSources;
@@ -728,7 +854,9 @@ std::set<uint32> MarkLootSources(AutoProgressionCache& cache)
             continue;
         std::set<uint32> items;
         std::set<uint32> allItems;
-        LootTemplates_Gameobject.CollectItemIds(info->GetLootId(), items);
+        LootConditionedItemMap conditioned;
+        LootTemplates_Gameobject.CollectItemIds(info->GetLootId(), items, false,
+            &conditioned);
         LootTemplates_Gameobject.CollectItemIds(
             info->GetLootId(), allItems, true);
         auto const sourceItr = gameObjectSources.find(entry.first);
@@ -737,6 +865,7 @@ std::set<uint32> MarkLootSources(AutoProgressionCache& cache)
             ITEM_SOURCE_NONE : ITEM_SOURCE_OTHER;
         MarkItems(cache.itemSources, allItems, ITEM_SOURCE_RESTRICTED);
         MarkItems(cache.itemSources, items, source);
+        MarkConditionalItems(cache, conditioned, source);
     }
 
     bool hasAvailableFishingArea = false;
@@ -745,36 +874,128 @@ std::set<uint32> MarkLootSources(AutoProgressionCache& cache)
     {
         std::set<uint32> items;
         std::set<uint32> allItems;
-        LootTemplates_Fishing.CollectItemIds(itr->Id, items);
+        LootConditionedItemMap conditioned;
+        LootTemplates_Fishing.CollectItemIds(itr->Id, items, false, &conditioned);
         LootTemplates_Fishing.CollectItemIds(itr->Id, allItems, true);
         MarkItems(cache.itemSources, allItems, ITEM_SOURCE_RESTRICTED);
         if (!sObjectMgr.IsMapLootDisabled(itr->MapId))
         {
             MarkItems(cache.itemSources, items, LootSourceForMap(itr->MapId));
+            MarkConditionalItems(cache, conditioned, LootSourceForMap(itr->MapId));
             hasAvailableFishingArea = true;
         }
     }
     std::set<uint32> fallbackFishingItems;
     std::set<uint32> allFallbackFishingItems;
-    LootTemplates_Fishing.CollectItemIds(0, fallbackFishingItems);
+    LootConditionedItemMap fallbackFishingConditioned;
+    LootTemplates_Fishing.CollectItemIds(0, fallbackFishingItems, false,
+        &fallbackFishingConditioned);
     LootTemplates_Fishing.CollectItemIds(0, allFallbackFishingItems, true);
     MarkItems(cache.itemSources, allFallbackFishingItems,
         ITEM_SOURCE_RESTRICTED);
     if (hasAvailableFishingArea)
+    {
         MarkItems(cache.itemSources, fallbackFishingItems,
             ITEM_SOURCE_WORLD_LOOT);
+        MarkConditionalItems(cache, fallbackFishingConditioned,
+            ITEM_SOURCE_WORLD_LOOT);
+    }
 
     std::set<uint32> otherItems;
     std::set<uint32> allOtherItems;
-    LootTemplates_Item.CollectAllItemIds(otherItems);
-    LootTemplates_Mail.CollectAllItemIds(otherItems);
-    LootTemplates_Disenchant.CollectAllItemIds(otherItems);
+    LootConditionedItemMap otherConditioned;
+    LootTemplates_Item.CollectAllItemIds(otherItems, false, &otherConditioned);
+    LootTemplates_Mail.CollectAllItemIds(otherItems, false, &otherConditioned);
+    LootTemplates_Disenchant.CollectAllItemIds(otherItems, false, &otherConditioned);
     LootTemplates_Item.CollectAllItemIds(allOtherItems, true);
     LootTemplates_Mail.CollectAllItemIds(allOtherItems, true);
     LootTemplates_Disenchant.CollectAllItemIds(allOtherItems, true);
     MarkItems(cache.itemSources, allOtherItems, ITEM_SOURCE_RESTRICTED);
     MarkItems(cache.itemSources, otherItems, ITEM_SOURCE_OTHER);
+    MarkConditionalItems(cache, otherConditioned, ITEM_SOURCE_OTHER);
     return availableCreatures;
+}
+
+// Reagent items referenced by the Totem fields of any spell (shaman totems).
+std::set<uint32> CollectSpellTotemItems()
+{
+    std::set<uint32> items;
+    for (uint32 spellId = 1; spellId < sSpellMgr.GetMaxSpellId(); ++spellId)
+    {
+        SpellEntry const* spell = sSpellMgr.GetSpellEntry(spellId);
+        if (!spell)
+            continue;
+        for (uint32 totem : spell->Totem)
+            if (totem)
+                items.insert(totem);
+    }
+    return items;
+}
+
+// Class abilities are the spells listed under a SKILL_CATEGORY_CLASS skill
+// line; profession recipes, languages and generic spells are excluded.
+bool IsClassAbility(uint32 spellId)
+{
+    SkillLineAbilityMapBounds const bounds =
+        sSpellMgr.GetSkillLineAbilityMapBoundsBySpellId(spellId);
+    for (SkillLineAbilityMap::const_iterator itr = bounds.first; itr != bounds.second; ++itr)
+    {
+        SkillLineEntry const* skill = itr->second ?
+            sSkillLineStore.LookupEntry(itr->second->skillId) : nullptr;
+        if (skill && skill->categoryId == SKILL_CATEGORY_CLASS)
+            return true;
+    }
+    return false;
+}
+
+// Union of the class masks that may own a skill line (fallback when a
+// SkillLineAbility entry carries no class mask of its own).
+uint32 SkillLineClassMask(uint32 skillId)
+{
+    uint32 mask = 0;
+    SkillRaceClassInfoMapBounds const bounds =
+        sSpellMgr.GetSkillRaceClassInfoMapBounds(skillId);
+    for (SkillRaceClassInfoMap::const_iterator itr = bounds.first; itr != bounds.second; ++itr)
+        if (itr->second)
+            mask |= itr->second->classMask;
+    return mask;
+}
+
+// Items that teach class abilities on use (AQ40 tomes, Dire Maul codices,
+// Tranquilizing Shot, Polymorph variants, ...). Trainers never offer these.
+void BuildSpellBooks(AutoProgressionCache& cache)
+{
+    for (auto const& entry : sObjectMgr.GetItemPrototypeMap())
+    {
+        ItemPrototype const& item = entry.second;
+        if (item.HasExtraFlag(ITEM_EXTRA_NOT_OBTAINABLE))
+            continue;
+
+        SpellBook book;
+        book.itemId = item.ItemId;
+        for (uint8 slot = 0; slot < MAX_ITEM_PROTO_SPELLS; ++slot)
+        {
+            if (!item.Spells[slot].SpellId ||
+                item.Spells[slot].SpellTrigger != ITEM_SPELLTRIGGER_ON_USE)
+                continue;
+            SpellEntry const* useSpell = sSpellMgr.GetSpellEntry(item.Spells[slot].SpellId);
+            if (!useSpell)
+                continue;
+            for (uint8 effect = 0; effect < MAX_EFFECT_INDEX; ++effect)
+            {
+                uint32 const taught = useSpell->EffectTriggerSpell[effect];
+                // Pet grimoires use the same effect but target the pet.
+                if (useSpell->Effect[effect] != SPELL_EFFECT_LEARN_SPELL || !taught ||
+                    useSpell->EffectImplicitTargetA[effect] == TARGET_UNIT_CASTER_PET ||
+                    !sSpellMgr.GetSpellEntry(taught) || !IsClassAbility(taught) ||
+                    std::find(book.spells.begin(), book.spells.end(), taught) != book.spells.end())
+                    continue;
+                book.spells.push_back(taught);
+            }
+        }
+        if (!book.spells.empty())
+            cache.spellBooks.push_back(std::move(book));
+    }
 }
 
 void BuildAutoProgressionCache(AutoProgressionCache& cache)
@@ -792,12 +1013,17 @@ void BuildAutoProgressionCache(AutoProgressionCache& cache)
             if (item.ItemSet)
                 ++cache.itemSetSizes[item.ItemSet];
         }
+        else if (item.Class == ITEM_CLASS_PROJECTILE &&
+            item.InventoryType == INVTYPE_AMMO &&
+            !item.HasExtraFlag(ITEM_EXTRA_NOT_OBTAINABLE))
+            cache.ammoItems.push_back(item.ItemId);
     }
 
     std::set<uint32> const availableCreatureEntries =
         MarkLootSources(cache);
     BuildTrainerCache(cache.trainers, availableCreatureEntries);
     cache.improvements = BuildImprovementCandidates();
+    BuildSpellBooks(cache);
 
     for (uint32 id = 0; id < sObjectMgr.GetMaxSkillLineAbilityId(); ++id)
     {
@@ -805,20 +1031,61 @@ void BuildAutoProgressionCache(AutoProgressionCache& cache)
         if (!ability)
             continue;
         SkillLineEntry const* skill = sSkillLineStore.LookupEntry(ability->skillId);
-        if (!skill || (skill->categoryId != SKILL_CATEGORY_PROFESSION &&
-            skill->categoryId != SKILL_CATEGORY_SECONDARY))
+        if (!skill)
+            continue;
+        bool const profession = skill->categoryId == SKILL_CATEGORY_PROFESSION ||
+            skill->categoryId == SKILL_CATEGORY_SECONDARY;
+        bool const classSkill = skill->categoryId == SKILL_CATEGORY_CLASS;
+        if (!profession && !classSkill)
             continue;
         SpellEntry const* spell = sSpellMgr.GetSpellEntry(ability->spellId);
         if (!spell)
             continue;
         for (uint8 effect = 0; effect < MAX_EFFECT_INDEX; ++effect)
-            if (spell->Effect[effect] == SPELL_EFFECT_CREATE_ITEM &&
-                spell->EffectItemType[effect])
-                cache.itemSources[spell->EffectItemType[effect]] |=
-                    sObjectMgr.IsSpellDisabled(ability->spellId) ?
-                    ITEM_SOURCE_RESTRICTED : ITEM_SOURCE_CRAFTED;
+        {
+            if (spell->Effect[effect] != SPELL_EFFECT_CREATE_ITEM ||
+                !spell->EffectItemType[effect])
+                continue;
+            uint32 const created = spell->EffectItemType[effect];
+            if (sObjectMgr.IsSpellDisabled(ability->spellId))
+                cache.itemSources[created] |= ITEM_SOURCE_RESTRICTED;
+            else if (profession)
+                cache.itemSources[created] |= ITEM_SOURCE_CRAFTED;
+            else
+            {
+                // Class-conjured gear (warlock Spellstones/Firestones): only the
+                // creating class can ever hold it.
+                cache.itemSources[created] |= ITEM_SOURCE_CLASS_CREATED;
+                cache.classCreatedItems[created] |= ability->classmask ?
+                    ability->classmask : SkillLineClassMask(ability->skillId);
+            }
+        }
     }
 
+    // Items produced by using another obtainable item (e.g. Sul'thraze from
+    // combining the two Zul'Farrak blades) are reachable through that item.
+    for (auto const& entry : sObjectMgr.GetItemPrototypeMap())
+    {
+        ItemPrototype const& sourceItem = entry.second;
+        if (sourceItem.HasExtraFlag(ITEM_EXTRA_NOT_OBTAINABLE))
+            continue;
+        for (uint8 slot = 0; slot < MAX_ITEM_PROTO_SPELLS; ++slot)
+        {
+            if (!sourceItem.Spells[slot].SpellId ||
+                sourceItem.Spells[slot].SpellTrigger != ITEM_SPELLTRIGGER_ON_USE)
+                continue;
+            SpellEntry const* useSpell = sSpellMgr.GetSpellEntry(sourceItem.Spells[slot].SpellId);
+            if (!useSpell || sObjectMgr.IsSpellDisabled(useSpell->Id))
+                continue;
+            for (uint8 effect = 0; effect < MAX_EFFECT_INDEX; ++effect)
+                if (useSpell->Effect[effect] == SPELL_EFFECT_CREATE_ITEM &&
+                    useSpell->EffectItemType[effect] &&
+                    useSpell->EffectItemType[effect] != sourceItem.ItemId)
+                    cache.itemSources[useSpell->EffectItemType[effect]] |= ITEM_SOURCE_OTHER;
+        }
+    }
+
+    std::set<uint32> const totemItems = CollectSpellTotemItems();
     for (auto const& entry : sObjectMgr.GetQuestTemplates())
     {
         Quest const* quest = entry.second.get();
@@ -839,6 +1106,44 @@ void BuildAutoProgressionCache(AutoProgressionCache& cache)
                 quest->RewChoiceItemCount[index], true);
         for (uint8 index = 0; index < QUEST_REWARDS_COUNT; ++index)
             addReward(quest->RewItemId[index], quest->RewItemCount[index], false);
+
+        // Class quests are the only source for a number of core abilities
+        // (stances, pets, poisons, forms, totems, priest racials, ...).
+        if (quest->GetRequiredClasses())
+        {
+            ClassQuestGrant grant;
+            grant.questId = entry.first;
+            grant.minLevel = quest->GetMinLevel();
+            grant.requiredClasses = quest->GetRequiredClasses();
+            grant.requiredRaces = quest->GetRequiredRaces();
+            uint32 const rewardSpells[] =
+                { quest->GetRewSpellCast(), quest->GetRewSpell() };
+            for (uint32 rewardSpellId : rewardSpells)
+            {
+                SpellEntry const* rewardSpell = rewardSpellId ?
+                    sSpellMgr.GetSpellEntry(rewardSpellId) : nullptr;
+                if (!rewardSpell)
+                    continue;
+                for (uint8 effect = 0; effect < MAX_EFFECT_INDEX; ++effect)
+                    if (rewardSpell->Effect[effect] == SPELL_EFFECT_LEARN_SPELL &&
+                        rewardSpell->EffectTriggerSpell[effect] &&
+                        rewardSpell->EffectImplicitTargetA[effect] != TARGET_UNIT_CASTER_PET &&
+                        std::find(grant.spells.begin(), grant.spells.end(),
+                            rewardSpell->EffectTriggerSpell[effect]) == grant.spells.end())
+                        grant.spells.push_back(rewardSpell->EffectTriggerSpell[effect]);
+            }
+            for (uint8 index = 0; index < QUEST_REWARDS_COUNT; ++index)
+            {
+                uint32 const itemId = quest->RewItemId[index];
+                ItemPrototype const* reward = itemId ?
+                    sObjectMgr.GetItemPrototype(itemId) : nullptr;
+                if (reward && reward->Class == ITEM_CLASS_REAGENT &&
+                    totemItems.count(itemId))
+                    grant.items.push_back(itemId);
+            }
+            if (!grant.spells.empty() || !grant.items.empty())
+                cache.classQuestGrants.push_back(std::move(grant));
+        }
     }
 
 #ifdef MANGOS_DEBUG
@@ -858,10 +1163,12 @@ void BuildAutoProgressionCache(AutoProgressionCache& cache)
                 ++restrictedMappings;
 
         sLog.Out(LOG_BASIC, LOG_LVL_DEBUG,
-            "PlayerAutoProgression[debug]: cache rebuilt in %u ms; equipment=%u, sourceMappings=%u (restricted=%u), questRewardItems=%u (links=%u), trainerSources=%u, improvements=%u.",
+            "PlayerAutoProgression[debug]: cache rebuilt in %u ms; equipment=%u, ammo=%u, sourceMappings=%u (restricted=%u), questRewardItems=%u (links=%u), classQuestGrants=%u, spellBooks=%u, trainerSources=%u, improvements=%u.",
             WorldTimer::getMSTimeDiffToNow(debugStarted),
-            uint32(cache.equipmentItems.size()), uint32(cache.itemSources.size()),
+            uint32(cache.equipmentItems.size()), uint32(cache.ammoItems.size()),
+            uint32(cache.itemSources.size()),
             restrictedMappings, uint32(cache.rewardQuests.size()), rewardLinks,
+            uint32(cache.classQuestGrants.size()), uint32(cache.spellBooks.size()),
             trainerSources, uint32(cache.improvements.size()));
     }
 #endif
@@ -871,7 +1178,13 @@ std::shared_ptr<AutoProgressionCache const> EnsureAutoProgressionCache()
 {
     AutoProgressionCacheState& state = GetAutoProgressionCacheState();
     std::unique_lock<std::mutex> lock(state.mutex);
-    state.condition.wait(lock, [&state]() { return state.activeUpdates == 0; });
+    // The build runs while holding the mutex, which also keeps updates out.
+    // An update running on this very thread must not be waited for.
+    std::thread::id const current = std::this_thread::get_id();
+    state.condition.wait(lock, [&state, current]()
+    {
+        return state.activeUpdates == 0 || state.updateThread == current;
+    });
     if (!state.dirty && state.snapshot)
         return state.snapshot;
 
@@ -926,21 +1239,151 @@ uint32 EnabledItemSources(uint32 mask, bool includeQuest)
     return enabled;
 }
 
-bool CastTrainerSpell(Player* player, TrainerSpell const& trainer)
+// Evaluates a loot/vendor condition for one character without a map or loot
+// source object: static conditions (patch, game events) and character checks
+// (team, race/class, level, skills, quests, reputation, items, auras) are
+// answered by the condition system itself; anything that needs the dropping
+// creature, a map or instance state stays unavailable.
+bool LootConditionHolds(Player const* player, uint32 conditionId,
+    ConditionSource context, uint8 depth = 0)
+{
+    ConditionEntry const* condition = sConditionStorage.LookupEntry<ConditionEntry>(conditionId);
+    if (!condition || depth > 8)
+        return false;
+
+    bool result = false;
+    switch (condition->GetType())
+    {
+        case CONDITION_AND:
+        case CONDITION_OR:
+        {
+            bool const isAnd = condition->GetType() == CONDITION_AND;
+            result = isAnd;
+            for (uint8 index = 0; index < 4; ++index)
+            {
+                uint32 const child = uint32(condition->GetValue(index));
+                if (!child)
+                    continue;
+                bool const holds = LootConditionHolds(player, child, context, depth + 1);
+                if (isAnd && !holds) { result = false; break; }
+                if (!isAnd && holds) { result = true; break; }
+            }
+            break;
+        }
+        case CONDITION_NOT:
+            result = !LootConditionHolds(player, uint32(condition->GetValue(0)),
+                context, depth + 1);
+            break;
+        case CONDITION_NONE:
+        case CONDITION_WOW_PATCH:
+        case CONDITION_ACTIVE_GAME_EVENT:
+        case CONDITION_ACTIVE_HOLIDAY:
+        case CONDITION_SAVED_VARIABLE:
+        case CONDITION_LOCAL_TIME:
+        case CONDITION_TEAM:
+        case CONDITION_RACE_CLASS:
+        case CONDITION_LEVEL:
+        case CONDITION_GENDER:
+        case CONDITION_IS_PLAYER:
+        case CONDITION_SKILL:
+        case CONDITION_SKILL_BELOW:
+        case CONDITION_SPELL:
+        case CONDITION_AURA:
+        case CONDITION_AD_COMMISSION_AURA:
+        case CONDITION_ITEM:
+        case CONDITION_ITEM_WITH_BANK:
+        case CONDITION_ITEM_EQUIPPED:
+        case CONDITION_QUESTREWARDED:
+        case CONDITION_QUESTTAKEN:
+        case CONDITION_QUEST_NONE:
+        case CONDITION_QUESTAVAILABLE:
+        case CONDITION_REPUTATION_RANK_MIN:
+        case CONDITION_REPUTATION_RANK_MAX:
+        case CONDITION_PVP_RANK:
+        case CONDITION_AREA_EXPLORED:
+            // Meets() applies the reverse-result flag itself.
+            return condition->Meets(player, nullptr, nullptr, context);
+        default:
+            return false;
+    }
+    return condition->IsReversed() ? !result : result;
+}
+
+// Resolves the cached source mask of an item for one character. Conditioned
+// loot/vendor sources count when their conditions hold for this character,
+// class-conjured items (warlock Spellstones/Firestones) are available only to
+// the creating class, and bind-on-pickup items without any known source
+// (TCG/promo gear, deprecated DB rows without the NOT_OBTAINABLE flag) can
+// never be obtained. Returns false when the item is unobtainable.
+bool ResolveItemSources(Player const* player, ItemPrototype const* item,
+    AutoProgressionCache const& cache, uint32& sourceMask, bool& ownClassCreated)
+{
+    sourceMask = 0;
+    ownClassCreated = false;
+    if (!item)
+        return false;
+    auto const sourceItr = cache.itemSources.find(item->ItemId);
+    if (sourceItr != cache.itemSources.end())
+        sourceMask = sourceItr->second;
+    auto const conditionalItr = cache.conditionalSources.find(item->ItemId);
+    if (conditionalItr != cache.conditionalSources.end())
+    {
+        for (ConditionalItemSource const& conditional : conditionalItr->second)
+        {
+            if (sourceMask & conditional.source)
+                continue; // already granted unconditionally
+            bool holds = true;
+            for (uint32 conditionId : conditional.conditions)
+                if (!LootConditionHolds(player, conditionId, conditional.context))
+                {
+                    holds = false;
+                    break;
+                }
+            if (holds)
+                sourceMask |= conditional.source;
+        }
+    }
+    if (sourceMask & ITEM_SOURCE_CLASS_CREATED)
+    {
+        auto const creator = cache.classCreatedItems.find(item->ItemId);
+        ownClassCreated = creator != cache.classCreatedItems.end() &&
+            (creator->second & player->GetClassMask()) != 0;
+        sourceMask &= ~uint32(ITEM_SOURCE_CLASS_CREATED);
+    }
+    if (ownClassCreated)
+        return true;
+    if (!sourceMask && (item->Bonding == BIND_WHEN_PICKED_UP ||
+        item->Bonding == BIND_QUEST_ITEM || item->Bonding == BIND_QUEST_ITEM1))
+        return false;
+    return true;
+}
+
+// Teaches the spells behind a trainer entry directly, exactly like the GM
+// ".learn all_trainer" helper does. Casting the trainer's learn spell would
+// hand ownership of the Spell object to a SpellEvent on the player, so it
+// must never be deleted by the caller; learning directly avoids that trap
+// and the per-spell Spell/event overhead entirely.
+bool LearnTrainerSpell(Player* player, TrainerSpell const& trainer)
 {
     SpellEntry const* info = sSpellMgr.GetSpellEntry(trainer.spell);
     if (!info)
         return false;
 
-    Spell* spell = new Spell(player, info, true);
-    SpellCastTargets targets;
-    targets.setUnitTarget(player);
-    SpellCastResult const result = spell->prepare(std::move(targets));
-    if (result == SPELL_CAST_OK)
-        spell->update(1);
-    else
-        delete spell;
-    return result == SPELL_CAST_OK;
+    bool learned = false;
+    for (uint8 effect = 0; effect < MAX_EFFECT_INDEX; ++effect)
+    {
+        if (info->Effect[effect] != SPELL_EFFECT_LEARN_SPELL ||
+            info->EffectImplicitTargetA[effect] == TARGET_UNIT_CASTER_PET)
+            continue;
+        uint32 const spellId = info->EffectTriggerSpell[effect];
+        if (!spellId || player->HasSpell(spellId) ||
+            !sSpellMgr.GetSpellEntry(spellId) ||
+            !player->IsSpellFitByClassAndRace(spellId))
+            continue;
+        player->LearnSpell(spellId, false);
+        learned = true;
+    }
+    return learned;
 }
 
 uint32 LearnSources(Player* player, std::vector<TrainerSource> const& sources)
@@ -961,13 +1404,138 @@ uint32 LearnSources(Player* player, std::vector<TrainerSource> const& sources)
                 player->GetTrainerSpellState(&trainer) != TRAINER_SPELL_GREEN)
                 continue;
             attempted.insert(trainer.spell);
-            if (CastTrainerSpell(player, trainer))
+            if (LearnTrainerSpell(player, trainer))
                 ++learned;
         }
     }
     return learned;
 }
 
+bool ClassQuestGrantApplies(Player const* player, ClassQuestGrant const& grant)
+{
+    if (!(grant.requiredClasses & player->GetClassMask()))
+        return false;
+    if (grant.requiredRaces && !(grant.requiredRaces & player->GetRaceMask()))
+        return false;
+    if (grant.minLevel > player->GetLevel())
+        return false;
+    Quest const* quest = sObjectMgr.GetQuestTemplate(grant.questId);
+    return quest && quest->IsActive() &&
+        sObjectMgr.IsQuestTemplateLoaded(grant.questId);
+}
+
+// Spells that only class quests teach (stances, pets, poisons, forms, totem
+// ranks, priest racials, ...). The quest itself stays available; finishing it
+// later simply re-teaches already known spells.
+uint32 LearnClassQuestSpells(Player* player, AutoProgressionCache const& cache)
+{
+    if (!sWorld.getConfig(CONFIG_BOOL_AUTO_LEARN_CLASS_QUEST_SPELLS))
+        return 0;
+
+    uint32 learned = 0;
+    for (ClassQuestGrant const& grant : cache.classQuestGrants)
+    {
+        if (grant.spells.empty() || !ClassQuestGrantApplies(player, grant))
+            continue;
+        for (uint32 spellId : grant.spells)
+        {
+            if (player->HasSpell(spellId) || !sSpellMgr.GetSpellEntry(spellId) ||
+                !player->IsSpellFitByClassAndRace(spellId) ||
+                sObjectMgr.IsSpellDisabled(spellId))
+                continue;
+            player->LearnSpell(spellId, false);
+            ++learned;
+        }
+    }
+    return learned;
+}
+
+// Class reagents handed out by class quests (the four shaman totems). The
+// client refuses every totem cast without the matching item in the bags.
+uint32 GrantClassQuestItems(Player* player, AutoProgressionCache const& cache)
+{
+    if (!sWorld.getConfig(CONFIG_BOOL_AUTO_LEARN_CLASS_QUEST_ITEMS))
+        return 0;
+
+    uint32 granted = 0;
+    for (ClassQuestGrant const& grant : cache.classQuestGrants)
+    {
+        if (grant.items.empty() || !ClassQuestGrantApplies(player, grant))
+            continue;
+        for (uint32 itemId : grant.items)
+        {
+            ItemPrototype const* proto = sObjectMgr.GetItemPrototype(itemId);
+            if (!proto || player->HasItemCount(itemId, 1, true) ||
+                player->CanUseItem(proto, false) != EQUIP_ERR_OK)
+                continue;
+            ItemPosCountVec destination;
+            if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, destination, itemId, 1) != EQUIP_ERR_OK)
+                continue;
+            if (player->StoreNewItem(destination, itemId, true))
+                ++granted;
+        }
+    }
+    return granted;
+}
+
+bool SpellBookAvailable(Player* player, ItemPrototype const* book,
+    AutoProgressionCache const& cache)
+{
+    if (!book || book->RequiredHonorRank || book->RequiredCityRank)
+        return false;
+    if (player->CanUseItem(book, false) != EQUIP_ERR_OK)
+        return false;
+    if (book->RequiredReputationFaction &&
+        uint32(player->GetReputationRank(book->RequiredReputationFaction)) <
+            book->RequiredReputationRank)
+        return false;
+
+    // Books follow the same acquisition switches as equipment.
+    uint32 sourceMask = 0;
+    bool ownClassCreated = false;
+    if (!ResolveItemSources(player, book, cache, sourceMask, ownClassCreated))
+        return false;
+    return ownClassCreated || EnabledItemSources(sourceMask, true) != 0;
+}
+
+// Max-rank tomes/codices/grimoires (AQ40, Dire Maul, Molten Core, ...) and
+// other item-taught class abilities that no trainer offers.
+uint32 LearnSpellBooks(Player* player, AutoProgressionCache const& cache)
+{
+    if (!sWorld.getConfig(CONFIG_BOOL_AUTO_LEARN_SPELL_BOOKS))
+        return 0;
+
+    uint32 learned = 0;
+    for (SpellBook const& book : cache.spellBooks)
+    {
+        bool needed = false;
+        for (uint32 spellId : book.spells)
+            if (!player->HasSpell(spellId))
+                needed = true;
+        if (!needed || !SpellBookAvailable(player,
+                sObjectMgr.GetItemPrototype(book.itemId), cache))
+            continue;
+        for (uint32 spellId : book.spells)
+        {
+            if (player->HasSpell(spellId) ||
+                !player->IsSpellFitByClassAndRace(spellId) ||
+                sObjectMgr.IsSpellDisabled(spellId))
+                continue;
+            // Higher ranks still require the previous rank, like a trainer.
+            if (SpellChainNode const* chain = sSpellMgr.GetSpellChainNode(spellId))
+                if ((chain->prev && !player->HasSpell(chain->prev)) ||
+                    (chain->req && !player->HasSpell(chain->req)))
+                    continue;
+            player->LearnSpell(spellId, false);
+            ++learned;
+        }
+    }
+    return learned;
+}
+
+// Level-bound class skills: weapons, Defense and the rogue-only Poisons and
+// Lockpicking lines (poison recipes at trainers require Poisons skill values
+// up to 280).
 void MaxCombatSkills(Player* player)
 {
     uint16 const maximum = uint16(std::min<uint32>(player->GetLevel() * 5, 300));
@@ -976,7 +1544,7 @@ void MaxCombatSkills(Player* player)
         SKILL_SWORDS, SKILL_AXES, SKILL_BOWS, SKILL_GUNS, SKILL_MACES, SKILL_2H_SWORDS,
         SKILL_STAVES, SKILL_2H_MACES, SKILL_UNARMED, SKILL_2H_AXES, SKILL_DAGGERS,
         SKILL_THROWN, SKILL_CROSSBOWS, SKILL_WANDS, SKILL_POLEARMS, SKILL_FIST_WEAPONS,
-        SKILL_DEFENSE
+        SKILL_DEFENSE, SKILL_POISONS, SKILL_LOCKPICKING
     };
     for (uint16 skill : skills)
         if (player->GetSkillValue(skill))
@@ -1012,6 +1580,24 @@ struct Weights
     std::array<WeaponSkillTalentProfile, 4> weaponSkillTalentProfiles = {};
     uint8 weaponSkillTalentProfileCount = 0;
 };
+
+// Offhand weapons contribute less than the mainhand; two-hander specs (Arms,
+// Retribution, Enhancement) lose most of their special-attack value with a
+// one-hand pair, so their offhand weapon counts even less.
+float OffhandWeaponScale(Weights const& w)
+{
+    return w.twoHand ? 0.35f : 0.70f;
+}
+
+// How often a weapon's on-hit procs actually fire: melee weapon procs only
+// matter for specs that swing (a hunter's stat sticks almost never do),
+// ranged weapon procs only for specs that shoot.
+float WeaponProcActivity(Weights const& w, ItemPrototype const* item)
+{
+    if (item && item->IsRangedWeapon())
+        return std::min(1.0f, std::max(0.0f, w.rangedDps / 16.0f));
+    return std::min(1.0f, std::max(0.0f, w.weaponDps / 13.0f));
+}
 
 Weights StrengthMelee()
 {
@@ -1257,6 +1843,10 @@ Weights GetWeights(Player* player)
         case CLASS_HUNTER:
             w = AgilityMelee(); w.str = 0.15f; w.agi = 2.7f; w.intl = 0.45f;
             w.weaponDps = 0.35f; w.rangedDps = 16; w.rap = 1; w.dualWield = false;
+            // "+N Attack Power" items carry a melee and a ranged aura with the
+            // same value; the ranged half is what matters and is scored via
+            // rap, so the melee half must not double the item's value.
+            w.ap = 0.1f;
             break;
         case CLASS_ROGUE:
             w = AgilityMelee(); w.agi = 2.5f;
@@ -1477,8 +2067,11 @@ bool EffectTargetsHostile(SpellEntry const* spell, uint8 effectIndex)
     return !spell->IsPositiveEffect(SpellEffectIndex(effectIndex));
 }
 
+// consumableAbsorb: the caller (proc/use scoring) values absorb shields by
+// absorbed damage per second itself; a shield is used up by damage, so its
+// aura uptime says nothing about how much it prevents.
 float ScoreAura(Weights const& w, SpellEntry const* spell, float trigger,
-    uint8 depth = 0)
+    uint8 depth = 0, bool consumableAbsorb = false)
 {
     if (!spell || trigger <= 0)
         return 0;
@@ -1539,7 +2132,7 @@ float ScoreAura(Weights const& w, SpellEntry const* spell, float trigger,
                     spell->EffectTriggerSpell[i] != spell->Id)
                     score += ScoreAura(w, sSpellMgr.GetSpellEntry(spell->EffectTriggerSpell[i]),
                         spell->procChance ? float(spell->procChance) / 100.0f : 0.20f,
-                        depth + 1);
+                        depth + 1, consumableAbsorb);
                 continue;
             case SPELL_AURA_MOD_DAMAGE_DONE:
                 if (!positive && rawValue < 0)
@@ -1643,6 +2236,8 @@ float ScoreAura(Weights const& w, SpellEntry const* spell, float trigger,
                     score += ScoreItemMod(w, ITEM_MOD_MANA, scoredValue);
                 break;
             case SPELL_AURA_SCHOOL_ABSORB:
+                if (consumableAbsorb)
+                    break; // valued per absorbed damage by the proc/use caller
                 score += scoredValue * (0.30f + w.sta * 0.08f) * SurvivalScale(); break;
             case SPELL_AURA_MOD_SKILL:
             case SPELL_AURA_MOD_SKILL_TALENT:
@@ -1732,7 +2327,7 @@ float ScoreProcPayload(Weights const& w, ItemPrototype const* item, SpellEntry c
         return 0;
 
     float const uptime = ProcUptime(spell, ppm);
-    float score = ScoreAura(w, spell, ProcAuraExposure(spell, ppm));
+    float score = ScoreAura(w, spell, ProcAuraExposure(spell, ppm), 0, true);
     if (spell->Id == 18803 && w.caster)
     {
         constexpr float savedCastSeconds = 1.0f;
@@ -1763,6 +2358,17 @@ float ScoreProcPayload(Weights const& w, ItemPrototype const* item, SpellEntry c
                 spell->GetDuration() >= int32(period))
                 score += value * 1000.0f / float(period) * uptime *
                     throughput * WeaponScale();
+            continue;
+        }
+        if (IsScoredAuraEffect(spell->Effect[i]) &&
+            spell->EffectApplyAuraName[i] == SPELL_AURA_SCHOOL_ABSORB)
+        {
+            // A shield is consumed by incoming damage: a 500-point absorb once
+            // per 30 minutes prevents 500 damage per 30 minutes, no matter how
+            // long the aura would linger. Value it like the healing half of a
+            // leech proc instead of by aura uptime.
+            if (!hostileTarget && rawValue > 0)
+                score += perSecond * (0.5f + w.sta * 0.1f) * SurvivalScale();
             continue;
         }
 
@@ -1860,7 +2466,8 @@ float ScoreEnchantment(Weights const& w, ItemPrototype const* item,
                     w.rangedDps : w.weaponDps;
                 if (throughput > 0)
                     score += ScoreProcPayload(w, item, procSpell,
-                        EnchantProcPpm(item, procSpell, enchant->amount[i]), 0);
+                        EnchantProcPpm(item, procSpell, enchant->amount[i]) *
+                            WeaponProcActivity(w, item), 0);
                 break;
             }
             case ITEM_ENCHANTMENT_TYPE_DAMAGE:
@@ -1963,7 +2570,8 @@ float ScoreItem(Weights const& w, ItemPrototype const* item)
                     ppm = float(spell->procChance) * 600.0f /
                         float(item->Delay);
                 if (ppm > 0)
-                    score += ScoreProcPayload(w, item, spell, ppm, 0);
+                    score += ScoreProcPayload(w, item, spell,
+                        ppm * WeaponProcActivity(w, item), 0);
                 break;
             }
             default:
@@ -2404,8 +3012,12 @@ float PlannedWeaponSkillUsage(Weights const& weights,
     if (ranged && ranged->Class == ITEM_CLASS_WEAPON &&
         ranged->GetProficiencySkill() == skill)
     {
+        // Ranged attacks have no glancing blows; weapon skill only trims the
+        // miss chance a little, unlike melee where +5 skill is worth several
+        // percent of damage.
+        constexpr float rangedSkillValue = 0.15f;
         float const rangedScale = std::min(1.0f,
-            std::max(0.0f, weights.rangedDps / 16.0f));
+            std::max(0.0f, weights.rangedDps / 16.0f)) * rangedSkillValue;
         usage = std::max(usage, rangedScale);
     }
     return usage;
@@ -2513,7 +3125,7 @@ float ScoreEquipmentPlan(Weights const& w, Player const* player,
         if (slot == EQUIPMENT_SLOT_MAINHAND && w.twoHand)
             itemScore *= item->InventoryType == INVTYPE_2HWEAPON ? 1.20f : 0.90f;
         else if (slot == EQUIPMENT_SLOT_OFFHAND && item->Class == ITEM_CLASS_WEAPON)
-            itemScore *= 0.70f;
+            itemScore *= OffhandWeaponScale(w);
         score += itemScore;
         itemSpellHit += StaticSpellHitFromItem(item);
         if (current && current->GetEntry() == item->ItemId)
@@ -2856,6 +3468,41 @@ void RestoreStoredItem(Player* player, uint8 slot, Item* item)
     player->EquipItem((uint16(INVENTORY_SLOT_BAG_0) << 8) | slot, item, true);
 }
 
+bool MailReplacedItemsEnabled();
+
+// Bags full: send the replaced item to the character's mailbox instead of
+// blocking the upgrade (same sequence the mail handler uses).
+bool MailEquippedItem(Player* player, uint8 slot)
+{
+    Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+    if (!item)
+        return true;
+    if (!MailReplacedItemsEnabled() || !player->GetSession())
+        return false;
+
+    player->MoveItemFromInventory(INVENTORY_SLOT_BAG_0, slot, true);
+    CharacterDatabase.BeginTransaction(player->GetGUIDLow());
+    item->DeleteFromInventoryDB();
+    item->SaveToDB();
+    CharacterDatabase.PExecute("UPDATE `item_instance` SET `owner_guid` = '%u' WHERE `guid`='%u'",
+        player->GetGUIDLow(), item->GetGUIDLow());
+    CharacterDatabase.CommitTransaction();
+
+    MailDraft("Auto progression: replaced item",
+        "This piece of gear was replaced by an upgrade while your bags were full.")
+        .AddItem(item)
+        .SendMailTo(MailReceiver(player, player->GetObjectGuid()),
+            MailSender(MAIL_NORMAL, player->GetGUIDLow()), MAIL_CHECK_MASK_COPIED);
+    return true;
+}
+
+bool StoreOrMailEquippedItem(Player* player, uint8 slot)
+{
+    if (MoveEquippedItemToBag(player, slot))
+        return true;
+    return MailEquippedItem(player, slot);
+}
+
 struct QuestRewardCatalog
 {
     std::map<uint32, uint32> minimumLevelForPlayer;
@@ -3029,10 +3676,20 @@ bool ItemEligibleForAutoEquip(Player* player, ItemPrototype const* item,
     if (!PassesBasicAutoEquipRules(player, item))
         return false;
 
+    // Catalog pruning: items far below the character level cannot win a slot
+    // against level-appropriate gear, but they still cost scoring and plan
+    // optimization time for every candidate list they end up in.
+    uint32 const levelWindow =
+        sWorld.getConfig(CONFIG_UINT32_AUTO_EQUIP_CANDIDATE_ITEM_LEVEL_WINDOW);
+    if (levelWindow && item->ItemLevel + levelWindow < player->GetLevel())
+        return false;
+
     uint32 sourceMask = 0;
-    auto const sourceItr = cache.itemSources.find(item->ItemId);
-    if (sourceItr != cache.itemSources.end())
-        sourceMask = sourceItr->second;
+    bool ownClassCreated = false;
+    if (!ResolveItemSources(player, item, cache, sourceMask, ownClassCreated))
+        return false;
+    if (ownClassCreated)
+        return true;
     uint32 const enabledNonQuest = EnabledItemSources(sourceMask, false);
     bool questAvailable = false;
     if (sourceMask & ITEM_SOURCE_QUEST)
@@ -3155,7 +3812,7 @@ void EnforceQuestRewardCounts(Player* player, Weights const& weights,
             score *= item->InventoryType == INVTYPE_2HWEAPON ? 1.20f : 0.90f;
         else if (slot == EQUIPMENT_SLOT_OFFHAND &&
             item->Class == ITEM_CLASS_WEAPON)
-            score *= 0.70f;
+            score *= OffhandWeaponScale(weights);
         planned[item->ItemId].push_back({ slot, score,
             current && current->GetEntry() == item->ItemId });
     }
@@ -3247,7 +3904,7 @@ void EnforceQuestChoiceExclusivity(Player* player, Weights const& weights,
         if (slot == EQUIPMENT_SLOT_MAINHAND && weights.twoHand)
             score *= item->InventoryType == INVTYPE_2HWEAPON ? 1.20f : 0.90f;
         else if (slot == EQUIPMENT_SLOT_OFFHAND && item->Class == ITEM_CLASS_WEAPON)
-            score *= 0.70f;
+            score *= OffhandWeaponScale(weights);
         requests.push_back({ slot, score,
             current && current->GetEntry() == item->ItemId });
     }
@@ -3791,7 +4448,7 @@ void BackfillEmptyPlanSlots(Player* player, Weights const& weights,
         for (Candidate const& off : offOptions)
         {
             float total = mainScore + off.score *
-                (off.item->Class == ITEM_CLASS_WEAPON ? 0.70f : 1.0f);
+                (off.item->Class == ITEM_CLASS_WEAPON ? OffhandWeaponScale(weights) : 1.0f);
             if (weights.dualWield && off.item->Class == ITEM_CLASS_WEAPON)
                 total += 8.0f;
             std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> trial;
@@ -3821,6 +4478,56 @@ void BackfillEmptyPlanSlots(Player* player, Weights const& weights,
         plan = bestPlan;
 }
 
+// DeleteReplacedItems only destroys gear up to the configured quality; rarer
+// pieces (epics by default) are moved to the bags instead so player-farmed
+// items are never lost silently.
+// Gear generated by AutoEquip is marked with the character as its creator
+// ("Made by <name>" in the tooltip). That is what lets DeleteReplacedItems tell
+// generated epics apart from gear the character farmed or was given.
+bool IsGeneratedItem(Item const* item)
+{
+    return item && sWorld.getConfig(CONFIG_BOOL_AUTO_EQUIP_MARK_GENERATED_ITEMS) &&
+        !item->GetGuidValue(ITEM_FIELD_CREATOR).IsEmpty() &&
+        item->GetGuidValue(ITEM_FIELD_CREATOR) == item->GetOwnerGuid();
+}
+
+Item* CreateGeneratedItem(Player* player, ItemPrototype const* item, uint32 count)
+{
+    Item* created = Item::CreateItem(item->ItemId, count, player->GetObjectGuid());
+    if (created && sWorld.getConfig(CONFIG_BOOL_AUTO_EQUIP_MARK_GENERATED_ITEMS))
+        created->SetGuidValue(ITEM_FIELD_CREATOR, player->GetObjectGuid());
+    return created;
+}
+
+bool DeletesReplacedItem(Item const* current, bool deleteReplaced)
+{
+    if (!current || !deleteReplaced)
+        return false;
+    // Audit items are synthetic; keeping the audit independent of bag space
+    // keeps its results deterministic.
+    if (PlayerAutoProgression::IsAuditExecution())
+        return true;
+    if (IsGeneratedItem(current))
+        return true;
+    return current->GetProto()->Quality <=
+        sWorld.getConfig(CONFIG_UINT32_AUTO_EQUIP_DELETE_REPLACED_MAX_QUALITY);
+}
+
+bool MailReplacedItemsEnabled()
+{
+    return sWorld.getConfig(CONFIG_BOOL_AUTO_EQUIP_MAIL_REPLACED_ITEMS) &&
+        !PlayerAutoProgression::IsAuditExecution();
+}
+
+// Thrown weapons are consumed per attack; a single throwing knife is useless.
+uint32 PlannedItemCount(ItemPrototype const* item)
+{
+    if (item && item->Class == ITEM_CLASS_WEAPON &&
+        item->SubClass == ITEM_SUBCLASS_WEAPON_THROWN)
+        return std::max<uint32>(1, item->GetMaxStackSize());
+    return 1;
+}
+
 bool EquipPlannedItem(Player* player, uint8 slot, ItemPrototype const* item, bool replace,
     bool deleteReplaced)
 {
@@ -3830,11 +4537,12 @@ bool EquipPlannedItem(Player* player, uint8 slot, ItemPrototype const* item, boo
     Item* current = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
     if (current && current->GetEntry() == item->ItemId)
         return false;
+    bool const deleteCurrent = DeletesReplacedItem(current, deleteReplaced);
     if (current && (!replace ||
-        (deleteReplaced && (current->GetProto()->Flags & ITEM_FLAG_INDESTRUCTIBLE))))
+        (deleteCurrent && (current->GetProto()->Flags & ITEM_FLAG_INDESTRUCTIBLE))))
         return false;
 
-    Item* replacement = Item::CreateItem(item->ItemId, 1, player->GetObjectGuid());
+    Item* replacement = CreateGeneratedItem(player, item, PlannedItemCount(item));
     if (!replacement)
         return false;
 
@@ -3846,17 +4554,131 @@ bool EquipPlannedItem(Player* player, uint8 slot, ItemPrototype const* item, boo
         return false;
     }
 
-    if (current && deleteReplaced)
+    if (current && deleteCurrent)
         player->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
-    else if (current && !MoveEquippedItemToBag(player, slot))
+    else if (current && !StoreOrMailEquippedItem(player, slot))
     {
         delete replacement;
         return false;
     }
 
-    player->ItemAddedQuestCheck(replacement->GetEntry(), 1);
+    player->ItemAddedQuestCheck(replacement->GetEntry(), replacement->GetCount());
     player->EquipItem(destination, replacement, true);
     return true;
+}
+
+// A bow or gun without ammunition is dead weight (hunters would auto-shoot
+// nothing). Mirrors the PlayerBot AddHunterAmmo helper, but only hands out
+// ammunition that is obtainable through the configured acquisition sources.
+uint32 SupplyAmmo(Player* player, AutoProgressionCache const& cache)
+{
+    if (!sWorld.getConfig(CONFIG_BOOL_AUTO_EQUIP_SUPPLY_AMMO))
+        return 0;
+
+    Item* ranged = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_RANGED);
+    if (!ranged || ranged->GetProto()->Class != ITEM_CLASS_WEAPON)
+        return 0;
+
+    uint32 ammoSubClass = 0;
+    switch (ranged->GetProto()->SubClass)
+    {
+        case ITEM_SUBCLASS_WEAPON_GUN:
+            ammoSubClass = ITEM_SUBCLASS_BULLET;
+            break;
+        case ITEM_SUBCLASS_WEAPON_BOW:
+        case ITEM_SUBCLASS_WEAPON_CROSSBOW:
+            ammoSubClass = ITEM_SUBCLASS_ARROW;
+            break;
+        default:
+            return 0;
+    }
+
+    ItemPrototype const* best = nullptr;
+    float bestDamage = 0;
+    for (uint32 itemId : cache.ammoItems)
+    {
+        ItemPrototype const* proto = sObjectMgr.GetItemPrototype(itemId);
+        if (!proto || proto->SubClass != ammoSubClass ||
+            proto->RequiredLevel > player->GetLevel() ||
+            proto->RequiredHonorRank || proto->RequiredCityRank ||
+            player->CanUseAmmo(itemId) != EQUIP_ERR_OK)
+            continue;
+        if (proto->RequiredReputationFaction &&
+            uint32(player->GetReputationRank(proto->RequiredReputationFaction)) <
+                proto->RequiredReputationRank)
+            continue;
+        uint32 sourceMask = 0;
+        bool ownClassCreated = false;
+        if (!ResolveItemSources(player, proto, cache, sourceMask, ownClassCreated) ||
+            (!ownClassCreated && !EnabledItemSources(sourceMask, true)))
+            continue;
+        float const damage = proto->Damage[0].DamageMin;
+        if (!best || damage > bestDamage ||
+            (damage == bestDamage && proto->ItemLevel < best->ItemLevel))
+        {
+            best = proto;
+            bestDamage = damage;
+        }
+    }
+    if (!best)
+        return 0;
+
+    // Ammunition already in the bags: keep and select anything of the right
+    // type that is at least as good (bought or looted by the player), and
+    // clear out obsolete stacks so every level does not leave another 200
+    // arrows behind.
+    struct AmmoStack
+    {
+        uint8 bag;
+        uint8 slot;
+        Item* item;
+    };
+    std::vector<AmmoStack> stacks;
+    auto collect = [&](uint8 bag, uint8 slot, Item* item)
+    {
+        if (item && item->GetProto()->Class == ITEM_CLASS_PROJECTILE)
+            stacks.push_back({ bag, slot, item });
+    };
+    for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+        collect(INVENTORY_SLOT_BAG_0, slot, player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot));
+    for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+        if (Bag* bag = (Bag*)player->GetItemByPos(INVENTORY_SLOT_BAG_0, bagSlot))
+            for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
+                collect(bagSlot, uint8(slot), bag->GetItemByPos(uint8(slot)));
+
+    Item* better = nullptr;
+    for (AmmoStack const& stack : stacks)
+    {
+        ItemPrototype const* proto = stack.item->GetProto();
+        if (proto->SubClass == ammoSubClass && proto->Damage[0].DamageMin >= bestDamage &&
+            (!better || proto->Damage[0].DamageMin > better->GetProto()->Damage[0].DamageMin))
+            better = stack.item;
+    }
+    if (better)
+    {
+        if (player->GetUInt32Value(PLAYER_AMMO_ID) != better->GetEntry())
+            player->SetAmmo(better->GetEntry());
+        return 0;
+    }
+    for (AmmoStack const& stack : stacks)
+        if (stack.item->GetEntry() != best->ItemId &&
+            stack.item->GetProto()->Damage[0].DamageMin < bestDamage)
+            player->DestroyItem(stack.bag, stack.slot, true);
+
+    uint32 supplied = 0;
+    uint32 const stackSize = std::max<uint32>(1, best->GetMaxStackSize());
+    if (player->GetItemCount(best->ItemId, false) < stackSize)
+    {
+        ItemPosCountVec destination;
+        if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, destination,
+                best->ItemId, stackSize) == EQUIP_ERR_OK &&
+            player->StoreNewItem(destination, best->ItemId, true))
+            supplied = stackSize;
+    }
+    if (player->GetUInt32Value(PLAYER_AMMO_ID) != best->ItemId &&
+        player->HasItemCount(best->ItemId, 1))
+        player->SetAmmo(best->ItemId);
+    return supplied;
 }
 
 #ifdef MANGOS_DEBUG
@@ -3933,7 +4755,7 @@ uint32 PrepareEquipmentPlan(Player* player,
         if (result != EQUIP_ERR_OK)
             blockHands(handsToStore[i]->GetSlot(), "cannot-unequip",
                 result);
-        else if (deleteReplaced &&
+        else if (DeletesReplacedItem(handsToStore[i], deleteReplaced) &&
             (handsToStore[i]->GetProto()->Flags & ITEM_FLAG_INDESTRUCTIBLE))
             blockHands(handsToStore[i]->GetSlot(), "indestructible",
                 EQUIP_ERR_CANT_DROP_SOULBOUND);
@@ -3945,7 +4767,8 @@ uint32 PrepareEquipmentPlan(Player* player,
         InventoryResult const result = player->CanEquipNewItem(
             EQUIPMENT_SLOT_MAINHAND, destination, mainPlan->ItemId,
             currentMain != nullptr);
-        bool const transitionalError = deleteReplaced &&
+        bool const transitionalError =
+            DeletesReplacedItem(currentOff, deleteReplaced) &&
             clearsCurrentOffhandForTwoHand &&
             mainPlan->InventoryType == INVTYPE_2HWEAPON &&
             (result == EQUIP_ERR_ITEMS_CANT_BE_SWAPPED ||
@@ -3968,14 +4791,18 @@ uint32 PrepareEquipmentPlan(Player* player,
             blockHands(EQUIPMENT_SLOT_OFFHAND, "cannot-equip", result);
     }
 
-    if (!handsBlocked && !deleteReplaced && handCount)
+    std::vector<Item*> handsToKeep;
+    for (int i = 0; i < handCount; ++i)
+        if (!DeletesReplacedItem(handsToStore[i], deleteReplaced))
+            handsToKeep.push_back(handsToStore[i]);
+    if (!handsBlocked && !handsToKeep.empty() && !MailReplacedItemsEnabled())
     {
         std::vector<Item*> trial = toStore;
-        trial.insert(trial.end(), handsToStore, handsToStore + handCount);
+        trial.insert(trial.end(), handsToKeep.begin(), handsToKeep.end());
         InventoryResult const result =
             player->CanStoreItems(trial.data(), int(trial.size()));
         if (result != EQUIP_ERR_OK)
-            blockHands(handsToStore[0]->GetSlot(), "cannot-store-replaced",
+            blockHands(handsToKeep[0]->GetSlot(), "cannot-store-replaced",
                 result);
     }
 
@@ -3999,9 +4826,8 @@ uint32 PrepareEquipmentPlan(Player* player,
         plan[EQUIPMENT_SLOT_OFFHAND] =
             currentOff ? currentOff->GetProto() : nullptr;
     }
-    else if (!deleteReplaced)
-        toStore.insert(toStore.end(), handsToStore,
-            handsToStore + handCount);
+    else
+        toStore.insert(toStore.end(), handsToKeep.begin(), handsToKeep.end());
 
     for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
     {
@@ -4021,6 +4847,7 @@ uint32 PrepareEquipmentPlan(Player* player,
         if (!changes)
             continue;
 
+        bool const deleteCurrent = DeletesReplacedItem(current, deleteReplaced);
         char const* failureReason = nullptr;
         InventoryResult failureResult = EQUIP_ERR_OK;
         if (current)
@@ -4036,7 +4863,7 @@ uint32 PrepareEquipmentPlan(Player* player,
                     failureReason = "cannot-unequip";
                     failureResult = result;
                 }
-                else if (deleteReplaced &&
+                else if (deleteCurrent &&
                     (current->GetProto()->Flags & ITEM_FLAG_INDESTRUCTIBLE))
                 {
                     failureReason = "indestructible";
@@ -4058,7 +4885,7 @@ uint32 PrepareEquipmentPlan(Player* player,
             }
         }
 
-        if (!failureReason && current && !deleteReplaced)
+        if (!failureReason && current && !deleteCurrent && !MailReplacedItemsEnabled())
         {
             std::vector<Item*> trial = toStore;
             trial.push_back(current);
@@ -4082,7 +4909,7 @@ uint32 PrepareEquipmentPlan(Player* player,
             continue;
         }
 
-        if (current && !deleteReplaced)
+        if (current && !deleteCurrent)
             toStore.push_back(current);
     }
     return blockedSlots;
@@ -4171,6 +4998,54 @@ uint32 CountAvailableTrainerSpells(Player* player, AutoProgressionCache const& c
     return uint32(spells.size());
 }
 
+// Read-only counterparts of LearnClassQuestSpells/LearnSpellBooks for status
+// and preview output.
+uint32 CountLearnableClassQuestSpells(Player* player, AutoProgressionCache const& cache)
+{
+    if (!sWorld.getConfig(CONFIG_BOOL_AUTO_LEARN_CLASS_QUEST_SPELLS))
+        return 0;
+    std::set<uint32> spells;
+    for (ClassQuestGrant const& grant : cache.classQuestGrants)
+    {
+        if (!ClassQuestGrantApplies(player, grant))
+            continue;
+        for (uint32 spellId : grant.spells)
+            if (!player->HasSpell(spellId) && sSpellMgr.GetSpellEntry(spellId) &&
+                player->IsSpellFitByClassAndRace(spellId) &&
+                !sObjectMgr.IsSpellDisabled(spellId))
+                spells.insert(spellId);
+    }
+    return uint32(spells.size());
+}
+
+uint32 CountLearnableSpellBooks(Player* player, AutoProgressionCache const& cache)
+{
+    if (!sWorld.getConfig(CONFIG_BOOL_AUTO_LEARN_SPELL_BOOKS))
+        return 0;
+    std::set<uint32> spells;
+    for (SpellBook const& book : cache.spellBooks)
+    {
+        bool checkedAvailability = false;
+        bool available = false;
+        for (uint32 spellId : book.spells)
+        {
+            if (player->HasSpell(spellId) ||
+                !player->IsSpellFitByClassAndRace(spellId) ||
+                sObjectMgr.IsSpellDisabled(spellId))
+                continue;
+            if (!checkedAvailability)
+            {
+                available = SpellBookAvailable(player,
+                    sObjectMgr.GetItemPrototype(book.itemId), cache);
+                checkedAvailability = true;
+            }
+            if (available)
+                spells.insert(spellId);
+        }
+    }
+    return uint32(spells.size());
+}
+
 char const* EquipmentSlotName(uint8 slot)
 {
     static char const* names[EQUIPMENT_SLOT_END] =
@@ -4205,6 +5080,7 @@ std::string ItemSourceDescription(uint32 mask)
     add(ITEM_SOURCE_RAID_LOOT, "raid");
     add(ITEM_SOURCE_OTHER, "other");
     add(ITEM_SOURCE_RESTRICTED, "restricted");
+    add(ITEM_SOURCE_CLASS_CREATED, "class-created");
     return out.str();
 }
 
@@ -4714,6 +5590,25 @@ bool LearnNextAuditTalent(Player* player, uint8 requestedTree,
     return false;
 }
 
+// Opt-in AutoTalent: spend every free point with the same deterministic
+// "deepest legal talent in the active tree" policy the audit uses. The tree
+// is the one the character already invests in (class fallback otherwise), so
+// a player who spent even a single point keeps steering the spec.
+uint32 SpendTalentPoints(Player* player)
+{
+    uint32 spent = 0;
+    while (player->GetFreeTalentPoints() > 0)
+    {
+        uint32 talentId = 0;
+        uint32 rank = 0;
+        if (!LearnNextAuditTalent(player,
+                uint8(AutoProgressionTalentTree(player)), talentId, rank))
+            break;
+        ++spent;
+    }
+    return spent;
+}
+
 std::string AuditGearSnapshot(Player const* player, uint64& levelHash)
 {
     std::ostringstream out;
@@ -4878,7 +5773,7 @@ uint32 ValidateAuditLevel(AuditMatrixState& state,
             SKILL_2H_MACES, SKILL_UNARMED, SKILL_2H_AXES,
             SKILL_DAGGERS, SKILL_THROWN, SKILL_CROSSBOWS,
             SKILL_WANDS, SKILL_POLEARMS, SKILL_FIST_WEAPONS,
-            SKILL_DEFENSE
+            SKILL_DEFENSE, SKILL_POISONS, SKILL_LOCKPICKING
         };
         for (uint16 skill : skills)
         {
@@ -5191,8 +6086,16 @@ uint32 LearnAvailableTrainerSpells(Player* player)
     std::shared_ptr<AutoProgressionCache const> const cache =
         EnsureAutoProgressionCache();
     TrainerCache const& trainerCache = cache->trainers;
+    bool const maxSkills = sWorld.getConfig(CONFIG_BOOL_AUTO_LEARN_MAX_WEAPON_SKILLS);
 
-    uint32 learned = 0;
+    // Class quest spells first: stances, pets, Poisons, forms and rank-1
+    // totems/racials gate whole trainer chains behind them.
+    uint32 const questSpells = LearnClassQuestSpells(player, *cache);
+    uint32 const questItems = GrantClassQuestItems(player, *cache);
+    if (maxSkills)
+        MaxCombatSkills(player); // Poisons skill values gate the poison recipes
+
+    uint32 learned = questSpells;
     for (uint8 pass = 0; pass < 20; ++pass)
     {
 #ifdef MANGOS_DEBUG
@@ -5208,17 +6111,24 @@ uint32 LearnAvailableTrainerSpells(Player* player)
             break;
     }
 
-    if (sWorld.getConfig(CONFIG_BOOL_AUTO_LEARN_MAX_WEAPON_SKILLS))
+    // Item-taught max ranks build on the trainer ranks learned above.
+    uint32 const bookSpells = LearnSpellBooks(player, *cache);
+    learned += bookSpells;
+
+    if (maxSkills)
         MaxCombatSkills(player);
 #ifdef MANGOS_DEBUG
     if (sLog.HasLogLevelOrHigher(LOG_LVL_DEBUG))
         sLog.Out(LOG_BASIC, LOG_LVL_DEBUG,
-            "PlayerAutoProgression[debug]: learn player=%s level=%u learned=%u passes=%u classSources=%u weaponSources=%u duration=%u ms.",
-            player->GetName(), player->GetLevel(), learned, debugPasses,
+            "PlayerAutoProgression[debug]: learn player=%s level=%u learned=%u (quest=%u, book=%u, questItems=%u) passes=%u classSources=%u weaponSources=%u duration=%u ms.",
+            player->GetName(), player->GetLevel(), learned, questSpells,
+            bookSpells, questItems, debugPasses,
             player->GetClass() < 12 ?
                 uint32(trainerCache.classes[player->GetClass()].size()) : 0,
             uint32(trainerCache.weapons.size()),
             WorldTimer::getMSTimeDiffToNow(debugStarted));
+#else
+    (void)questItems;
 #endif
     return learned;
 }
@@ -5368,7 +6278,7 @@ uint32 EquipBestItems(Player* player)
             if (!Compatible(player, weights, main.item, off.item) ||
                 (main.item->ItemId == off.item->ItemId && Unique(main.item)))
                 continue;
-            float total = mainScore + off.score * (off.item->Class == ITEM_CLASS_WEAPON ? 0.70f : 1.0f);
+            float total = mainScore + off.score * (off.item->Class == ITEM_CLASS_WEAPON ? OffhandWeaponScale(weights) : 1.0f);
             if (weights.dualWield && off.item->Class == ITEM_CLASS_WEAPON)
                 total += 8.0f;
             std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> trial;
@@ -5515,28 +6425,39 @@ uint32 EquipBestItems(Player* player)
 
     bool handReady = !(player->IsInCombat() && mainChanges && offChanges &&
         offPlan->Class == ITEM_CLASS_WEAPON);
+    bool const mainLeaves = mainChanges && oldMain;
+    bool const offLeaves = (offChanges || clearOffForTwoHand) && oldOff;
+    bool const mainDelete = mainLeaves && DeletesReplacedItem(oldMain, deleteReplaced);
+    bool const offDelete = offLeaves && DeletesReplacedItem(oldOff, deleteReplaced);
     Item* handsToStore[2] = { nullptr, nullptr };
     int handCount = 0;
-    if (mainChanges && oldMain)
+    if (mainLeaves)
         handsToStore[handCount++] = oldMain;
-    if ((offChanges || clearOffForTwoHand) && oldOff)
+    if (offLeaves)
         handsToStore[handCount++] = oldOff;
+    Item* handsToKeep[2] = { nullptr, nullptr };
+    int keepCount = 0;
+    if (mainLeaves && !mainDelete)
+        handsToKeep[keepCount++] = oldMain;
+    if (offLeaves && !offDelete)
+        handsToKeep[keepCount++] = oldOff;
 
     if (handCount)
     {
-        if (!replace || (!deleteReplaced &&
-            player->CanStoreItems(handsToStore, handCount) != EQUIP_ERR_OK))
+        if (!replace || (keepCount && !MailReplacedItemsEnabled() &&
+            player->CanStoreItems(handsToKeep, keepCount) != EQUIP_ERR_OK))
             handReady = false;
         for (int i = 0; handReady && i < handCount; ++i)
             if (player->CanUnequipItem(handsToStore[i]->GetPos(), false) != EQUIP_ERR_OK ||
-                (deleteReplaced && (handsToStore[i]->GetProto()->Flags & ITEM_FLAG_INDESTRUCTIBLE)))
+                (DeletesReplacedItem(handsToStore[i], deleteReplaced) &&
+                 (handsToStore[i]->GetProto()->Flags & ITEM_FLAG_INDESTRUCTIBLE)))
                 handReady = false;
     }
 
     Item* newMain = handReady && mainChanges ?
-        Item::CreateItem(mainPlan->ItemId, 1, player->GetObjectGuid()) : nullptr;
+        CreateGeneratedItem(player, mainPlan, PlannedItemCount(mainPlan)) : nullptr;
     Item* newOff = handReady && offChanges ?
-        Item::CreateItem(offPlan->ItemId, 1, player->GetObjectGuid()) : nullptr;
+        CreateGeneratedItem(player, offPlan, PlannedItemCount(offPlan)) : nullptr;
     uint16 mainDestination = 0;
     uint16 offDestination = 0;
     if ((mainChanges && !newMain) || (offChanges && !newOff))
@@ -5545,7 +6466,7 @@ uint32 EquipBestItems(Player* player)
     {
         InventoryResult const result = player->CanEquipItem(EQUIPMENT_SLOT_MAINHAND,
             mainDestination, newMain, oldMain != nullptr);
-        bool const deleteTwoHandOffhand = deleteReplaced && clearOffForTwoHand &&
+        bool const deleteTwoHandOffhand = offDelete && clearOffForTwoHand &&
             (result == EQUIP_ERR_ITEMS_CANT_BE_SWAPPED || result == EQUIP_ERR_INVENTORY_FULL);
         if (deleteTwoHandOffhand)
             mainDestination = (uint16(INVENTORY_SLOT_BAG_0) << 8) | EQUIPMENT_SLOT_MAINHAND;
@@ -5565,40 +6486,46 @@ uint32 EquipBestItems(Player* player)
             handReady = false;
     }
 
+    // Move protected items into the bags (or the mailbox) first - that can
+    // still fail - and only then destroy the deletable ones, so a failure
+    // never leaves a slot empty.
     bool mainStored = false;
-    if (handReady && deleteReplaced)
-    {
-        if (mainChanges && oldMain)
-            player->DestroyItem(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND, true);
-        if ((offChanges || clearOffForTwoHand) && oldOff)
-            player->DestroyItem(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND, true);
-    }
-    else if (handReady && mainChanges && oldMain)
+    bool mainMailed = false;
+    if (handReady && mainLeaves && !mainDelete)
     {
         mainStored = MoveEquippedItemToBag(player, EQUIPMENT_SLOT_MAINHAND);
         if (!mainStored)
+            mainMailed = MailEquippedItem(player, EQUIPMENT_SLOT_MAINHAND);
+        if (!mainStored && !mainMailed)
             handReady = false;
     }
-    if (handReady && !deleteReplaced && (offChanges || clearOffForTwoHand) && oldOff &&
-        !MoveEquippedItemToBag(player, EQUIPMENT_SLOT_OFFHAND))
+    if (handReady && offLeaves && !offDelete &&
+        !StoreOrMailEquippedItem(player, EQUIPMENT_SLOT_OFFHAND))
     {
         if (mainStored)
             RestoreStoredItem(player, EQUIPMENT_SLOT_MAINHAND, oldMain);
         handReady = false;
+    }
+    if (handReady)
+    {
+        if (mainDelete)
+            player->DestroyItem(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND, true);
+        if (offDelete)
+            player->DestroyItem(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND, true);
     }
 
     if (handReady)
     {
         if (newMain)
         {
-            player->ItemAddedQuestCheck(newMain->GetEntry(), 1);
+            player->ItemAddedQuestCheck(newMain->GetEntry(), newMain->GetCount());
             player->EquipItem(mainDestination, newMain, true);
             newMain = nullptr;
             ++equipped;
         }
         if (newOff)
         {
-            player->ItemAddedQuestCheck(newOff->GetEntry(), 1);
+            player->ItemAddedQuestCheck(newOff->GetEntry(), newOff->GetCount());
             player->EquipItem(offDestination, newOff, true);
             newOff = nullptr;
             ++equipped;
@@ -5613,16 +6540,20 @@ uint32 EquipBestItems(Player* player)
             continue;
         equipped += EquipPlannedItem(player, slot, plan[slot], replace, deleteReplaced) ? 1 : 0;
     }
+
+    uint32 const ammoSupplied = SupplyAmmo(player, cache);
 #ifdef MANGOS_DEBUG
     if (sLog.HasLogLevelOrHigher(LOG_LVL_DEBUG))
         sLog.Out(LOG_BASIC, LOG_LVL_DEBUG,
-            "PlayerAutoProgression[debug]: equip player=%s level=%u catalog=%u eligible=%u slotCandidates=%u handPairs=%u handChecks=%u handAccepted=%u planned=%u blocked=%u equipped=%u result=complete duration=%u ms.",
+            "PlayerAutoProgression[debug]: equip player=%s level=%u catalog=%u eligible=%u slotCandidates=%u handPairs=%u handChecks=%u handAccepted=%u planned=%u blocked=%u equipped=%u ammo=%u result=complete duration=%u ms.",
             player->GetName(), player->GetLevel(),
             uint32(cache.equipmentItems.size()), debugEligibleItems,
             debugSlotCandidates, debugHandPairsVisited,
             debugHandConstraintChecks, debugHandConstraintAccepted,
-            debugPlannedChanges, debugBlockedSlots, equipped,
+            debugPlannedChanges, debugBlockedSlots, equipped, ammoSupplied,
             WorldTimer::getMSTimeDiffToNow(debugStarted));
+#else
+    (void)ammoSupplied;
 #endif
     return equipped;
 }
@@ -5717,10 +6648,23 @@ void BuildStatus(Player* player, std::vector<std::string>& lines)
     out.str("");
     out.clear();
     out << "Pending actions=" << uint32(player->GetPendingAutoProgressionActions()) <<
-        ", debounce=" << player->GetAutoProgressionDelay() << " ms, cache: " <<
+        " (persistent=" << (player->HasPersistentAutoProgressionPending() ? 1 : 0) <<
+        "), debounce=" << player->GetAutoProgressionDelay() << " ms, cache: " <<
         cache.equipmentItems.size() << " equipment items, " <<
+        cache.ammoItems.size() << " ammo items, " <<
         cache.itemSources.size() << " source mappings, " <<
-        cache.improvements.size() << " improvements.";
+        cache.improvements.size() << " improvements, " <<
+        cache.classQuestGrants.size() << " class quest grants, " <<
+        cache.spellBooks.size() << " spell books.";
+    lines.push_back(out.str());
+
+    out.str("");
+    out.clear();
+    out << "Learnable now: " << CountAvailableTrainerSpells(player, cache) <<
+        " trainer spells, " << CountLearnableClassQuestSpells(player, cache) <<
+        " class quest spells, " << CountLearnableSpellBooks(player, cache) <<
+        " book spells; free talent points=" << player->GetFreeTalentPoints() <<
+        " (AutoTalent " << (AutoTalentEnabled() ? "on" : "off") << ").";
     lines.push_back(out.str());
 
     out.str("");
@@ -5897,7 +6841,7 @@ void BuildPreview(Player* player, std::vector<std::string>& lines)
                 (main.item->ItemId == off.item->ItemId && Unique(main.item)))
                 continue;
             float total = mainScore + off.score *
-                (off.item->Class == ITEM_CLASS_WEAPON ? 0.70f : 1.0f);
+                (off.item->Class == ITEM_CLASS_WEAPON ? OffhandWeaponScale(weights) : 1.0f);
             if (weights.dualWield && off.item->Class == ITEM_CLASS_WEAPON)
                 total += 8.0f;
             std::array<ItemPrototype const*, EQUIPMENT_SLOT_END> trial;
@@ -6021,7 +6965,9 @@ void BuildPreview(Player* player, std::vector<std::string>& lines)
     std::ostringstream header;
     header << "Preview for " << player->GetName() << ": " <<
         CountAvailableTrainerSpells(player, cache) <<
-        " trainer spells currently learnable; equipment eligibility uses current skills.";
+        " trainer spells, " << CountLearnableClassQuestSpells(player, cache) <<
+        " class quest spells and " << CountLearnableSpellBooks(player, cache) <<
+        " book spells currently learnable; equipment eligibility uses current skills.";
     lines.push_back(header.str());
     if (!equipLevelEligible)
     {
@@ -6151,8 +7097,10 @@ bool ApplyNow(Player* player, uint32& learned, uint32& equipped, uint32& enchant
         return false;
     }
 
-    bool const deferred = RunOrDeferActions(player,
-        PENDING_AUTO_LEARN | PENDING_AUTO_EQUIP | PENDING_AUTO_ENCHANT,
+    uint8 actions = PENDING_AUTO_LEARN | PENDING_AUTO_EQUIP | PENDING_AUTO_ENCHANT;
+    if (AutoTalentEnabled())
+        actions |= PENDING_AUTO_TALENT;
+    bool const deferred = RunOrDeferActions(player, actions,
         learned, equipped, enchanted);
 #ifdef MANGOS_DEBUG
     if (sLog.HasLogLevelOrHigher(LOG_LVL_DEBUG))
@@ -6181,6 +7129,8 @@ bool RunOrDeferActions(Player* player, uint8 requestedActions,
     if (!player->IsAlive() || equipmentBlocked)
     {
         player->AddPendingAutoProgressionActions(actions);
+        // Survives a logout in the middle of a fight (characters.extra_flags).
+        player->SetPersistentAutoProgressionPending(true);
 #ifdef MANGOS_DEBUG
         if (sLog.HasLogLevelOrHigher(LOG_LVL_DEBUG))
             sLog.Out(LOG_BASIC, LOG_LVL_DEBUG,
@@ -6192,16 +7142,34 @@ bool RunOrDeferActions(Player* player, uint8 requestedActions,
     }
 
     player->ClearPendingAutoProgressionActions();
+    player->SetPersistentAutoProgressionPending(false);
+
+    // Talents first: talent abilities unlock trainer ranks and change the
+    // spec-based gear weights. LearnTalent re-enters OnTalentLearned, which
+    // queues a debounced follow-up; drop the parts this run already covers.
+    uint32 talents = 0;
+    if (actions & PENDING_AUTO_TALENT)
+    {
+        talents = SpendTalentPoints(player);
+        uint8 const requeued = player->GetPendingAutoProgressionActions() & ~actions;
+        player->ClearPendingAutoProgressionActions();
+        if (requeued)
+            player->AddPendingAutoProgressionActions(requeued);
+        else
+            player->SetAutoProgressionDelay(0);
+    }
     learned = (actions & PENDING_AUTO_LEARN) ? LearnAvailableTrainerSpells(player) : 0;
     equipped = (actions & PENDING_AUTO_EQUIP) ? EquipBestItems(player) : 0;
     enchanted = (actions & PENDING_AUTO_ENCHANT) ? EnchantBestItems(player) : 0;
 #ifdef MANGOS_DEBUG
     if (sLog.HasLogLevelOrHigher(LOG_LVL_DEBUG))
         sLog.Out(LOG_BASIC, LOG_LVL_DEBUG,
-            "PlayerAutoProgression[debug]: run player=%s requested=0x%02X effective=0x%02X learned=%u equipped=%u enchanted=%u duration=%u ms.",
+            "PlayerAutoProgression[debug]: run player=%s requested=0x%02X effective=0x%02X talents=%u learned=%u equipped=%u enchanted=%u duration=%u ms.",
             player->GetName(), uint32(requestedActions), uint32(actions),
-            learned, equipped, enchanted,
+            talents, learned, equipped, enchanted,
             WorldTimer::getMSTimeDiffToNow(debugStarted));
+#else
+    (void)talents;
 #endif
     return false;
 }
@@ -6210,11 +7178,14 @@ void OnLevelUp(Player* player)
 {
     if (IsAuditExecution())
         return;
-    if (!player || !player->GetSession() || !player->IsInWorld())
+    if (!player || !player->GetSession() || !player->IsInWorld() ||
+        !AutoProgressionAppliesTo(player))
         return;
 
     uint32 learned = 0;
     uint8 actions = 0;
+    if (sWorld.getConfig(CONFIG_BOOL_AUTO_TALENT_ON_LEVEL_UP))
+        actions |= PENDING_AUTO_TALENT;
     if (sWorld.getConfig(CONFIG_BOOL_AUTO_LEARN_ON_LEVEL_UP))
         actions |= PENDING_AUTO_LEARN;
     if (sWorld.getConfig(CONFIG_BOOL_AUTO_EQUIP_ON_LEVEL_UP))
@@ -6227,7 +7198,7 @@ void OnLevelUp(Player* player)
     bool const deferred = RunOrDeferActions(player, actions, learned, equipped, enchanted);
     if (learned || equipped || enchanted)
         sLog.Out(LOG_BASIC, LOG_LVL_DETAIL,
-            "PlayerAutoProgression: %s learned %u trainer spells, equipped %u items and enchanted %u items at level %u.",
+            "PlayerAutoProgression: %s learned %u spells, equipped %u items and enchanted %u items at level %u.",
             player->GetName(), learned, equipped, enchanted, player->GetLevel());
     if (deferred)
         sLog.Out(LOG_BASIC, LOG_LVL_DETAIL,
@@ -6239,7 +7210,8 @@ void OnTalentLearned(Player* player)
 {
     if (IsAuditExecution())
         return;
-    if (!player || !player->GetSession() || !player->IsInWorld())
+    if (!player || !player->GetSession() || !player->IsInWorld() ||
+        !AutoProgressionAppliesTo(player))
         return;
 
     uint8 actions = 0;
@@ -6259,21 +7231,43 @@ void OnTalentLearned(Player* player)
 
 void OnLogin(Player* player)
 {
-    if (!player || !player->GetSession() || !player->IsInWorld())
+    if (!player || !player->GetSession() || !player->IsInWorld() ||
+        !AutoProgressionAppliesTo(player))
         return;
     uint8 actions = 0;
+    if (sWorld.getConfig(CONFIG_BOOL_AUTO_TALENT_ON_LOGIN))
+        actions |= PENDING_AUTO_TALENT;
     if (sWorld.getConfig(CONFIG_BOOL_AUTO_LEARN_ON_LOGIN))
         actions |= PENDING_AUTO_LEARN;
     if (sWorld.getConfig(CONFIG_BOOL_AUTO_EQUIP_ON_LOGIN))
         actions |= PENDING_AUTO_EQUIP;
     if (sWorld.getConfig(CONFIG_BOOL_AUTO_ENCHANT_ON_LOGIN))
         actions |= PENDING_AUTO_ENCHANT;
+    // Resume an update that was deferred (combat, death) when the character
+    // logged out; the exact action set is not stored, so run everything the
+    // level-up trigger would have run. A brand-new character (no played time
+    // yet) never saw a level-up either, so its level-1 state (warlock imp,
+    // starting gear) is established the same way.
+    if (player->HasPersistentAutoProgressionPending() ||
+        player->GetTotalPlayedTime() == 0)
+    {
+        if (sWorld.getConfig(CONFIG_BOOL_AUTO_TALENT_ON_LEVEL_UP))
+            actions |= PENDING_AUTO_TALENT;
+        if (sWorld.getConfig(CONFIG_BOOL_AUTO_LEARN_ON_LEVEL_UP))
+            actions |= PENDING_AUTO_LEARN;
+        if (sWorld.getConfig(CONFIG_BOOL_AUTO_EQUIP_ON_LEVEL_UP))
+            actions |= PENDING_AUTO_EQUIP;
+        if (sWorld.getConfig(CONFIG_BOOL_AUTO_ENCHANT_ON_LEVEL_UP))
+            actions |= PENDING_AUTO_ENCHANT;
+        player->SetPersistentAutoProgressionPending(false);
+    }
     player->AddPendingAutoProgressionActions(actions);
 }
 
 void OnTalentsReset(Player* player)
 {
-    if (!player || !player->GetSession() || !player->IsInWorld())
+    if (!player || !player->GetSession() || !player->IsInWorld() ||
+        !AutoProgressionAppliesTo(player))
         return;
     uint8 actions = 0;
     if (sWorld.getConfig(CONFIG_BOOL_AUTO_EQUIP_ON_TALENT_RESET))
@@ -6489,8 +7483,10 @@ void UpdateAuditMatrix(uint32 diff)
         return;
     }
 
+    // Every step runs a complete level (learn, equip, enchant) synchronously
+    // on the world thread; the interval spreads that load out.
     state->delayMs += diff;
-    if (state->delayMs < 50)
+    if (state->delayMs < sWorld.getConfig(CONFIG_UINT32_AUTO_PROGRESSION_AUDIT_STEP_INTERVAL_MS))
         return;
     state->delayMs = 0;
 
@@ -6578,13 +7574,5 @@ void ShutdownAuditMatrix()
     }
     if (state && !state->finished.load())
         FinishAuditMatrix(*state, "cancelled", "server_shutdown");
-}
-
-
-void InvalidateCaches()
-{
-    AutoProgressionCacheState& state = GetAutoProgressionCacheState();
-    std::lock_guard<std::mutex> lock(state.mutex);
-    state.dirty = true;
 }
 }

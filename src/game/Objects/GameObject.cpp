@@ -1413,6 +1413,10 @@ void GameObject::Use(Unit* user)
         if (m_goInfo->CannotBeUsedUnderImmunity() && user->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE))
             return;
 
+        // arena spectators do not interact with the world
+        if (((Player*)user)->IsArenaSpectator())
+            return;
+
         if (!m_goInfo->IsUsableMounted() && user->IsMounted())
             user->RemoveSpellsCausingAura(SPELL_AURA_MOUNTED);
 
@@ -2194,6 +2198,10 @@ bool GameObject::PlayerCanUse(Player* pPlayer)
         return true;
 
     if (!IsVisible())
+        return false;
+
+    // arena spectators do not interact with the world
+    if (pPlayer->IsArenaSpectator())
         return false;
 
     GameObjectInfo const* pInfo = GetGOInfo();

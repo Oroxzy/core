@@ -103,6 +103,12 @@ void WorldSession::RequestBgJoinQueue(ObjectGuid battlemaster, uint32 instanceId
         ProcessAnticheatAction("PassiveAnticheat", "Attempt to queue for invalid BG type", CHEAT_ACTION_LOG | CHEAT_ACTION_REPORT_GMS);
         return;
     }
+    // arenas are only joined through the arena orb (gear checks etc.), never through battlemasters
+    if (IsArenaBattleGroundTypeId(bgTypeId))
+    {
+        ProcessAnticheatAction("PassiveAnticheat", "Attempt to queue for arena through battlemaster", CHEAT_ACTION_LOG | CHEAT_ACTION_REPORT_GMS);
+        return;
+    }
     if (bgTypeId == BATTLEGROUND_AV && joinAsGroup)
     {
         ProcessAnticheatAction("PassiveAnticheat", "Attempt to queue for AV as group", CHEAT_ACTION_LOG | CHEAT_ACTION_REPORT_GMS);

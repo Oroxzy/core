@@ -176,6 +176,8 @@ typedef std::vector<LootStoreItem> LootStoreItemList;
 typedef std::unordered_map<uint32, LootTemplate*> LootTemplateMap;
 
 typedef std::set<uint32> LootIdSet;
+// item id -> chains of condition ids (see LootStore::CollectItemIds)
+typedef std::map<uint32, std::vector<std::vector<uint32>>> LootConditionedItemMap;
 
 class LootStore
 {
@@ -196,10 +198,17 @@ class LootStore
         bool HaveQuestLootForPlayer(uint32 loot_id, Player const* player) const;
 
         LootTemplate const* GetLootFor(uint32 loot_id) const;
+        // Item ids reachable from a loot template. Quest drops and conditioned
+        // entries are skipped unless includeRestricted is set; when
+        // `conditioned` is given, conditioned (non-quest) entries are reported
+        // there instead as item -> list of condition-id chains (all conditions of
+        // one chain must hold, any chain grants the item).
         void CollectItemIds(uint32 lootId, std::set<uint32>& itemIds,
-            bool includeRestricted = false) const;
+            bool includeRestricted = false,
+            LootConditionedItemMap* conditioned = nullptr) const;
         void CollectAllItemIds(std::set<uint32>& itemIds,
-            bool includeRestricted = false) const;
+            bool includeRestricted = false,
+            LootConditionedItemMap* conditioned = nullptr) const;
 
         char const* GetName() const { return m_name; }
         char const* GetEntryName() const { return m_entryName; }
@@ -238,7 +247,9 @@ class LootTemplate
     private:
         void CollectItemIds(std::set<uint32>& itemIds,
             std::set<uint64>& referencePath, uint8 groupId = 0,
-            bool includeRestricted = false) const;
+            bool includeRestricted = false,
+            LootConditionedItemMap* conditioned = nullptr,
+            std::vector<uint32> const& inheritedConditions = std::vector<uint32>()) const;
 
         LootStoreItemList Entries;                          // not grouped only
         LootGroups        Groups;                           // groups have own (optimised) processing, grouped entries go there

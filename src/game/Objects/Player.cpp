@@ -59,6 +59,7 @@
 #include "BattleGround.h"
 #include "BattleGroundAV.h"
 #include "BattleGroundMgr.h"
+#include "Arena.h"
 #include "Chat.h"
 #include "Database/DatabaseImpl.h"
 #include "Spell.h"
@@ -715,7 +716,7 @@ void Player::SatisfyItemRequirements(ItemPrototype const* pItem)
 
 uint32 Player::EnvironmentalDamage(EnvironmentalDamageType type, uint32 damage)
 {
-    if (!IsAlive() || IsGameMaster())
+    if (!IsAlive() || IsGameMaster() || IsArenaSpectator())
         return 0;
 
     // Absorb, resist some environmental damage type
@@ -2720,6 +2721,87 @@ void Player::SetGameMaster(bool on, bool notify)
     RefreshBitsForVisibleUnits(&m, TYPEMASK_PLAYER);
 }
 
+// Arena spectator: an alive but invisible, unselectable and immune observer that can neither act
+// nor be acted upon. Used for dead arena participants (after releasing) and for visitors that
+// watch a match through the arena orb. Runtime state only, restored when the player leaves the map.
+void Player::SetArenaSpectator(bool on)
+{
+    if (m_arenaSpectator == on)
+        return;
+
+    m_arenaSpectator = on;
+
+    if (on)
+    {
+        // dead participants: back on their feet, the corpse is not needed anymore
+        if (!IsAlive())
+        {
+            ResurrectPlayer(1.0f);
+            SpawnCorpseBones();
+        }
+
+        RemoveAllAurasOnDeath();
+        CombatStopWithPets(true);
+        GetHostileRefManager().deleteReferences();
+        UnsummonPetTemporaryIfAny();
+        Unmount();
+
+        // friendly to everybody, can not be targeted, attacked or affected, can not act
+        SetFactionTemplateId(35);
+        SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE | UNIT_FLAG_IMMUNE_TO_NPC | UNIT_FLAG_IMMUNE_TO_PLAYER | UNIT_FLAG_SILENCED | UNIT_FLAG_PACIFIED);
+        SetFFAPvP(false);
+        UpdatePvPContested(false, true);
+        GetHostileRefManager().setOnlineOfflineState(false);
+
+        // invisible for everybody except gms, no visible model / weapons
+        SetVisibility(VISIBILITY_OFF);
+        SetDisplayId(11686);
+        SetVisibleItemSlot(EQUIPMENT_SLOT_MAINHAND, nullptr);
+        SetVisibleItemSlot(EQUIPMENT_SLOT_OFFHAND, nullptr);
+        SetVisibleItemSlot(EQUIPMENT_SLOT_RANGED, nullptr);
+
+        // move around quickly
+        SetSpeedRate(MOVE_RUN, 2.0f);
+    }
+    else
+    {
+        SetFactionForRace(GetRace());
+        RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE | UNIT_FLAG_IMMUNE_TO_NPC | UNIT_FLAG_IMMUNE_TO_PLAYER | UNIT_FLAG_SILENCED | UNIT_FLAG_PACIFIED);
+        SetVisibility(VISIBILITY_ON);
+
+        InitPlayerDisplayIds();
+        if (Item* item = GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND))
+            SetVisibleItemSlot(EQUIPMENT_SLOT_MAINHAND, item);
+        if (Item* item = GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND))
+            SetVisibleItemSlot(EQUIPMENT_SLOT_OFFHAND, item);
+        if (Item* item = GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_RANGED))
+            SetVisibleItemSlot(EQUIPMENT_SLOT_RANGED, item);
+
+        // restore FFA PvP server state and area state
+        if (sWorld.IsFFAPvPRealm())
+            SetFFAPvP(true);
+        UpdateArea(m_areaUpdateId);
+
+        GetHostileRefManager().setOnlineOfflineState(true);
+        UpdateSpeed(MOVE_RUN, true);
+
+        SetHealthPercent(100.0f);
+        SetPower(POWER_MANA, GetMaxPower(POWER_MANA));
+    }
+
+    m_camera.UpdateVisibilityForOwner();
+    UpdateObjectVisibility();
+    UpdateForQuestWorldObjects();
+
+    UpdateMask m;
+    m.SetCount(UNIT_END);
+    m.SetBit(UNIT_FIELD_FLAGS);
+    RefreshBitsForVisibleUnits(&m, TYPEMASK_UNIT);
+    m.SetCount(PLAYER_END);
+    m.SetBit(UNIT_FIELD_FLAGS);
+    RefreshBitsForVisibleUnits(&m, TYPEMASK_PLAYER);
+}
+
 void Player::SetGMVisible(bool on, bool notify)
 {
     // 'Invisibilite superieure'
@@ -4700,6 +4782,11 @@ void Player::BuildPlayerRepop()
     // stop countdown until repop
     m_deathTimer = 0;
     SetDeathState(DEAD);
+
+    // arena: dead participants watch the rest of the match as invisible spectators
+    if (BattleGround* bg = GetBattleGround())
+        if (bg->IsArena() && bg->GetStatus() == STATUS_IN_PROGRESS)
+            SetArenaSpectator(true);
 }
 
 void Player::ResurrectPlayer(float restore_percent, bool applySickness)
@@ -4817,7 +4904,7 @@ Corpse* Player::CreateCorpse()
         flags |= CORPSE_FLAG_HIDE_HELM;
     if (HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_HIDE_CLOAK))
         flags |= CORPSE_FLAG_HIDE_CLOAK;
-    if (InBattleGround())
+    if (InBattleGround() && !InArena())
         flags |= CORPSE_FLAG_LOOTABLE;                      // to be able to remove insignia
 
     corpse->SetUInt32Value(CORPSE_FIELD_FLAGS, flags);
@@ -9819,6 +9906,25 @@ InventoryResult Player::CanEquipItem(uint8 slot, uint16& dest, ItemPrototype con
         if (!swap && GetItemByPos(INVENTORY_SLOT_BAG_0, eslot))
             return EQUIP_ERR_NO_EQUIPMENT_SLOT_AVAILABLE;
 
+        // arena: no gear changes during a running match (weapons / offhands / ranged always, trinkets by config)
+        if (not_loading && InArena())
+        {
+            if (IsArenaSpectator())
+                return EQUIP_ERR_CANT_DO_RIGHT_NOW;
+
+            BattleGround* bg = GetBattleGround();
+            if (bg && bg->GetStatus() == STATUS_IN_PROGRESS && !sWorld.getConfig(CONFIG_BOOL_ARENA_ALLOW_ITEM_SWAP))
+            {
+                if (pProto->InventoryType == INVTYPE_TRINKET)
+                {
+                    if (!sWorld.getConfig(CONFIG_BOOL_ARENA_ALLOW_TRINKET_SWAP))
+                        return EQUIP_ERR_CANT_DO_RIGHT_NOW;
+                }
+                else if (!pProto->CanChangeEquipStateInCombat() && GetItemByPos(INVENTORY_SLOT_BAG_0, eslot))
+                    return EQUIP_ERR_CANT_DO_RIGHT_NOW;
+            }
+        }
+
         // if swap ignore item (equipped also)
         if (InventoryResult res2 = CanEquipUniqueItem(pProto, swap ? eslot : NULL_SLOT))
             return res2;
@@ -9931,6 +10037,25 @@ InventoryResult Player::CanUnequipItem(uint16 pos, bool swap) const
     // Check is possibly not in vanilla.
     //if (IsNonMeleeSpellCasted(false, true, true))
     //    return EQUIP_ERR_CANT_DO_RIGHT_NOW;
+
+    // arena: no gear changes during a running match (weapons / offhands / ranged always, trinkets by config)
+    if (InArena() && IsEquipmentPos(pos))
+    {
+        if (IsArenaSpectator())
+            return EQUIP_ERR_CANT_DO_RIGHT_NOW;
+
+        BattleGround* bg = GetBattleGround();
+        if (bg && bg->GetStatus() == STATUS_IN_PROGRESS && !sWorld.getConfig(CONFIG_BOOL_ARENA_ALLOW_ITEM_SWAP))
+        {
+            if (pProto->InventoryType == INVTYPE_TRINKET)
+            {
+                if (!sWorld.getConfig(CONFIG_BOOL_ARENA_ALLOW_TRINKET_SWAP))
+                    return EQUIP_ERR_CANT_DO_RIGHT_NOW;
+            }
+            else if (!pProto->CanChangeEquipStateInCombat())
+                return EQUIP_ERR_CANT_DO_RIGHT_NOW;
+        }
+    }
 
     return EQUIP_ERR_OK;
 }
@@ -10185,6 +10310,10 @@ InventoryResult Player::CanUseItem(ItemPrototype const* pProto, bool not_loading
             if (!GetSkillValue(skill))
                 return EQUIP_ERR_NO_REQUIRED_PROFICIENCY;
         }
+
+        // arena gear restrictions (item level / patch / disabled item spells)
+        if (not_loading && InArena() && sArenaMgr.IsItemForbidden(pProto, GetArenaType()))
+            return EQUIP_ERR_CANT_DO_RIGHT_NOW;
 
         return EQUIP_ERR_OK;
     }
@@ -15252,6 +15381,9 @@ bool Player::LoadFromDB(ObjectGuid guid, SqlQueryHolder* holder)
     if (extraflags & PLAYER_EXTRA_WHISP_RESTRICTION)
         SetWhisperRestriction(true);
 
+    if (extraflags & PLAYER_EXTRA_AUTO_PROGRESSION_PENDING)
+        SetPersistentAutoProgressionPending(true);
+
     if ((extraflags & PLAYER_EXTRA_CITY_PROTECTOR) && sWorld.getConfig(CONFIG_BOOL_ENABLE_CITY_PROTECTOR))
         SetCityTitle();
 
@@ -18791,6 +18923,7 @@ void Player::LeaveBattleground(bool teleportToEntryPoint)
         RemoveAurasDueToSpell(2584);
 
         if (!IsGameMaster() &&
+                !bg->IsArena() &&                           // no deserter for arenas
                 sWorld.getConfig(CONFIG_BOOL_BATTLEGROUND_CAST_DESERTER) &&
                 !sWorld.IsStopped() &&
                 (bg->GetStatus() == STATUS_IN_PROGRESS || bg->GetStatus() == STATUS_WAIT_JOIN)
@@ -19858,6 +19991,48 @@ void Player::AutoUnequipItemFromSlot(uint32 slot)
     }
 }
 
+bool Player::HasForbiddenArenaItems(ArenaType type, std::string* firstReason) const
+{
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        if (slot == EQUIPMENT_SLOT_TABARD || slot == EQUIPMENT_SLOT_BODY)
+            continue;
+
+        Item* pItem = GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!pItem)
+            continue;
+
+        std::string reason;
+        if (sArenaMgr.IsItemForbidden(pItem->GetProto(), type, firstReason ? &reason : nullptr))
+        {
+            if (firstReason)
+                *firstReason = ChatHandler(const_cast<Player*>(this)).GetItemLink(pItem->GetProto()) + " " + reason;
+            return true;
+        }
+    }
+    return false;
+}
+
+void Player::UnequipForbiddenArenaItems(ArenaType type)
+{
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        if (slot == EQUIPMENT_SLOT_TABARD || slot == EQUIPMENT_SLOT_BODY)
+            continue;
+
+        Item* pItem = GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!pItem)
+            continue;
+
+        std::string reason;
+        if (sArenaMgr.IsItemForbidden(pItem->GetProto(), type, &reason))
+        {
+            PSendSysMessage("%s %s", ChatHandler(this).GetItemLink(pItem->GetProto()).c_str(), reason.c_str());
+            AutoUnequipItemFromSlot(slot);
+        }
+    }
+}
+
 ZoneScript* Player::GetZoneScript() const
 {
     return sZoneScriptMgr.GetZoneScriptToZoneId(GetZoneId());
@@ -20794,6 +20969,68 @@ InventoryResult Player::CanEquipUniqueItem(ItemPrototype const* itemProto, uint8
     return EQUIP_ERR_OK;
 }
 
+void Player::GetTalentPointsPerTab(std::map<uint32, uint32>& pointsPerTab) const
+{
+    uint32 const classMask = GetClassMask();
+    for (uint32 i = 0; i < sTalentStore.GetNumRows(); ++i)
+    {
+        TalentEntry const* talentInfo = sTalentStore.LookupEntry(i);
+        if (!talentInfo)
+            continue;
+
+        TalentTabEntry const* talentTabInfo = sTalentTabStore.LookupEntry(talentInfo->TalentTab);
+        if (!talentTabInfo || !(talentTabInfo->ClassMask & classMask))
+            continue;
+
+        // the highest known rank tells how many points were spent on this talent
+        for (int8 rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
+        {
+            if (talentInfo->RankID[rank] && HasSpell(talentInfo->RankID[rank]))
+            {
+                pointsPerTab[talentInfo->TalentTab] += rank + 1;
+                break;
+            }
+        }
+    }
+}
+
+std::string Player::GetTalentSpecName() const
+{
+    // TalentTab.dbc ids of the 1.12 client (the tab names are not part of the server side dbc format)
+    static std::map<uint32, char const*> const talentTabNames =
+    {
+        { 161, "Arms" },          { 163, "Protection" },   { 164, "Fury" },
+        { 181, "Combat" },        { 182, "Assassination" },{ 183, "Subtlety" },
+        { 201, "Discipline" },    { 202, "Holy" },         { 203, "Shadow" },
+        { 261, "Elemental" },     { 262, "Restoration" },  { 263, "Enhancement" },
+        { 281, "Feral Combat" },  { 282, "Restoration" },  { 283, "Balance" },
+        { 301, "Destruction" },   { 302, "Affliction" },   { 303, "Demonology" },
+        { 361, "Beast Mastery" }, { 362, "Survival" },     { 363, "Marksmanship" },
+        { 381, "Retribution" },   { 382, "Holy" },         { 383, "Protection" },
+        { 41,  "Fire" },          { 61,  "Frost" },        { 81,  "Arcane" },
+    };
+
+    std::map<uint32, uint32> pointsPerTab;
+    GetTalentPointsPerTab(pointsPerTab);
+
+    uint32 bestTab = 0;
+    uint32 bestPoints = 0;
+    for (const auto& itr : pointsPerTab)
+    {
+        if (itr.second > bestPoints)
+        {
+            bestPoints = itr.second;
+            bestTab = itr.first;
+        }
+    }
+
+    if (!bestTab)
+        return "Undefined";
+
+    auto itr = talentTabNames.find(bestTab);
+    return itr != talentTabNames.end() ? itr->second : "Undefined";
+}
+
 bool Player::LearnTalent(uint32 talentId, uint32 talentRank)
 {
     uint32 curTalentPoints = GetFreeTalentPoints();
@@ -21055,7 +21292,7 @@ void Player::ResummonPetTemporaryUnSummonedIfAny()
 
 bool Player::IsPetNeedBeTemporaryUnsummoned() const
 {
-    if (!IsInWorld() || !IsAlive() || IsTaxiFlying())
+    if (!IsInWorld() || !IsAlive() || IsTaxiFlying() || IsArenaSpectator())
         return true;
 
     if (IsMounted() && sWorld.getConfig(CONFIG_BOOL_PET_UNSUMMON_AT_MOUNT))
@@ -21967,6 +22204,13 @@ void Player::RewardHonorOnDeath()
 
     if (HasAuraType(SPELL_AURA_NO_PVP_CREDIT)) // Honorless Target
         return;
+
+    // no honor for arena kills (same faction / cross faction matches would be a honor farm otherwise)
+    if (InArena())
+    {
+        m_damageTakenHistory.clear();
+        return;
+    }
 
     // " you need to be alive and close by at the time of the kill to get your share of the Honor"
     // First, get damage done per group, less than 1 minute before now

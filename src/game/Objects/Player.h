@@ -798,6 +798,9 @@ class Player final: public Unit
         void SetAcceptTicket(bool on) { if (on) m_ExtraFlags |= PLAYER_EXTRA_GM_ACCEPT_TICKETS; else m_ExtraFlags &= ~PLAYER_EXTRA_GM_ACCEPT_TICKETS; }
         bool IsGameMaster() const { return m_ExtraFlags & PLAYER_EXTRA_GM_ON; }
         void SetGameMaster(bool on, bool notify = false);
+        // Arena spectator: invisible, immune, unselectable observer inside an arena (dead participants and visitors).
+        bool IsArenaSpectator() const { return m_arenaSpectator; }
+        void SetArenaSpectator(bool on);
         bool IsGMChat() const { return GetSession()->GetSecurity() >= SEC_MODERATOR && (m_ExtraFlags & PLAYER_EXTRA_GM_CHAT); }
         void SetGMChat(bool on, bool notify = false);
         bool IsTaxiCheater() const { return m_ExtraFlags & PLAYER_EXTRA_TAXICHEAT; }
@@ -943,6 +946,11 @@ class Player final: public Unit
         void AutoUnequipWeaponsIfNeed();
         void AutoUnequipOffhandIfNeed();
         void AutoUnequipItemFromSlot(uint32 slot);
+        // Arena gear restrictions (item level / patch / disabled item spells, see ArenaMgr).
+        // Returns true if any equipped item is not allowed in the given arena type; the first reason is stored in firstReason.
+        bool HasForbiddenArenaItems(ArenaType type, std::string* firstReason = nullptr) const;
+        // Unequips all items that are not allowed in the given arena type (bags first, mail as fallback) and tells the player why.
+        void UnequipForbiddenArenaItems(ArenaType type);
         void SatisfyItemRequirements(ItemPrototype const* pItem);
         void AddStartingItems();
         bool StoreNewItemInBestSlots(uint32 itemId, uint32 amount, uint32 enchantId = 0);
@@ -1420,6 +1428,10 @@ class Player final: public Unit
         bool ResetTalents(bool noCost = false);
         void InitTalentForLevel();
         bool LearnTalent(uint32 talentId, uint32 talentRank);
+        // Name of the talent tree with the most points spent ("Arms", "Holy", ...), "Undefined" if no talents.
+        std::string GetTalentSpecName() const;
+        // Talent points spent per talent tab id.
+        void GetTalentPointsPerTab(std::map<uint32, uint32>& pointsPerTab) const;
 
         /*********************************************************/
         /***                    STAT SYSTEM                    ***/
@@ -1658,6 +1670,9 @@ class Player final: public Unit
         // Homebind coordinates
         WorldLocation m_homebind;
         uint16 m_homebindAreaId;
+
+        // arena spectator state (runtime only, never saved)
+        bool m_arenaSpectator = false;
 
         // knockback/jumping states
         bool m_launched;
@@ -1989,6 +2004,9 @@ class Player final: public Unit
         uint32 GetAutoProgressionDelay() const { return m_autoProgressionDelay; }
         void SetAutoProgressionDelay(uint32 delay) { m_autoProgressionDelay = delay; }
         void UpdateAutoProgressionDelay(uint32 diff) { m_autoProgressionDelay = diff >= m_autoProgressionDelay ? 0 : m_autoProgressionDelay - diff; }
+        // Persisted through characters.extra_flags so a deferred update survives logout.
+        bool HasPersistentAutoProgressionPending() const { return m_ExtraFlags & PLAYER_EXTRA_AUTO_PROGRESSION_PENDING; }
+        void SetPersistentAutoProgressionPending(bool on) { if (on) m_ExtraFlags |= PLAYER_EXTRA_AUTO_PROGRESSION_PENDING; else m_ExtraFlags &= ~PLAYER_EXTRA_AUTO_PROGRESSION_PENDING; }
 
         void BuildCreateUpdateBlockForPlayer(UpdateData& data, Player* target) const override;
         void DestroyForPlayer(Player const* target) const override;
@@ -2258,6 +2276,8 @@ class Player final: public Unit
         BGData                    m_bgData;
     public:
         bool InBattleGround()       const                { return m_bgData.bgInstanceID != 0; }
+        bool InArena()              const                { return m_bgData.bgInstanceID != 0 && IsArenaBattleGroundTypeId(m_bgData.bgTypeID); }
+        ArenaType GetArenaType()    const                { return InArena() ? GetArenaTypeForBattleGroundTypeId(m_bgData.bgTypeID) : ARENA_TYPE_NONE; }
         uint32 GetBattleGroundId()  const                { return m_bgData.bgInstanceID; }
         BattleGroundTypeId GetBattleGroundTypeId() const { return m_bgData.bgTypeID; }
         BattleGround* GetBattleGround() const;
@@ -2354,6 +2374,7 @@ class Player final: public Unit
 
         void SetBGTeam(Team team) { m_bgData.bgTeam = team; m_bgData.m_needSave = true; }
         Team GetBGTeam() const { return m_bgData.bgTeam ? m_bgData.bgTeam : GetTeam(); }
+        TeamId GetBGTeamId() const { return GetBGTeam() == HORDE ? TEAM_HORDE : TEAM_ALLIANCE; }
 
         void LeaveBattleground(bool teleportToEntryPoint = true);
         bool CanJoinToBattleground() const;

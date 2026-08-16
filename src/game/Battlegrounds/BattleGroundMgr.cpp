@@ -28,6 +28,7 @@
 #include "BattleGroundAV.h"
 #include "BattleGroundAB.h"
 #include "BattleGroundWS.h"
+#include "Arena.h"
 #include "MapManager.h"
 #include "Map.h"
 #include "ObjectMgr.h"
@@ -36,6 +37,7 @@
 #include "WorldPacket.h"
 #include "Language.h"
 #include "GameEventMgr.h"
+#include "Utilities/Random.h"
 #include "Policies/SingletonImp.h"
 #include <chrono>
 #include <random>
@@ -162,6 +164,10 @@ GroupQueueInfo* BattleGroundQueue::AddGroup(Player* leader, Group* grp, BattleGr
     if (ginfo->groupTeam == HORDE)
         index++;                                            // BG_QUEUE_*_ALLIANCE -> BG_QUEUE_*_HORDE
 
+    // arenas: both factions share one queue, the teams are assigned when the match is created
+    if (IsArenaBattleGroundTypeId(bgTypeId))
+        index = BG_QUEUE_MIXED;
+
     sLog.Out(LOG_BASIC, LOG_LVL_DEBUG, "Adding Group to BattleGroundQueue bgTypeId : %u, bracketId : %u, index : %u", bgTypeId, bracketId, index);
 
     //add players from group to ginfo
@@ -231,12 +237,24 @@ GroupQueueInfo* BattleGroundQueue::AddGroup(Player* leader, Group* grp, BattleGr
                 uint32 qMinLevel = leader->GetMinLevelForBattleGroundBracketId(bracketId, bgTypeId);
                 uint32 qMaxLevel = leader->GetMaxLevelForBattleGroundBracketId(bracketId, bgTypeId);
                 GroupsQueueType::const_iterator itr;
-                for (itr = m_queuedGroups[bracketId][BG_QUEUE_NORMAL_ALLIANCE].begin(); itr != m_queuedGroups[bracketId][BG_QUEUE_NORMAL_ALLIANCE].end(); ++itr)
-                    if (!(*itr)->isInvitedToBgInstanceGuid)
-                        qAlliance += (*itr)->players.size();
-                for (itr = m_queuedGroups[bracketId][BG_QUEUE_NORMAL_HORDE].begin(); itr != m_queuedGroups[bracketId][BG_QUEUE_NORMAL_HORDE].end(); ++itr)
-                    if (!(*itr)->isInvitedToBgInstanceGuid)
-                        qHorde += (*itr)->players.size();
+                if (index == BG_QUEUE_MIXED)
+                {
+                    // arena: one shared queue, show the total in both columns
+                    for (itr = m_queuedGroups[bracketId][BG_QUEUE_MIXED].begin(); itr != m_queuedGroups[bracketId][BG_QUEUE_MIXED].end(); ++itr)
+                        if (!(*itr)->isInvitedToBgInstanceGuid)
+                            qAlliance += (*itr)->players.size();
+                    qHorde = qAlliance;
+                    minPlayers = bg->GetMinPlayers();
+                }
+                else
+                {
+                    for (itr = m_queuedGroups[bracketId][BG_QUEUE_NORMAL_ALLIANCE].begin(); itr != m_queuedGroups[bracketId][BG_QUEUE_NORMAL_ALLIANCE].end(); ++itr)
+                        if (!(*itr)->isInvitedToBgInstanceGuid)
+                            qAlliance += (*itr)->players.size();
+                    for (itr = m_queuedGroups[bracketId][BG_QUEUE_NORMAL_HORDE].begin(); itr != m_queuedGroups[bracketId][BG_QUEUE_NORMAL_HORDE].end(); ++itr)
+                        if (!(*itr)->isInvitedToBgInstanceGuid)
+                            qHorde += (*itr)->players.size();
+                }
 
                 // Show queue status to player only (when joining queue)
                 if (sWorld.getConfig(CONFIG_UINT32_BATTLEGROUND_QUEUE_ANNOUNCER_JOIN) == 1)
@@ -316,11 +334,16 @@ void BattleGroundQueue::RemovePlayer(ObjectGuid guid, bool decreaseInvitedCount)
     // variable index removes useless searching in other team's queue
     uint32 index = BattleGround::GetTeamIndexByTeamId(group->groupTeam);
 
+    // arena groups live in the mixed queue only (their team can change while waiting)
+    bool const isArena = IsArenaBattleGroundTypeId(group->bgTypeId);
+    if (isArena)
+        index = BG_QUEUE_MIXED;
+
     for (int32 bracket_id_tmp = MAX_BATTLEGROUND_BRACKETS - 1; bracket_id_tmp >= 0 && bracketId == -1; --bracket_id_tmp)
     {
         //we must check premade and normal team's queue - because when players from premade are joining bg,
         //they leave groupinfo so we can't use its players size to find out index
-        for (uint32 j = index; j < BG_QUEUE_GROUP_TYPES_COUNT; j += BG_QUEUE_NORMAL_ALLIANCE)
+        for (uint32 j = index; j < BG_QUEUE_GROUP_TYPES_COUNT; j += (isArena ? BG_QUEUE_GROUP_TYPES_COUNT : BG_QUEUE_NORMAL_ALLIANCE))
         {
             for (groupItrTmp = m_queuedGroups[bracket_id_tmp][j].begin(); groupItrTmp != m_queuedGroups[bracket_id_tmp][j].end(); ++groupItrTmp)
             {
@@ -333,6 +356,8 @@ void BattleGroundQueue::RemovePlayer(ObjectGuid guid, bool decreaseInvitedCount)
                     break;
                 }
             }
+            if (bracketId != -1)
+                break;
         }
     }
     //player can't be in queue without group, but just in case
@@ -407,7 +432,10 @@ bool BattleGroundQueue::InviteGroupToBG(GroupQueueInfo* ginfo, BattleGround* bg,
         BattleGroundQueueTypeId bgQueueTypeId = BattleGroundMgr::BgQueueTypeId(bgTypeId);
         BattleGroundBracketId bracketId = bg->GetBracketId();
 
-        ginfo->removeInviteTime = WorldTimer::getMSTime() + INVITE_ACCEPT_WAIT_TIME;
+        uint32 const inviteAcceptWaitTime = BattleGroundMgr::GetInviteAcceptWaitTime(bgTypeId);
+        uint32 const invitationRemindTime = BattleGroundMgr::GetInvitationRemindTime(bgTypeId);
+
+        ginfo->removeInviteTime = WorldTimer::getMSTime() + inviteAcceptWaitTime;
 
         // loop through the players
         for (GroupQueueInfoPlayers::iterator itr = ginfo->players.begin(); itr != ginfo->players.end(); ++itr)
@@ -429,10 +457,10 @@ bool BattleGroundQueue::InviteGroupToBG(GroupQueueInfo* ginfo, BattleGround* bg,
 
             // create remind invite events
             BgQueueInviteEvent* inviteEvent = new BgQueueInviteEvent(player->GetObjectGuid(), ginfo->isInvitedToBgInstanceGuid, bgTypeId, ginfo->removeInviteTime);
-            player->m_Events.AddEvent(inviteEvent, player->m_Events.CalculateTime(INVITATION_REMIND_TIME));
+            player->m_Events.AddEvent(inviteEvent, player->m_Events.CalculateTime(invitationRemindTime));
             // create automatic remove events
             BGQueueRemoveEvent* removeEvent = new BGQueueRemoveEvent(player->GetObjectGuid(), ginfo->isInvitedToBgInstanceGuid, bgTypeId, bgQueueTypeId, ginfo->removeInviteTime);
-            player->m_Events.AddEvent(removeEvent, player->m_Events.CalculateTime(INVITE_ACCEPT_WAIT_TIME));
+            player->m_Events.AddEvent(removeEvent, player->m_Events.CalculateTime(inviteAcceptWaitTime));
 
             uint32 queueSlot = player->GetBattleGroundQueueIndex(bgQueueTypeId);
 
@@ -440,7 +468,7 @@ bool BattleGroundQueue::InviteGroupToBG(GroupQueueInfo* ginfo, BattleGround* bg,
                       player->GetGuidStr().c_str(), bg->GetInstanceID(), queueSlot, bg->GetTypeID());
 
             // send status packet
-            player->GetSession()->SendPacket(sBattleGroundMgr.BuildBattleGroundStatusPacket(bg, queueSlot, STATUS_WAIT_JOIN, INVITE_ACCEPT_WAIT_TIME, 0));
+            player->GetSession()->SendPacket(sBattleGroundMgr.BuildBattleGroundStatusPacket(bg, queueSlot, STATUS_WAIT_JOIN, inviteAcceptWaitTime, 0));
         }
         return true;
     }
@@ -455,6 +483,14 @@ large groups are disadvantageous, because they will be kicked first if invitatio
 */
 void BattleGroundQueue::FillPlayersToBg(BattleGround* bg, BattleGroundBracketId bracketId)
 {
+    // arenas: only fill up while the match did not start yet, teams are balanced from the mixed queue
+    if (bg->IsArena())
+    {
+        if (bg->GetStatus() < STATUS_IN_PROGRESS)
+            FillArenaSelectionPools(bg, bracketId, false);
+        return;
+    }
+
     int32 hordeFree = bg->GetFreeSlotsForTeam(HORDE);
     int32 allyFree   = bg->GetFreeSlotsForTeam(ALLIANCE);
 
@@ -627,6 +663,105 @@ bool BattleGroundQueue::CheckNormalMatch(BattleGroundBracketId bracketId, uint32
     return m_selectionPools[BG_TEAM_ALLIANCE].GetPlayerCount() >= minPlayers && m_selectionPools[BG_TEAM_HORDE].GetPlayerCount() >= minPlayers;
 }
 
+/*
+Arenas: both factions wait in the mixed queue. Groups are sorted into the two teams in queue order,
+always into the team with more free slots, so matches are balanced and cross faction as well as
+same faction matches are possible. The battleground team of a player is set when he is invited.
+*/
+void BattleGroundQueue::FillArenaSelectionPools(BattleGround* bg, BattleGroundBracketId bracketId, bool start)
+{
+    m_selectionPools[BG_TEAM_ALLIANCE].Init();
+    m_selectionPools[BG_TEAM_HORDE].Init();
+
+    uint32 const teamMax[BG_TEAMS_COUNT] =
+    {
+        start ? bg->GetMinPlayersPerTeam() : bg->GetFreeSlotsForTeam(ALLIANCE),
+        start ? bg->GetMinPlayersPerTeam() : bg->GetFreeSlotsForTeam(HORDE)
+    };
+    uint32 const instanceId = start ? 0 : bg->GetClientInstanceID();
+
+    for (GroupQueueInfo* ginfo : m_queuedGroups[bracketId][BG_QUEUE_MIXED])
+    {
+        if (ginfo->isInvitedToBgInstanceGuid)
+            continue;
+
+        int32 const groupSize = int32(ginfo->players.size());
+        int32 const freeSlots[BG_TEAMS_COUNT] =
+        {
+            int32(teamMax[BG_TEAM_ALLIANCE]) - int32(m_selectionPools[BG_TEAM_ALLIANCE].GetPlayerCount()),
+            int32(teamMax[BG_TEAM_HORDE]) - int32(m_selectionPools[BG_TEAM_HORDE].GetPlayerCount())
+        };
+
+        // prefer the team with more free slots, keep the faction of the group on a tie
+        BattleGroundTeamIndex teamIdx = BattleGround::GetTeamIndexByTeamId(ginfo->groupTeam);
+        if (freeSlots[BG_TEAM_ALLIANCE] > freeSlots[BG_TEAM_HORDE])
+            teamIdx = BG_TEAM_ALLIANCE;
+        else if (freeSlots[BG_TEAM_HORDE] > freeSlots[BG_TEAM_ALLIANCE])
+            teamIdx = BG_TEAM_HORDE;
+
+        // does the whole group fit? otherwise try the other team, otherwise skip it for now
+        if (groupSize > freeSlots[teamIdx])
+        {
+            teamIdx = BattleGround::GetOtherTeamIndex(teamIdx);
+            if (groupSize > freeSlots[teamIdx])
+                continue;
+        }
+
+        ginfo->groupTeam = (teamIdx == BG_TEAM_ALLIANCE) ? ALLIANCE : HORDE;
+        m_selectionPools[teamIdx].AddGroup(ginfo, teamMax[teamIdx], instanceId);
+    }
+}
+
+// this method tries to create an arena match with minPlayersPerTeam against minPlayersPerTeam from the mixed queue
+bool BattleGroundQueue::CheckArenaMatch(BattleGroundBracketId bracketId, BattleGround* bgTemplate, uint32 minPlayersPerTeam)
+{
+    FillArenaSelectionPools(bgTemplate, bracketId, true);
+
+    //allow 1v0 if debug bg
+    if (sBattleGroundMgr.isTesting() && (m_selectionPools[BG_TEAM_ALLIANCE].GetPlayerCount() || m_selectionPools[BG_TEAM_HORDE].GetPlayerCount()))
+        return true;
+
+    return m_selectionPools[BG_TEAM_ALLIANCE].GetPlayerCount() >= minPlayersPerTeam && m_selectionPools[BG_TEAM_HORDE].GetPlayerCount() >= minPlayersPerTeam;
+}
+
+uint32 BattleGroundQueue::GetWaitingArenaPlayersCount(BattleGroundBracketId bracketId) const
+{
+    if (bracketId == BG_BRACKET_ID_NONE)
+        return 0;
+
+    uint32 count = 0;
+    for (GroupQueueInfo const* ginfo : m_queuedGroups[bracketId][BG_QUEUE_MIXED])
+        if (!ginfo->isInvitedToBgInstanceGuid)
+            count += ginfo->players.size();
+    return count;
+}
+
+bool BattleGroundQueue::LeaveQueue(Player* player)
+{
+    if (!player)
+        return false;
+
+    QueuedPlayersMap::iterator itr = m_queuedPlayers.find(player->GetObjectGuid());
+    if (itr == m_queuedPlayers.end())
+        return false;
+
+    BattleGroundTypeId const bgTypeId = itr->second.groupInfo->bgTypeId;
+    BattleGroundQueueTypeId const bgQueueTypeId = BattleGroundMgr::BgQueueTypeId(bgTypeId);
+    BattleGroundBracketId const bracketId = player->GetBattleGroundBracketIdFromLevel(bgTypeId);
+    uint32 const queueSlot = player->GetBattleGroundQueueIndex(bgQueueTypeId);
+
+    player->RemoveBattleGroundQueueId(bgQueueTypeId);   // must be called before RemovePlayer, see HandleBattleFieldPortOpcode
+    RemovePlayer(player->GetObjectGuid(), true);
+
+    if (bracketId != BG_BRACKET_ID_NONE)
+        sBattleGroundMgr.ScheduleQueueUpdate(bgQueueTypeId, bgTypeId, bracketId);
+
+    if (queueSlot < PLAYER_MAX_BATTLEGROUND_QUEUES && player->GetSession())
+        player->GetSession()->SendPacket(sBattleGroundMgr.BuildBattleGroundStatusPacket(sBattleGroundMgr.GetBattleGroundTemplate(bgTypeId), queueSlot, STATUS_NONE, 0, 0));
+
+    return true;
+}
+
 void BattleGroundQueue::RemoveOfflinePlayer()
 {
     for (auto itr = m_queuedPlayers.begin(); itr != m_queuedPlayers.end();)
@@ -685,7 +820,8 @@ bool BattleGroundQueue::HasPlayersInQueue(BattleGroundBracketId bracketId)
     return !(m_queuedGroups[bracketId][BG_QUEUE_PREMADE_ALLIANCE].empty() &&
              m_queuedGroups[bracketId][BG_QUEUE_PREMADE_HORDE].empty() &&
              m_queuedGroups[bracketId][BG_QUEUE_NORMAL_ALLIANCE].empty() &&
-             m_queuedGroups[bracketId][BG_QUEUE_NORMAL_HORDE].empty());
+             m_queuedGroups[bracketId][BG_QUEUE_NORMAL_HORDE].empty() &&
+             m_queuedGroups[bracketId][BG_QUEUE_MIXED].empty());
 }
 
 void BattleGroundQueue::CheckFreeSlots(BattleGroundTypeId bgTypeId, BattleGroundBracketId bracketId)
@@ -809,6 +945,28 @@ bool BattleGroundQueue::CheckCreateNewBg(BattleGroundTypeId bgTypeId, BattleGrou
     uint32 qMinLevel = Player::GetMinLevelForBattleGroundBracketId(bracketId, bgTypeId);
     uint32 qMaxLevel = Player::GetMaxLevelForBattleGroundBracketId(bracketId, bgTypeId) - 1;
 
+    // Arenas: no premade / normal distinction, one mixed queue
+    if (bgTemplate->IsArena())
+    {
+        if (!CheckArenaMatch(bracketId, bgTemplate, minPlayersPerTeam))
+            return false;
+
+        BattleGround* newBg = sBattleGroundMgr.CreateNewBattleGround(bgTypeId, bracketId);
+        if (!newBg)
+        {
+            sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "[BattleGroundQueue::CheckCreateNewBg] Cannot create arena: %u", bgTypeId);
+            return false;
+        }
+
+        for (uint32 i = 0; i < BG_TEAMS_COUNT; ++i)
+            for (const auto group : m_selectionPools[BG_TEAM_ALLIANCE + i].selectedGroups)
+                InviteGroupToBG(group, newBg, group->groupTeam);
+
+        newBg->SetLevelRange(qMinLevel, qMaxLevel);
+        newBg->StartBattleGround();
+        return true;
+    }
+
     // Check for premade match
     m_selectionPools[BG_TEAM_ALLIANCE].Init();
     m_selectionPools[BG_TEAM_HORDE].Init();
@@ -915,7 +1073,8 @@ bool BgQueueInviteEvent::Execute(uint64 /*e_time*/, uint32 /*p_time*/)
         if (bgQueue.IsPlayerInvited(m_playerGuid, m_bgInstanceGuid, m_removeTime))
         {
             //we must send remaining time in queue
-            player->GetSession()->SendPacket(sBattleGroundMgr.BuildBattleGroundStatusPacket(bg, queueSlot, STATUS_WAIT_JOIN, INVITE_ACCEPT_WAIT_TIME - INVITATION_REMIND_TIME, 0));
+            uint32 const remainingTime = BattleGroundMgr::GetInviteAcceptWaitTime(m_bgTypeId) - BattleGroundMgr::GetInvitationRemindTime(m_bgTypeId);
+            player->GetSession()->SendPacket(sBattleGroundMgr.BuildBattleGroundStatusPacket(bg, queueSlot, STATUS_WAIT_JOIN, remainingTime, 0));
         }
     }
     return true;                                            //event will be deleted
@@ -1119,6 +1278,14 @@ std::unique_ptr<ServerPacket> BattleGroundMgr::BuildPvpLogDataPacket(BattleGroun
             }
 #endif
             default:
+                if (bg->IsArena())
+                {
+                    // damage / healing done, shown by the client patch on the scoreboard
+                    auto arenaScore = static_cast<ArenaScore const*>(score);
+                    entry.extraFields.push_back(arenaScore->damageDone);
+                    entry.extraFields.push_back(arenaScore->healingDone);
+                    break;
+                }
                 sLog.Out(LOG_BASIC, LOG_LVL_DEBUG, "Unhandled MSG_PVP_LOG_DATA for BG id %u", bg->GetTypeID());
                 break;
         }
@@ -1262,6 +1429,11 @@ BattleGround* BattleGroundMgr::CreateNewBattleGround(BattleGroundTypeId bgTypeId
             break;
 #endif
         default:
+            if (IsArenaBattleGroundTypeId(bgTypeId))
+            {
+                bg = new Arena(*(Arena*)bgTemplate);
+                break;
+            }
             //error, but it is handled few lines above
             return 0;
     }
@@ -1297,8 +1469,11 @@ uint32 BattleGroundMgr::CreateBattleGround(BattleGroundTypeId bgTypeId, uint32 m
             break;
 #endif
         default:
-            bg = new BattleGround;
-            break;                           // placeholder for non implemented BG
+            if (IsArenaBattleGroundTypeId(bgTypeId))
+                bg = new Arena;
+            else
+                bg = new BattleGround;       // placeholder for non implemented BG
+            break;
     }
 
     bg->SetMapId(mapID);
@@ -1324,9 +1499,68 @@ uint32 BattleGroundMgr::CreateBattleGround(BattleGroundTypeId bgTypeId, uint32 m
     return bgTypeId;
 }
 
+namespace
+{
+    // Arena start locations. Normal battlegrounds read them from WorldSafeLocs.dbc, but the arena
+    // start locations only exist in the arena client patch's dbc. To make the arenas work with a
+    // stock-extracted dbc, they can also be provided in the `arena_start_location` DB table
+    // (same ids as battleground_template.*_start_location). The dbc still wins if present.
+    struct ArenaStartLoc { float x, y, z; };
+
+    std::map<uint32, ArenaStartLoc> LoadArenaStartLocations()
+    {
+        std::map<uint32, ArenaStartLoc> locations;
+        std::unique_ptr<QueryResult> result(WorldDatabase.Query("SELECT `id`, `x`, `y`, `z` FROM `arena_start_location`"));
+        if (!result)
+            return locations;
+
+        do
+        {
+            Field* fields = result->Fetch();
+            ArenaStartLoc& loc = locations[fields[0].GetUInt32()];
+            loc.x = fields[1].GetFloat();
+            loc.y = fields[2].GetFloat();
+            loc.z = fields[3].GetFloat();
+        }
+        while (result->NextRow());
+
+        return locations;
+    }
+
+    // Fills dest[0..3] (x, y, z, o) for the given start location id. Returns false if it is unknown.
+    bool ResolveBgStartLocation(uint32 startLocId, bool isArena, std::map<uint32, ArenaStartLoc> const& arenaLocs, float dest[4])
+    {
+        if (WorldSafeLocsEntry const* start = sWorldSafeLocsStore.LookupEntry(startLocId))
+        {
+            dest[0] = start->x;
+            dest[1] = start->y;
+            dest[2] = start->z;
+            dest[3] = sObjectMgr.GetWorldSafeLocFacing(start->ID);
+            return true;
+        }
+
+        if (isArena)
+        {
+            auto itr = arenaLocs.find(startLocId);
+            if (itr != arenaLocs.end())
+            {
+                dest[0] = itr->second.x;
+                dest[1] = itr->second.y;
+                dest[2] = itr->second.z;
+                dest[3] = sObjectMgr.GetWorldSafeLocFacing(startLocId);
+                return true;
+            }
+        }
+
+        return false;
+    }
+}
+
 void BattleGroundMgr::CreateInitialBattleGrounds()
 {
     uint32 count = 0;
+
+    std::map<uint32, ArenaStartLoc> const arenaStartLocations = LoadArenaStartLocations();
 
     //                                                                0     1                       2                       3            4            5                     6                      7                  8                   9                          10                      11
     std::unique_ptr<QueryResult> result(WorldDatabase.PQuery("SELECT `id`, `min_players_per_team`, `max_players_per_team`, `min_level`, `max_level`, `alliance_win_spell`, `alliance_lose_spell`, `horde_win_spell`, `horde_lose_spell`, `alliance_start_location`, `horde_start_location`, `player_loot_id` FROM `battleground_template` t1 WHERE `patch`=(SELECT max(`patch`) FROM `battleground_template` t2 WHERE t1.`id`=t2.`id` && `patch` <= %u)", sWorld.GetWowPatch()));
@@ -1350,7 +1584,17 @@ void BattleGroundMgr::CreateInitialBattleGrounds()
 
         uint32 bgTypeID_ = fields[0].GetUInt32();
 
+        if (bgTypeID_ == BATTLEGROUND_TYPE_NONE || bgTypeID_ >= MAX_BATTLEGROUND_TYPE_ID)
+        {
+            sLog.Out(LOG_DBERROR, LOG_LVL_MINIMAL, "Table `battleground_template` has invalid battleground id %u, skipped.", bgTypeID_);
+            continue;
+        }
+
         BattleGroundTypeId bgTypeID = BattleGroundTypeId(bgTypeID_);
+
+        // arenas are only created when enabled in the config
+        if (IsArenaBattleGroundTypeId(bgTypeID) && !sWorld.getConfig(CONFIG_BOOL_ARENA_ENABLED))
+            continue;
 
         uint32 minPlayersPerTeam = fields[1].GetUInt32();
         uint32 maxPlayersPerTeam = fields[2].GetUInt32();
@@ -1364,35 +1608,21 @@ void BattleGroundMgr::CreateInitialBattleGrounds()
         float AStartLoc[4];
         float HStartLoc[4];
 
-        uint32 start1 = fields[9].GetUInt32();
+        bool const isArena = IsArenaBattleGroundTypeId(bgTypeID);
 
-        WorldSafeLocsEntry const* start = sWorldSafeLocsStore.LookupEntry(start1);
-        if (start)
+        uint32 start1 = fields[9].GetUInt32();
+        if (!ResolveBgStartLocation(start1, isArena, arenaStartLocations, AStartLoc))
         {
-            AStartLoc[0] = start->x;
-            AStartLoc[1] = start->y;
-            AStartLoc[2] = start->z;
-            AStartLoc[3] = sObjectMgr.GetWorldSafeLocFacing(start->ID);
-        }
-        else
-        {
-            sLog.Out(LOG_DBERROR, LOG_LVL_MINIMAL, "Table `battleground_template` for id %u have nonexistent WorldSafeLocs.dbc id %u in field `AllianceStartLoc`. BG not created.", bgTypeID, start1);
+            sLog.Out(LOG_DBERROR, LOG_LVL_MINIMAL, "Table `battleground_template` for id %u has nonexistent WorldSafeLocs.dbc id %u in field `alliance_start_location`.%s BG not created.",
+                bgTypeID, start1, isArena ? " Add it to WorldSafeLocs.dbc (arena client patch) or the `arena_start_location` table." : "");
             continue;
         }
 
         uint32 start2 = fields[10].GetUInt32();
-
-        start = sWorldSafeLocsStore.LookupEntry(start2);
-        if (start)
+        if (!ResolveBgStartLocation(start2, isArena, arenaStartLocations, HStartLoc))
         {
-            HStartLoc[0] = start->x;
-            HStartLoc[1] = start->y;
-            HStartLoc[2] = start->z;
-            HStartLoc[3] = sObjectMgr.GetWorldSafeLocFacing(start->ID);
-        }
-        else
-        {
-            sLog.Out(LOG_DBERROR, LOG_LVL_MINIMAL, "Table `battleground_template` for id %u have non-existed WorldSafeLocs.dbc id %u in field `HordeStartLoc`. BG not created.", bgTypeID, start2);
+            sLog.Out(LOG_DBERROR, LOG_LVL_MINIMAL, "Table `battleground_template` for id %u has nonexistent WorldSafeLocs.dbc id %u in field `horde_start_location`.%s BG not created.",
+                bgTypeID, start2, isArena ? " Add it to WorldSafeLocs.dbc (arena client patch) or the `arena_start_location` table." : "");
             continue;
         }
 
@@ -1483,6 +1713,9 @@ BattleGroundQueueTypeId BattleGroundMgr::BgQueueTypeId(BattleGroundTypeId bgType
         case BATTLEGROUND_AV:
             return BATTLEGROUND_QUEUE_AV;
         default:
+            // arenas: queue ids and battleground type ids use the same values
+            if (IsArenaBattleGroundTypeId(bgTypeId))
+                return BattleGroundQueueTypeId(bgTypeId);
             return BATTLEGROUND_QUEUE_NONE;
     }
 }
@@ -1498,8 +1731,86 @@ BattleGroundTypeId BattleGroundMgr::BgTemplateId(BattleGroundQueueTypeId bgQueue
         case BATTLEGROUND_QUEUE_AV:
             return BATTLEGROUND_AV;
         default:
+            if (bgQueueTypeId >= BATTLEGROUND_QUEUE_NA_1V1 && bgQueueTypeId <= BATTLEGROUND_QUEUE_DS_5V5)
+                return BattleGroundTypeId(bgQueueTypeId);
             return BattleGroundTypeId(0);                   // used for unknown template (it exist and do nothing)
     }
+}
+
+uint32 BattleGroundMgr::GetInviteAcceptWaitTime(BattleGroundTypeId bgTypeId)
+{
+    if (IsArenaBattleGroundTypeId(bgTypeId))
+        return sWorld.getConfig(CONFIG_UINT32_ARENA_INVITE_ACCEPT_TIME_SECONDS) * IN_MILLISECONDS;
+    return INVITE_ACCEPT_WAIT_TIME;
+}
+
+uint32 BattleGroundMgr::GetInvitationRemindTime(BattleGroundTypeId bgTypeId)
+{
+    if (IsArenaBattleGroundTypeId(bgTypeId))
+        return GetInviteAcceptWaitTime(bgTypeId) / 2;
+    return INVITATION_REMIND_TIME;
+}
+
+void BattleGroundMgr::RemovePlayerFromArenaQueues(Player* player, BattleGroundQueueTypeId except)
+{
+    for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+    {
+        BattleGroundQueueTypeId const queueTypeId = player->GetBattleGroundQueueTypeId(i);
+        if (queueTypeId == BATTLEGROUND_QUEUE_NONE || queueTypeId == except || !IsArenaQueue(queueTypeId))
+            continue;
+
+        m_battleGroundQueues[queueTypeId].LeaveQueue(player);
+    }
+}
+
+uint32 BattleGroundMgr::GetArenaPlayersWaitingCount(BattleGroundTypeId bgTypeId, BattleGroundBracketId bracketId)
+{
+    if (!IsArenaBattleGroundTypeId(bgTypeId) || bracketId == BG_BRACKET_ID_NONE)
+        return 0;
+
+    // waiting in the queue ...
+    uint32 count = m_battleGroundQueues[BgQueueTypeId(bgTypeId)].GetWaitingArenaPlayersCount(bracketId);
+
+    // ... or already invited to / inside an arena that did not start yet and still has free slots
+    for (BattleGroundSet::iterator itr = GetBattleGroundsBegin(bgTypeId); itr != GetBattleGroundsEnd(bgTypeId); ++itr)
+    {
+        BattleGround* bg = itr->second;
+        if (bg->GetBracketId() != bracketId || bg->GetStatus() != STATUS_WAIT_JOIN || !bg->HasFreeSlots())
+            continue;
+
+        count += bg->GetInvitedCount(ALLIANCE) + bg->GetInvitedCount(HORDE);
+    }
+    return count;
+}
+
+BattleGroundTypeId BattleGroundMgr::SelectArenaBattleGroundTypeId(ArenaType type, BattleGroundBracketId bracketId)
+{
+    // prefer the arena map where players of this size are already waiting in the bracket ...
+    BattleGroundTypeId best = BATTLEGROUND_TYPE_NONE;
+    uint32 bestCount = 0;
+    std::vector<BattleGroundTypeId> candidates;
+    for (uint8 map = 0; map < ARENA_MAPS_COUNT; ++map)
+    {
+        BattleGroundTypeId const bgTypeId = GetArenaBattleGroundTypeId(ArenaMapType(map), type);
+        if (!GetBattleGroundTemplate(bgTypeId))
+            continue;
+
+        candidates.push_back(bgTypeId);
+        uint32 const count = GetArenaPlayersWaitingCount(bgTypeId, bracketId);
+        if (count > bestCount)
+        {
+            bestCount = count;
+            best = bgTypeId;
+        }
+    }
+
+    if (best != BATTLEGROUND_TYPE_NONE)
+        return best;
+
+    // ... otherwise a random map
+    if (candidates.empty())
+        return BATTLEGROUND_TYPE_NONE;
+    return candidates[urand(0, candidates.size() - 1)];
 }
 
 void BattleGroundMgr::ToggleTesting()
@@ -1730,7 +2041,7 @@ void BattleGroundMgr::LoadBattleEventIndexes()
 // Offline BG queue system
 void BattleGroundMgr::PlayerLoggedIn(Player* player)
 {
-    for (int i = 1; i <= PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+    for (int i = 1; i < MAX_BATTLEGROUND_QUEUE_TYPES; ++i)
     {
         if (m_battleGroundQueues[i].PlayerLoggedIn(player))
         {
@@ -1762,6 +2073,18 @@ void BattleGroundMgr::PlayerLoggedOut(Player* player)
     {
         if (BattleGroundQueueTypeId bgQueueTypeId = player->GetBattleGroundQueueTypeId(i-1))
         {
+            // arena queues are small, an offline player would block the match: leave the queue for good
+            if (IsArenaQueue(bgQueueTypeId) && sWorld.getConfig(CONFIG_BOOL_ARENA_LEAVE_QUEUES_ON_LOGOUT))
+            {
+                BattleGroundTypeId const bgTypeId = BgTemplateId(bgQueueTypeId);
+                BattleGroundBracketId const bracketId = player->GetBattleGroundBracketIdFromLevel(bgTypeId);
+                player->RemoveBattleGroundQueueId(bgQueueTypeId);
+                m_battleGroundQueues[bgQueueTypeId].RemovePlayer(player->GetObjectGuid(), true);
+                if (bracketId != BG_BRACKET_ID_NONE)
+                    ScheduleQueueUpdate(bgQueueTypeId, bgTypeId, bracketId);
+                continue;
+            }
+
             player->RemoveBattleGroundQueueId(bgQueueTypeId);
             m_battleGroundQueues[bgQueueTypeId].PlayerLoggedOut(player->GetObjectGuid());
         }

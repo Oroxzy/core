@@ -721,6 +721,9 @@ class Unit : public SpellCaster
         void RemoveAllNegativeAuras(AuraRemoveMode mode = AURA_REMOVE_BY_DEFAULT);
         void RemoveAuraTypeOnDeath(AuraType auraType);
         void RemoveAllAurasOnDeath();
+        // Arena: removes positive, non-passive, non-permanent auras with maxRemainingMs or less remaining duration
+        // (pre-cast shields/HoTs before the gates open), invisibility and unaffected-by-invulnerability spells excluded.
+        void RemoveShortDurationBuffs(uint32 maxRemainingMs);
         bool RemoveAuraDueToVisibleSlotLimit(SpellAuraHolder* currentAura); // Returns true if we remove 'currentAura'
 #if SUPPORTED_CLIENT_BUILD <= CLIENT_BUILD_1_9_4
         void RemoveAurasByDamageTaken(uint32 damage, uint32 exceptSpellId);

@@ -307,6 +307,10 @@ void PlayerBotMgr::Update(uint32 diff)
         m_lastBattleBotQueueUpdate = sWorld.GetGameTime();
         for (uint32 queueType = BATTLEGROUND_QUEUE_AV; queueType < MAX_BATTLEGROUND_QUEUE_TYPES; ++queueType)
         {
+            // battle bots only know the classic battlegrounds, not the custom arenas
+            if (BattleGroundMgr::IsArenaQueue(BattleGroundQueueTypeId(queueType)))
+                continue;
+
             bool hasPlayerInQueue[MAX_BATTLEGROUND_BRACKETS] = {};
             uint32 queuedAllianceCount[MAX_BATTLEGROUND_BRACKETS] = {};
             uint32 queuedHordeCount[MAX_BATTLEGROUND_BRACKETS] = {};

@@ -70,9 +70,10 @@ enum BattleGroundQueueGroupTypes
     BG_QUEUE_PREMADE_ALLIANCE   = 0,
     BG_QUEUE_PREMADE_HORDE      = 1,
     BG_QUEUE_NORMAL_ALLIANCE    = 2,
-    BG_QUEUE_NORMAL_HORDE       = 3
+    BG_QUEUE_NORMAL_HORDE       = 3,
+    BG_QUEUE_MIXED              = 4                         // arenas: both factions queue together, teams are assigned on invite
 };
-#define BG_QUEUE_GROUP_TYPES_COUNT 4
+#define BG_QUEUE_GROUP_TYPES_COUNT 5
 
 enum BattleGroundGroupJoinStatus : uint32
 {
@@ -102,6 +103,11 @@ class BattleGroundQueue
         void PlayerLoggedOut(ObjectGuid guid);
         bool PlayerLoggedIn(Player* player);
 
+        // Arena: number of players waiting in the mixed queue of a bracket that are not invited yet.
+        uint32 GetWaitingArenaPlayersCount(BattleGroundBracketId bracketId) const;
+        // Arena: removes the player from this queue (status packet, queue slot, queue update). Returns false if he was not queued here.
+        bool LeaveQueue(Player* player);
+
         // mutex that should not allow changing private data, nor allowing to update Queue during private data change.
         //std::recursive_mutex  m_lock;
 
@@ -114,6 +120,11 @@ class BattleGroundQueue
         bool HasPlayersInQueue(BattleGroundBracketId bracketId);
         void CheckFreeSlots(BattleGroundTypeId bgTypeId, BattleGroundBracketId bracketId);
         bool CheckCreateNewBg(BattleGroundTypeId bgTypeId, BattleGroundBracketId bracketId);
+
+        // Arena: fills both selection pools from the mixed queue, balancing the teams. If start is set the
+        // pools are filled up to minPlayersPerTeam (new match), otherwise up to the free slots of bg.
+        void FillArenaSelectionPools(BattleGround* bg, BattleGroundBracketId bracketId, bool start);
+        bool CheckArenaMatch(BattleGroundBracketId bracketId, BattleGround* bgTemplate, uint32 minPlayersPerTeam);
 
         // we need constant add to begin and constant remove / add from the end, therefore deque suits our problem well
         typedef std::vector<GroupQueueInfo*> GroupsQueueType;
@@ -301,6 +312,18 @@ class BattleGroundMgr
 
         static BattleGroundQueueTypeId BgQueueTypeId(BattleGroundTypeId bgTypeId);
         static BattleGroundTypeId BgTemplateId(BattleGroundQueueTypeId bgQueueTypeId);
+
+        // Arena helpers
+        static bool IsArenaQueue(BattleGroundQueueTypeId bgQueueTypeId) { return IsArenaBattleGroundTypeId(BgTemplateId(bgQueueTypeId)); }
+        static uint32 GetInviteAcceptWaitTime(BattleGroundTypeId bgTypeId);   // ms
+        static uint32 GetInvitationRemindTime(BattleGroundTypeId bgTypeId);   // ms
+        // Removes the player from all arena queues (except the given one). Used when he enters an arena or logs out.
+        void RemovePlayerFromArenaQueues(Player* player, BattleGroundQueueTypeId except = BATTLEGROUND_QUEUE_NONE);
+        // Number of players that are waiting for (or already inside) a not yet started arena of this type in the player's bracket.
+        uint32 GetArenaPlayersWaitingCount(BattleGroundTypeId bgTypeId, BattleGroundBracketId bracketId);
+        // Picks the arena map (bg type) of the wanted size a player should queue for: prefers a queue where players
+        // are already waiting in his bracket, otherwise a random map.
+        BattleGroundTypeId SelectArenaBattleGroundTypeId(ArenaType type, BattleGroundBracketId bracketId);
 
         static HolidayIds BgTypeToWeekendHolidayId(BattleGroundTypeId bgTypeId);
         static BattleGroundTypeId WeekendHolidayIdToBgType(HolidayIds holiday);

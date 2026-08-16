@@ -38,6 +38,7 @@ set (SCRIPTS_SRCS
     battlegrounds/battleground_alterac.cpp
     custom/custom.cpp
     custom/custom_creatures.cpp
+    custom/custom_arena.cpp
     custom/npc_autotrainer.cpp
     custom/npc_training_dummies.cpp
     custom/template_npc.cpp
