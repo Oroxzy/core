@@ -562,6 +562,14 @@ void Arena::StartingEventOpenDoors()
 
     PlaySoundToAll(SOUND_ARENA_LET_THE_GAMES_BEGIN);
 
+    // every other arena gets its gate sound from the door model's own $GO trigger; the Dalaran sewer
+    // door has none (see SOUND_ARENA_DS_DOOR_OPEN), so it is played from the doors themselves - they
+    // are visible, so the sound stays positional like the others
+    if (IsDalaranArena())
+        for (auto const& guid : m_eventObjects[MAKE_PAIR32(BG_EVENT_DOOR, 0)].gameobjects)
+            if (GameObject* door = GetBgMap()->GetGameObject(guid))
+                door->PlayDistanceSound(SOUND_ARENA_DS_DOOR_OPEN);
+
     // the ready check npcs leave, the shadow sight orbs come later
     SpawnEvent(ARENA_EVENT_WATCHER_1, 0, false, true);
     SpawnEvent(ARENA_EVENT_WATCHER_2, 0, false, true);
@@ -1017,7 +1025,15 @@ void Arena::DoWaterFlush()
 {
     for (uint8 event1 = ARENA_EVENT_DS_WATERSPOUT_1; event1 <= ARENA_EVENT_DS_WATERSPOUT_2; ++event1)
         if (Creature* waterSpout = GetBgMap()->GetCreature(GetSingleCreatureGuid(event1, 0)))
+        {
             waterSpout->CastSpell(waterSpout, SPELL_ARENA_DS_FLUSH, true);
+
+            // The spell itself is mute (see SOUND_ARENA_DS_WATER_FLUSH). The spouts only wear the
+            // invisible stalker model 11686 - they are ordinary units the client loads, which is why
+            // their spell is visible - so the sound comes out of the pipe it belongs to instead of
+            // being played flat to everybody.
+            waterSpout->PlayDistanceSound(SOUND_ARENA_DS_WATER_FLUSH);
+        }
 }
 
 void Arena::DoWaterfallKick()

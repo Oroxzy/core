@@ -42,6 +42,12 @@ enum ArenaSounds
     SOUND_ARENA_KILL                        = 8213,
     SOUND_ARENA_LET_THE_GAMES_BEGIN         = 8280,
     SOUND_ARENA_DS_WATER_INCOMING           = 15355,
+    // Blizzard never gave the Dalaran flush a sound: spell 37405 "Flush" uses visual kit 12036 with
+    // SoundId 0 and its effect model "Arena Pipe Flush" has no animation events at all (checked against
+    // the retail model). Same for the sewer door, whose model carries no $GO trigger although its display
+    // entry names an open and a close sound. Both are played from here instead, with Blizzard's own ids.
+    SOUND_ARENA_DS_WATER_FLUSH              = 15196,    // DalaranSewer_ArenaWaterFall_Close
+    SOUND_ARENA_DS_DOOR_OPEN                = 15030,    // Dalaran_SewerDoor_01_Open (display 8308 sound slot 1)
     SOUND_ARENA_PLAYER_LEFT                 = 17341,    // LFG denied
     SOUND_ARENA_MATCH_END                   = 17318,    // LFG dungeon ready
     SOUND_ARENA_MATCH_START                 = 17316,    // LFG rewards
