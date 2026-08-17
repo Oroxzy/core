@@ -144,6 +144,7 @@ enum ArenaTimers
     ARENA_WORLD_STATE_UPDATE_INTERVAL       = 1 * IN_MILLISECONDS,
     ARENA_DOORS_DESPAWN_DELAY               = 3 * IN_MILLISECONDS,
     ARENA_SHADOW_SIGHT_SPAWN_DELAY          = 90,       // seconds after the gates opened
+    ARENA_TP_ZONE_ID                        = 4600,     // area_template / AreaTable zone of The Tiger's Peak (weather)
     ARENA_SHORT_BUFF_DURATION               = 30 * IN_MILLISECONDS,     // buffs with less remaining time are removed on start
     ARENA_COOLDOWN_RESET_MAX_DURATION       = 10 * MINUTE * IN_MILLISECONDS,   // only shorter cooldowns are reset (unless configured)
     ARENA_TIME_TO_AUTOREMOVE_ABORTED        = 15 * IN_MILLISECONDS,     // players are removed this fast after an aborted match
@@ -233,6 +234,7 @@ class Arena : public BattleGround
         ArenaMapType GetArenaMapType() const { return GetArenaMapTypeForBattleGroundTypeId(GetTypeID()); }
         bool IsNagrandArena() const { return GetArenaMapType() == ARENA_MAP_NAGRAND; }
         bool IsDalaranArena() const { return GetArenaMapType() == ARENA_MAP_DALARAN; }
+        bool IsTigersPeakArena() const { return GetArenaMapType() == ARENA_MAP_TIGERS_PEAK; }
 
         uint32 GetTeamDamageDone(Team team) const;
         uint32 GetRemainingTime() const;                    // ms until the time limit is reached

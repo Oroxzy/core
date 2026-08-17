@@ -535,6 +535,11 @@ void Arena::StartingEventCloseDoors()
         SetWaterActive(ARENA_EVENT_DS_DOODAD_SEWER01, true);
     }
 
+    // Tiger's Peak: it always snows on the mountain (permanent, so the random weather
+    // regeneration never clears it during a match)
+    if (IsTigersPeakArena())
+        GetBgMap()->SetWeather(ARENA_TP_ZONE_ID, WEATHER_TYPE_SNOW, 0.5f, true);
+
     UpdateWorldStates();
 }
 
