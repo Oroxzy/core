@@ -8,7 +8,10 @@ battleground ids 20-23) - can be played in 1v1, 2v2, 3v3 and 5v5, solo or as gro
 ## Setup
 
 1. Client: every player needs the client patch (`Patch-3.MPQ`) from
-   https://github.com/Oroxzy/VMaNGOSArenaPatch (maps, dbc entries, sounds, scoreboard UI).
+   https://github.com/Oroxzy/VMaNGOSArenaPatch (maps, dbc entries, sounds, scoreboard columns).
+   The `ArenaTeamColors` addon in the same repository is optional and per player: it paints the
+   scoreboard rows in the Gold and Green team colours instead of red and blue. The scoreboard UI
+   itself can not be shipped inside the patch - 1.12 refuses modified FrameXML, even from an MPQ.
 2. Server data: copy the content of `arena_data/` (maps, vmaps, mmaps of the arena maps) into the
    server data folder (`maps/`, `vmaps/`, `mmaps/`). The dbc folder must be extracted from a client
    that has the patch installed (WorldSafeLocs.dbc must contain the arena start locations
@@ -35,12 +38,18 @@ battleground ids 20-23) - can be played in 1v1, 2v2, 3v3 and 5v5, solo or as gro
 * Dead players can not be resurrected or reclaim their corpse; after releasing they watch the rest of
   the match as invisible spectators. A team wins when the other team has no alive players left, or,
   after `Arena.TimeLimitMinutes`, by damage done.
-* Kills inside arenas give no honor, leaving gives no deserter debuff.
-* Damage done and healing done are tracked and shown on the scoreboard (client patch).
+* Kills inside arenas give no honor. Losing a match costs nothing either, but *leaving* an unfinished
+  one does: participants get the Deserter debuff for `Arena.LeaveLockoutMinutes` (default 10, 0 turns
+  it off), including on logout and on teleporting out.
+* Damage done and healing done are tracked and shown on the scoreboard (client patch). The teams are
+  Gold and Green as on retail, not Alliance and Horde - the team travels in the bonus honor field so
+  the scoreboard tells same faction matches apart (see the ArenaTeamColors addon in the client patch).
 * Nagrand: tornadoes; Dalaran Sewers: pipe flush after the start, periodic waterfall with knockback.
+  The flush and the sewer gates are given their sound from here (15196 / 15030): Blizzard's own spell
+  and door model carry no sound trigger at all, unlike the gates of the other four arenas.
 * Tiger's Peak: teams start in the west/east gate alcoves behind the original MoP gates
-  (GO 212921, converted PA_Shadowpan_Arenagate_01), watcher npcs in both alcoves, Shadow Sight
-  spawns on the two round platforms (layout as in the original MoP arena).
+  (GO 212921, retail display 8600 = PA_ShadowpanDoor, size 1.45449), watcher npcs in both alcoves,
+  Shadow Sight spawns on the two round platforms (layout as in the original MoP arena). It snows.
 
 ## Tables added / used
 
