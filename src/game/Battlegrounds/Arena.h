@@ -58,8 +58,8 @@ enum ArenaBroadcastTexts
     BCT_ARENA_START_HALF_MINUTE             = 800111,
     BCT_ARENA_START_FIFTEEN_SECONDS         = 800112,
     BCT_ARENA_HAS_BEGUN                     = 800113,
-    BCT_ARENA_BLUE_TEAM_WINS                = 800114,   // alliance side
-    BCT_ARENA_RED_TEAM_WINS                 = 800115,   // horde side
+    BCT_ARENA_GOLD_TEAM_WINS                = 800114,   // alliance side
+    BCT_ARENA_GREEN_TEAM_WINS               = 800115,   // horde side
     BCT_ARENA_DRAW                          = 800116,
     BCT_ARENA_WATCHER_HELLO                 = 800100,   // npc_text 800100
     BCT_ARENA_WATCHER_LEAVE_CONFIRM         = 800101,   // npc_text 800101
@@ -78,8 +78,12 @@ enum ArenaMangosStrings
 enum ArenaSpells
 {
     SPELL_ARENA_PREPARATION                 = 32727,    // no power costs during the preparation, removed when the gates open
-    SPELL_ARENA_TEAM_BLUE                   = 35777,    // alliance side team marker, also used as "ready" flag during preparation
-    SPELL_ARENA_TEAM_RED                    = 35776,    // horde side team marker
+    // Retail arena teams are Gold and Green, not Alliance and Horde (a Horde player can end up on the
+    // "alliance side" of a match). Blizzard's mapping (MoP WorldStateFrame.lua): faction 0 = Green,
+    // faction 1 = Gold. The auras carry the team banner on the player's back and double as the "ready"
+    // flag during the preparation.
+    SPELL_ARENA_TEAM_GOLD                   = 32724,    // alliance side, visual 8378/8379 -> SPELLS\GoldArenaflag_spell
+    SPELL_ARENA_TEAM_GREEN                  = 32725,    // horde side, visual 8380/8381 -> SPELLS\GreenArenaflag_spell
     SPELL_ARENA_SHADOW_SIGHT                = 34709,
     SPELL_ARENA_DS_FLUSH                    = 37405,    // visual water flush cast by the water spouts
     SPELL_ARENA_RECENTLY_BANDAGED           = 11196,

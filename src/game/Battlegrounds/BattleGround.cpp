@@ -640,7 +640,7 @@ int32 BattleGround::GetWinnerText(Team winner) const
             return (winner == HORDE ? BCT_BG_AB_H_WINS : BCT_BG_AB_A_WINS);
         default:
             if (IsArena())
-                return winner == HORDE ? BCT_ARENA_RED_TEAM_WINS : (winner == ALLIANCE ? BCT_ARENA_BLUE_TEAM_WINS : 0);
+                return winner == HORDE ? BCT_ARENA_GREEN_TEAM_WINS : (winner == ALLIANCE ? BCT_ARENA_GOLD_TEAM_WINS : 0);
             break;
     }
     return 0;

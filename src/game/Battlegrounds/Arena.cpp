@@ -621,7 +621,7 @@ void Arena::AddPlayer(Player* player)
     else
         player->AddAura(SPELL_ARENA_PREPARATION);
 
-    PSendMessageToAll(LANG_ARENA_PLAYER_JOINED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, player->GetName(), player->GetBGTeam() == HORDE ? "Red Team" : "Blue Team");
+    PSendMessageToAll(LANG_ARENA_PLAYER_JOINED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, player->GetName(), player->GetBGTeam() == HORDE ? "Green Team" : "Gold Team");
 
     UpdateWorldStates();
 }
@@ -758,14 +758,14 @@ void Arena::ResetArenaCooldowns(Player* player)
 
 void Arena::ApplyTeamAura(Player* player)
 {
-    uint32 const spellId = player->GetBGTeam() == HORDE ? SPELL_ARENA_TEAM_RED : SPELL_ARENA_TEAM_BLUE;
+    uint32 const spellId = player->GetBGTeam() == HORDE ? SPELL_ARENA_TEAM_GREEN : SPELL_ARENA_TEAM_GOLD;
     if (!player->HasAura(spellId))
         player->AddAura(spellId);
 }
 
 bool Arena::IsPlayerReady(Player const* player)
 {
-    return player->HasAura(SPELL_ARENA_TEAM_BLUE) || player->HasAura(SPELL_ARENA_TEAM_RED);
+    return player->HasAura(SPELL_ARENA_TEAM_GOLD) || player->HasAura(SPELL_ARENA_TEAM_GREEN);
 }
 
 bool Arena::AreAllPlayersReady() const

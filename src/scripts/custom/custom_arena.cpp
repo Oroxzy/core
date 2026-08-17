@@ -790,9 +790,9 @@ bool GossipSelect_ArenaWatcher(Player* player, Creature* creature, uint32 /*send
             if (readyAlliance + readyHorde >= bg->GetMaxPlayers())
                 announce = "Both teams are ready to fight!";
             else if (readyHorde >= bg->GetMaxPlayersPerTeam())
-                announce = "The Red Team is ready to fight!";
+                announce = "The Green Team is ready to fight!";
             else if (readyAlliance >= bg->GetMaxPlayersPerTeam())
-                announce = "The Blue Team is ready to fight!";
+                announce = "The Gold Team is ready to fight!";
 
             if (announce)
             {

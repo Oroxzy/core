@@ -349,8 +349,8 @@
         (800111, 'Thirty seconds until the Arena battle begins!', 'Thirty seconds until the Arena battle begins!', 0, 0, 0, 0, 0, 0, 0, 0, 0),
         (800112, 'Fifteen seconds until the Arena battle begins!', 'Fifteen seconds until the Arena battle begins!', 0, 0, 0, 0, 0, 0, 0, 0, 0),
         (800113, 'The Arena battle has begun!', 'The Arena battle has begun!', 0, 0, 0, 0, 0, 0, 0, 0, 0),
-        (800114, 'The Blue Team wins!', 'The Blue Team wins!', 0, 0, 0, 0, 0, 0, 0, 0, 0),
-        (800115, 'The Red Team wins!', 'The Red Team wins!', 0, 0, 0, 0, 0, 0, 0, 0, 0),
+        (800114, 'The Gold Team wins!', 'The Gold Team wins!', 0, 0, 0, 0, 0, 0, 0, 0, 0),
+        (800115, 'The Green Team wins!', 'The Green Team wins!', 0, 0, 0, 0, 0, 0, 0, 0, 0),
         (800116, 'The Arena battle ended in a draw.', 'The Arena battle ended in a draw.', 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
 -- 10. npc_text
