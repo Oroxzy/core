@@ -491,14 +491,18 @@ void Arena::UpdateDalaran(uint32 diff)
 
 void Arena::CheckPlayersUnderMap()
 {
-    // fallback floor heights per arena (safely below every legal fight spot)
+    // Fallback floor heights per arena: slightly below the lowest legal fight spot.
+    // Players that fall through the WMO floor come to rest on the ADT terrain below it
+    // (Dalaran has a flat terrain plane at z = 0 under the whole arena), so the threshold
+    // must sit ABOVE that resting height or they would never be rescued.
     float minZ;
     switch (GetArenaMapType())
     {
-        case ARENA_MAP_NAGRAND:     minZ = 3.0f;   break;   // floor ~13.6
-        case ARENA_MAP_BLADES_EDGE: minZ = -5.0f;  break;   // floor ~5.3, bridge above
-        case ARENA_MAP_LORDAERON:   minZ = 20.0f;  break;   // floor ~31.6
-        case ARENA_MAP_DALARAN:     minZ = -7.0f;  break;   // floor ~3.2
+        case ARENA_MAP_NAGRAND:     minZ = 10.0f;  break;   // floor / start rooms ~12.1
+        case ARENA_MAP_BLADES_EDGE: minZ = 2.5f;   break;   // start rooms ~4.96, bridge above
+        case ARENA_MAP_LORDAERON:   minZ = 30.0f;  break;   // floor ~32.5
+        case ARENA_MAP_DALARAN:     minZ = 1.0f;   break;   // floor ~3.2, water channel ~2.8, terrain plane at 0
+        case ARENA_MAP_TIGERS_PEAK: minZ = 370.0f; break;   // plateau terrain ~380.7, platforms ~381.5
         default:                    return;
     }
 

@@ -1,8 +1,9 @@
 # Custom Arenas (1.12 client)
 
 Server side of the arena patch originally published at https://github.com/Oroxzy/core/tree/TheArena,
-ported to the current core and cleaned up. All four TBC / WotLK arenas (Nagrand Arena, Blade's Edge Arena,
-Ruins of Lordaeron, Dalaran Sewers) can be played in 1v1, 2v2, 3v3 and 5v5, solo or as group, cross faction.
+ported to the current core and cleaned up. Five arenas - Nagrand Arena, Blade's Edge Arena, Ruins of
+Lordaeron, Dalaran Sewers (TBC / WotLK) and The Tiger's Peak (Mists of Pandaria, maps 624-627,
+battleground ids 20-23) - can be played in 1v1, 2v2, 3v3 and 5v5, solo or as group, cross faction.
 
 ## Setup
 
@@ -11,7 +12,8 @@ Ruins of Lordaeron, Dalaran Sewers) can be played in 1v1, 2v2, 3v3 and 5v5, solo
 2. Server data: copy the content of `arena_data/` (maps, vmaps, mmaps of the arena maps) into the
    server data folder (`maps/`, `vmaps/`, `mmaps/`). The dbc folder must be extracted from a client
    that has the patch installed (WorldSafeLocs.dbc must contain the arena start locations
-   929, 936, 939, 940, 1258, 1259, 1362, 1363).
+   929, 936, 939, 940, 1258, 1259, 1362, 1363, 1450, 1451). If the dbc lacks them, the core falls
+   back to the `arena_start_location` table (section 20/21 of the SQL).
 3. World database: apply `sql/arena/world_arena.sql`.
 4. `mangosd.conf`: set `Arena.Enable = 1` (see the ARENA SETTINGS block for the other options).
 5. Place an Arena Orb (`.gobj add 187078`) and optionally an Arena Announcer (`.npc add 600044`)
@@ -36,6 +38,9 @@ Ruins of Lordaeron, Dalaran Sewers) can be played in 1v1, 2v2, 3v3 and 5v5, solo
 * Kills inside arenas give no honor, leaving gives no deserter debuff.
 * Damage done and healing done are tracked and shown on the scoreboard (client patch).
 * Nagrand: tornadoes; Dalaran Sewers: pipe flush after the start, periodic waterfall with knockback.
+* Tiger's Peak: teams start in the west/east gate alcoves, Shadow Sight spawns on the two round
+  platforms (layout as in the original MoP arena). No gates and no watcher npcs yet - the match
+  starts after the normal one minute timer.
 
 ## Tables added / used
 

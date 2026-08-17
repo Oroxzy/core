@@ -1664,6 +1664,10 @@ enum Maps
     MAP_ARENA_DALARAN_2V2       = 618,
     MAP_ARENA_DALARAN_3V3       = 619,
     MAP_ARENA_DALARAN_5V5       = 620,
+    MAP_ARENA_TIGERS_PEAK_1V1   = 624,
+    MAP_ARENA_TIGERS_PEAK_2V2   = 625,
+    MAP_ARENA_TIGERS_PEAK_3V3   = 626,
+    MAP_ARENA_TIGERS_PEAK_5V5   = 627,
 };
 
 // Indexes of BattlemasterList.dbc
@@ -1692,11 +1696,15 @@ enum BattleGroundTypeId
     BATTLEGROUND_DS_2V2        = 17,
     BATTLEGROUND_DS_3V3        = 18,
     BATTLEGROUND_DS_5V5        = 19,
+    BATTLEGROUND_TP_1V1        = 20,                        // The Tiger's Peak
+    BATTLEGROUND_TP_2V2        = 21,
+    BATTLEGROUND_TP_3V3        = 22,
+    BATTLEGROUND_TP_5V5        = 23,
 };
-#define MAX_BATTLEGROUND_TYPE_ID 20
+#define MAX_BATTLEGROUND_TYPE_ID 24
 
 #define BATTLEGROUND_ARENA_FIRST BATTLEGROUND_NA_1V1
-#define BATTLEGROUND_ARENA_LAST  BATTLEGROUND_DS_5V5
+#define BATTLEGROUND_ARENA_LAST  BATTLEGROUND_TP_5V5
 
 // Team size of an arena match.
 enum ArenaType : uint8
@@ -1716,8 +1724,9 @@ enum ArenaMapType : uint8
     ARENA_MAP_BLADES_EDGE   = 1,
     ARENA_MAP_LORDAERON     = 2,
     ARENA_MAP_DALARAN       = 3,
+    ARENA_MAP_TIGERS_PEAK   = 4,
 };
-#define ARENA_MAPS_COUNT 4
+#define ARENA_MAPS_COUNT 5
 
 inline bool IsArenaBattleGroundTypeId(BattleGroundTypeId bgTypeId)
 {
@@ -1795,6 +1804,10 @@ inline BattleGroundTypeId GetBattleGroundTypeIdByMapId(uint32 mapId)
         case MAP_ARENA_DALARAN_2V2:         return BATTLEGROUND_DS_2V2;
         case MAP_ARENA_DALARAN_3V3:         return BATTLEGROUND_DS_3V3;
         case MAP_ARENA_DALARAN_5V5:         return BATTLEGROUND_DS_5V5;
+        case MAP_ARENA_TIGERS_PEAK_1V1:     return BATTLEGROUND_TP_1V1;
+        case MAP_ARENA_TIGERS_PEAK_2V2:     return BATTLEGROUND_TP_2V2;
+        case MAP_ARENA_TIGERS_PEAK_3V3:     return BATTLEGROUND_TP_3V3;
+        case MAP_ARENA_TIGERS_PEAK_5V5:     return BATTLEGROUND_TP_5V5;
         default:                            return BATTLEGROUND_TYPE_NONE;
     }
 }
@@ -1822,6 +1835,10 @@ inline uint32 GetBattleGrounMapIdByTypeId(BattleGroundTypeId bgTypeId)
         case BATTLEGROUND_DS_2V2:   return MAP_ARENA_DALARAN_2V2;
         case BATTLEGROUND_DS_3V3:   return MAP_ARENA_DALARAN_3V3;
         case BATTLEGROUND_DS_5V5:   return MAP_ARENA_DALARAN_5V5;
+        case BATTLEGROUND_TP_1V1:   return MAP_ARENA_TIGERS_PEAK_1V1;
+        case BATTLEGROUND_TP_2V2:   return MAP_ARENA_TIGERS_PEAK_2V2;
+        case BATTLEGROUND_TP_3V3:   return MAP_ARENA_TIGERS_PEAK_3V3;
+        case BATTLEGROUND_TP_5V5:   return MAP_ARENA_TIGERS_PEAK_5V5;
         default:                    return 0;   //none
     }
 }

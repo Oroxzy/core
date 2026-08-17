@@ -1073,3 +1073,66 @@
         (1259, 1295.13, 1586.44, 32.5, 'Ruins of Lordaeron - Horde'),
         (1362, 1359.77, 817.179, 14.87, 'Dalaran Sewers - Alliance'),
         (1363, 1223.86, 764.707, 14.8923, 'Dalaran Sewers - Horde');
+
+-- 21. The Tiger's Peak (ShadoPanArena, MoP 5.4.8 -> vanilla conversion 2026-08-16)
+--     maps 624-627, battleground ids 20-23, area 4600, start locs 1450 (Team1/A) / 1451 (Team2/H)
+
+    DELETE FROM `map_template` WHERE `entry` IN (624, 625, 626, 627);
+    INSERT INTO `map_template` (`entry`, `patch`, `parent`, `map_type`, `linked_zone`, `player_limit`, `reset_delay`, `ghost_entrance_map`, `ghost_entrance_x`, `ghost_entrance_y`, `map_name`, `script_name`) VALUES
+        (624, 0, 0, 3, 4600, 0, 0, -1, 0, 0, 'Tigers Peak Arena 1v1', ''),
+        (625, 0, 0, 3, 4600, 0, 0, -1, 0, 0, 'Tigers Peak Arena 2v2', ''),
+        (626, 0, 0, 3, 4600, 0, 0, -1, 0, 0, 'Tigers Peak Arena 3v3', ''),
+        (627, 0, 0, 3, 4600, 0, 0, -1, 0, 0, 'Tigers Peak Arena 5v5', '');
+
+    DELETE FROM `area_template` WHERE `entry` = 4600;
+    INSERT INTO `area_template` (`entry`, `map_id`, `zone_id`, `explore_flag`, `flags`, `area_level`, `name`, `team`, `liquid_type`) VALUES
+        (4600, 0, 4600, 0, 65, 60, 'The Tigers Peak', 0, 0);
+
+    DELETE FROM `battleground_template` WHERE `id` IN (20, 21, 22, 23);
+    INSERT INTO `battleground_template` (`id`, `patch`, `min_players_per_team`, `max_players_per_team`, `min_level`, `max_level`, `alliance_win_spell`, `alliance_lose_spell`, `horde_win_spell`, `horde_lose_spell`, `alliance_start_location`, `horde_start_location`, `player_loot_id`) VALUES
+        (20, 0, 1, 1, 10, 60, 0, 0, 0, 0, 1450, 1451, 0),
+        (21, 0, 2, 2, 10, 60, 0, 0, 0, 0, 1450, 1451, 0),
+        (22, 0, 3, 3, 10, 60, 0, 0, 0, 0, 1450, 1451, 0),
+        (23, 0, 5, 5, 10, 60, 0, 0, 0, 0, 1450, 1451, 0);
+
+    -- Authentische MoP-Startpositionen (Quelle: TrinityCore/AzerothCore BattlegroundTTP):
+    -- Teams starten in den Tor-Nischen West/Ost, nicht auf den Buff-Plattformen.
+    DELETE FROM `world_safe_locs_facing` WHERE `id` IN (1450, 1451);
+    INSERT INTO `world_safe_locs_facing` (`id`, `orientation`) VALUES
+        (1450, 0.0308292),
+        (1451, 3.12778);
+
+    DELETE FROM `arena_start_location` WHERE `id` IN (1450, 1451);
+    INSERT INTO `arena_start_location` (`id`, `x`, `y`, `z`, `comment`) VALUES
+        (1450, 491.476, 633.332, 380.707, 'Tigers Peak - Team 1 (Westtor)'),
+        (1451, 642.367, 633.406, 380.705, 'Tigers Peak - Team 2 (Osttor)');
+
+    DELETE FROM `game_tele` WHERE `name` = 'TigersPeak';
+    INSERT INTO `game_tele` (`id`, `position_x`, `position_y`, `position_z`, `orientation`, `map`, `name`) VALUES
+        (1452, 567.0, 633.0, 385.0, 1.57, 624, 'TigersPeak');
+
+    -- Shadow Sight auf den beiden runden Plattformen (authentische MoP-Buff-Spots, Quelle TC BattlegroundTTP)
+    DELETE FROM `gameobject` WHERE `guid` IN (624001, 624002, 625001, 625002, 626001, 626002, 627001, 627002);
+    INSERT INTO `gameobject` (`guid`, `id`, `map`, `position_x`, `position_y`, `position_z`, `orientation`, `rotation0`, `rotation1`, `rotation2`, `rotation3`, `spawntimesecsmin`, `spawntimesecsmax`, `animprogress`, `state`, `visibility_mod`, `patch_min`, `patch_max`) VALUES
+        (624001, 184663, 624, 566.788, 602.743, 383.68, 1.5724, 0, 0, 0.707674, 0.70654, 150, 150, 100, 1, 0, 0, 10),
+        (624002, 184664, 624, 566.661, 664.311, 383.681, 4.66374, 0, 0, 0.724096, -0.689699, 150, 150, 100, 1, 0, 0, 10),
+        (625001, 184663, 625, 566.788, 602.743, 383.68, 1.5724, 0, 0, 0.707674, 0.70654, 150, 150, 100, 1, 0, 0, 10),
+        (625002, 184664, 625, 566.661, 664.311, 383.681, 4.66374, 0, 0, 0.724096, -0.689699, 150, 150, 100, 1, 0, 0, 10),
+        (626001, 184663, 626, 566.788, 602.743, 383.68, 1.5724, 0, 0, 0.707674, 0.70654, 150, 150, 100, 1, 0, 0, 10),
+        (626002, 184664, 626, 566.661, 664.311, 383.681, 4.66374, 0, 0, 0.724096, -0.689699, 150, 150, 100, 1, 0, 0, 10),
+        (627001, 184663, 627, 566.788, 602.743, 383.68, 1.5724, 0, 0, 0.707674, 0.70654, 150, 150, 100, 1, 0, 0, 10),
+        (627002, 184664, 627, 566.661, 664.311, 383.681, 4.66374, 0, 0, 0.724096, -0.689699, 150, 150, 100, 1, 0, 0, 10);
+
+    DELETE FROM `gameobject_battleground` WHERE `guid` IN (624001, 624002, 625001, 625002, 626001, 626002, 627001, 627002);
+    INSERT INTO `gameobject_battleground` (`guid`, `event1`, `event2`) VALUES
+        (624001, 212, 0), (624002, 212, 0),
+        (625001, 212, 0), (625002, 212, 0),
+        (626001, 212, 0), (626002, 212, 0),
+        (627001, 212, 0), (627002, 212, 0);
+
+    DELETE FROM `battleground_events` WHERE `map` IN (624, 625, 626, 627) AND `event1` = 212;
+    INSERT INTO `battleground_events` (`map`, `event1`, `event2`, `description`) VALUES
+        (624, 212, 0, 'Shadow Sight'),
+        (625, 212, 0, 'Shadow Sight'),
+        (626, 212, 0, 'Shadow Sight'),
+        (627, 212, 0, 'Shadow Sight');
