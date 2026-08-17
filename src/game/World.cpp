@@ -1316,6 +1316,7 @@ void World::LoadConfigSettings(bool reload)
     setConfigMinMax(CONFIG_UINT32_ARENA_READY_START_DELAY_SECONDS, "Arena.ReadyStartDelaySeconds", 10, 3, 60);
     setConfigMinMax(CONFIG_UINT32_ARENA_INVITE_ACCEPT_TIME_SECONDS, "Arena.InviteAcceptTimeSeconds", 30, 10, 80);
     setConfigMinMax(CONFIG_UINT32_ARENA_MIN_LEVEL, "Arena.MinLevel", 19, 1, PLAYER_MAX_LEVEL);
+    setConfigMinMax(CONFIG_UINT32_ARENA_LEAVE_LOCKOUT_MINUTES, "Arena.LeaveLockoutMinutes", 10, 0, 24 * 60);
     setConfig(CONFIG_BOOL_ARENA_ANNOUNCE_QUEUE, "Arena.AnnounceQueue", true);
     setConfig(CONFIG_BOOL_ARENA_1V1_BLOCK_HEALER_SPECS, "Arena.1v1.BlockHealerSpecs", false);
     setConfig(CONFIG_BOOL_ARENA_LEAVE_QUEUES_ON_LOGOUT, "Arena.LeaveQueuesOnLogout", true);

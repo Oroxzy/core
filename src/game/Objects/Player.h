@@ -641,6 +641,7 @@ enum PlayerDelayedOperations
     DELAYED_RESURRECT_PLAYER      = 0x02,
     DELAYED_SPELL_CAST_DESERTER   = 0x04,
     DELAYED_CAST_HONORLESS_TARGET = 0x08,
+    DELAYED_ARENA_LEAVE_LOCKOUT   = 0x10,               // Deserter with the Arena.LeaveLockoutMinutes duration
     DELAYED_END
 };
 
@@ -2378,6 +2379,8 @@ class Player final: public Unit
 
         void LeaveBattleground(bool teleportToEntryPoint = true);
         bool CanJoinToBattleground() const;
+        // Arena.LeaveLockoutMinutes: Deserter with the configured duration for leaving an unfinished arena match
+        void ApplyArenaLeaveLockout();
 
         bool GetBGAccessByLevel(BattleGroundTypeId bgTypeId) const;
         bool CanUseBattleGroundObject() const;

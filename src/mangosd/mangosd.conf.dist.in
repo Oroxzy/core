@@ -3378,9 +3378,17 @@ DynamicRespawn.PlayersMaxLevelDiff = 0
 #                 0 (disabled)
 #
 #    Arena.ResetAllCooldowns
-#        Reset all spell cooldowns when entering the arena and when the gates open.
+#        Reset all spell cooldowns when the gates open.
 #        Default: 0 (only cooldowns shorter than 10 minutes are reset, like TBC)
 #                 1 (all cooldowns)
+#
+#    Arena.LeaveLockoutMinutes
+#        A participant who leaves an unfinished match (during the preparation or the fight, also by
+#        logging out) gets the Deserter debuff for this many minutes and can not queue for arenas or
+#        battlegrounds meanwhile. Keeps friends from farming the free repair / cooldown reset of the
+#        gate opening. Visitors, finished matches and no-show aborts are not affected.
+#        Default: 10
+#                 0 (disabled)
 #
 ###################################################################################################
 
@@ -3397,3 +3405,4 @@ Arena.AnnounceQueue = 1
 Arena.1v1.BlockHealerSpecs = 0
 Arena.LeaveQueuesOnLogout = 1
 Arena.ResetAllCooldowns = 0
+Arena.LeaveLockoutMinutes = 10

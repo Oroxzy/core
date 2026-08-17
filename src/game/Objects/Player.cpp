@@ -2181,6 +2181,9 @@ void Player::ProcessDelayedOperations()
     if (m_delayedOperations & DELAYED_SPELL_CAST_DESERTER)
         CastSpell(this, 26013, true);               // Deserter
 
+    if (m_delayedOperations & DELAYED_ARENA_LEAVE_LOCKOUT)
+        ApplyArenaLeaveLockout();
+
     if (m_delayedOperations & DELAYED_CAST_HONORLESS_TARGET)
         CastSpell(this, 2479, true);
 
@@ -18931,18 +18934,30 @@ void Player::LeaveBattleground(bool teleportToEntryPoint)
         // nor more Waiting to Resurrect
         RemoveAurasDueToSpell(2584);
 
-        if (!IsGameMaster() &&
-                !bg->IsArena() &&                           // no deserter for arenas
-                sWorld.getConfig(CONFIG_BOOL_BATTLEGROUND_CAST_DESERTER) &&
-                !sWorld.IsStopped() &&
-                (bg->GetStatus() == STATUS_IN_PROGRESS || bg->GetStatus() == STATUS_WAIT_JOIN)
-                )
+        bool const unfinished = bg->GetStatus() == STATUS_IN_PROGRESS || bg->GetStatus() == STATUS_WAIT_JOIN;
+        if (!IsGameMaster() && !sWorld.IsStopped() && unfinished)
         {
-            //lets check if player was teleported from BG and schedule delayed Deserter spell cast
-            if (IsBeingTeleportedFar())
-                ScheduleDelayedOperation(DELAYED_SPELL_CAST_DESERTER);
-            else
-                AddAura(26013, 0, this);               // Deserter
+            if (!bg->IsArena())
+            {
+                if (sWorld.getConfig(CONFIG_BOOL_BATTLEGROUND_CAST_DESERTER))
+                {
+                    //lets check if player was teleported from BG and schedule delayed Deserter spell cast
+                    if (IsBeingTeleportedFar())
+                        ScheduleDelayedOperation(DELAYED_SPELL_CAST_DESERTER);
+                    else
+                        AddAura(26013, 0, this);               // Deserter
+                }
+            }
+            // arena: no regular deserter, but a participant (not a visitor) who walks out of an unfinished match
+            // is locked out for Arena.LeaveLockoutMinutes (0 = off) - keeps friends from farming the repair /
+            // cooldown reset of the gate opening in one-minute cycles
+            else if (sWorld.getConfig(CONFIG_UINT32_ARENA_LEAVE_LOCKOUT_MINUTES) && bg->IsPlayerInBattleGround(GetObjectGuid()))
+            {
+                if (IsBeingTeleportedFar())
+                    ScheduleDelayedOperation(DELAYED_ARENA_LEAVE_LOCKOUT);
+                else
+                    ApplyArenaLeaveLockout();
+            }
         }
         bg->RemovePlayerAtLeave(GetObjectGuid(), teleportToEntryPoint, true);
         sLog.Out(LOG_BG, LOG_LVL_DETAIL, "[%u,%u]: %s:%u [%u:%s] leaves, TypeID: %u",
@@ -18957,6 +18972,28 @@ bool Player::CanJoinToBattleground() const
 {
     // check Deserter debuff
     return !HasAura(26013);
+}
+
+void Player::ApplyArenaLeaveLockout()
+{
+    uint32 const minutes = sWorld.getConfig(CONFIG_UINT32_ARENA_LEAVE_LOCKOUT_MINUTES);
+    if (!minutes)
+        return;
+
+    int32 const duration = int32(minutes * MINUTE * IN_MILLISECONDS);
+
+    // never shorten a longer deserter that is already running
+    if (SpellAuraHolder* existing = GetSpellAuraHolder(26013))
+        if (existing->GetAuraDuration() >= duration)
+            return;
+
+    if (SpellAuraHolder* holder = AddAura(26013, 0, this))    // Deserter, persisted with the character like any aura
+    {
+        holder->SetAuraDuration(duration);
+        holder->SetAuraMaxDuration(duration);
+        holder->RefreshHolder();
+    }
+    ChatHandler(this).PSendSysMessage("You left an unfinished arena match: no queueing for %u minutes.", minutes);
 }
 
 bool Player::IsVisibleInGridForPlayer(Player const* pl) const
