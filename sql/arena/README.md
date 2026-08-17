@@ -38,9 +38,9 @@ battleground ids 20-23) - can be played in 1v1, 2v2, 3v3 and 5v5, solo or as gro
 * Kills inside arenas give no honor, leaving gives no deserter debuff.
 * Damage done and healing done are tracked and shown on the scoreboard (client patch).
 * Nagrand: tornadoes; Dalaran Sewers: pipe flush after the start, periodic waterfall with knockback.
-* Tiger's Peak: teams start in the west/east gate alcoves, Shadow Sight spawns on the two round
-  platforms (layout as in the original MoP arena). No gates and no watcher npcs yet - the match
-  starts after the normal one minute timer.
+* Tiger's Peak: teams start in the west/east gate alcoves behind the original MoP gates
+  (GO 212921, converted PA_Shadowpan_Arenagate_01), watcher npcs in both alcoves, Shadow Sight
+  spawns on the two round platforms (layout as in the original MoP arena).
 
 ## Tables added / used
 

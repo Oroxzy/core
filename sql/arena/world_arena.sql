@@ -1130,8 +1130,56 @@
         (626001, 212, 0), (626002, 212, 0),
         (627001, 212, 0), (627002, 212, 0);
 
-    DELETE FROM `battleground_events` WHERE `map` IN (624, 625, 626, 627) AND `event1` = 212;
+    -- Arena gates (MoP door GO 212921, converted PA_Shadowpan_Arenagate_01, GameObjectDisplayInfo 8600 in the client patch).
+    -- Positions from TC BattlegroundTTP: west gate 502.414/633.099 o=0.0308, east gate 632.891/633.059 o=3.1278.
+    DELETE FROM `gameobject_template` WHERE `entry` = 212921;
+    INSERT INTO `gameobject_template` (`entry`, `patch`, `type`, `displayId`, `name`, `faction`, `flags`, `size`, `data0`, `data1`, `data2`, `data3`, `data4`, `data5`, `data6`, `data7`, `data8`, `data9`, `data10`, `data11`, `data12`, `data13`, `data14`, `data15`, `data16`, `data17`, `data18`, `data19`, `data20`, `data21`, `data22`, `data23`, `mingold`, `maxgold`, `script_name`) VALUES
+        (212921, 0, 0, 8600, 'Doodad_PA_Shadowpan_Arenagate_01', 114, 36, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '');
+
+    DELETE FROM `gameobject` WHERE `guid` IN (624003, 624004, 625003, 625004, 626003, 626004, 627003, 627004);
+    INSERT INTO `gameobject` (`guid`, `id`, `map`, `position_x`, `position_y`, `position_z`, `orientation`, `rotation0`, `rotation1`, `rotation2`, `rotation3`, `spawntimesecsmin`, `spawntimesecsmax`, `animprogress`, `state`, `visibility_mod`, `patch_min`, `patch_max`) VALUES
+        (624003, 212921, 624, 502.414, 633.099, 380.706, 0.0308292, 0, 0, 0.015414, 0.999881, 86400, 86400, 100, 1, 0, 0, 10),
+        (624004, 212921, 624, 632.891, 633.059, 380.705, 3.12778, 0, 0, 0.999976, 0.006906, 86400, 86400, 100, 1, 0, 0, 10),
+        (625003, 212921, 625, 502.414, 633.099, 380.706, 0.0308292, 0, 0, 0.015414, 0.999881, 86400, 86400, 100, 1, 0, 0, 10),
+        (625004, 212921, 625, 632.891, 633.059, 380.705, 3.12778, 0, 0, 0.999976, 0.006906, 86400, 86400, 100, 1, 0, 0, 10),
+        (626003, 212921, 626, 502.414, 633.099, 380.706, 0.0308292, 0, 0, 0.015414, 0.999881, 86400, 86400, 100, 1, 0, 0, 10),
+        (626004, 212921, 626, 632.891, 633.059, 380.705, 3.12778, 0, 0, 0.999976, 0.006906, 86400, 86400, 100, 1, 0, 0, 10),
+        (627003, 212921, 627, 502.414, 633.099, 380.706, 0.0308292, 0, 0, 0.015414, 0.999881, 86400, 86400, 100, 1, 0, 0, 10),
+        (627004, 212921, 627, 632.891, 633.059, 380.705, 3.12778, 0, 0, 0.999976, 0.006906, 86400, 86400, 100, 1, 0, 0, 10);
+
+    DELETE FROM `gameobject_battleground` WHERE `guid` IN (624003, 624004, 625003, 625004, 626003, 626004, 627003, 627004);
+    INSERT INTO `gameobject_battleground` (`guid`, `event1`, `event2`) VALUES
+        (624003, 254, 0), (624004, 254, 0),
+        (625003, 254, 0), (625004, 254, 0),
+        (626003, 254, 0), (626004, 254, 0),
+        (627003, 254, 0), (627004, 254, 0);
+
+    -- Arena Watcher npcs (ready check) in the two gate alcoves, facing the gate
+    DELETE FROM `creature` WHERE `guid` IN (624001, 624002, 625001, 625002, 626001, 626002, 627001, 627002);
+    INSERT INTO `creature` (`guid`, `id`, `id2`, `id3`, `id4`, `map`, `position_x`, `position_y`, `position_z`, `orientation`, `spawntimesecsmin`, `spawntimesecsmax`, `wander_distance`, `health_percent`, `mana_percent`, `movement_type`, `spawn_flags`, `visibility_mod`, `patch_min`, `patch_max`) VALUES
+        (624001, 800100, 0, 0, 0, 624, 486.0, 627.5, 380.7, 0.35, 25, 25, 0, 100, 100, 0, 0, 0, 0, 10),
+        (624002, 800100, 0, 0, 0, 624, 648.0, 639.0, 380.7, 3.50, 25, 25, 0, 100, 100, 0, 0, 0, 0, 10),
+        (625001, 800100, 0, 0, 0, 625, 486.0, 627.5, 380.7, 0.35, 25, 25, 0, 100, 100, 0, 0, 0, 0, 10),
+        (625002, 800100, 0, 0, 0, 625, 648.0, 639.0, 380.7, 3.50, 25, 25, 0, 100, 100, 0, 0, 0, 0, 10),
+        (626001, 800100, 0, 0, 0, 626, 486.0, 627.5, 380.7, 0.35, 25, 25, 0, 100, 100, 0, 0, 0, 0, 10),
+        (626002, 800100, 0, 0, 0, 626, 648.0, 639.0, 380.7, 3.50, 25, 25, 0, 100, 100, 0, 0, 0, 0, 10),
+        (627001, 800100, 0, 0, 0, 627, 486.0, 627.5, 380.7, 0.35, 25, 25, 0, 100, 100, 0, 0, 0, 0, 10),
+        (627002, 800100, 0, 0, 0, 627, 648.0, 639.0, 380.7, 3.50, 25, 25, 0, 100, 100, 0, 0, 0, 0, 10);
+
+    DELETE FROM `creature_battleground` WHERE `guid` IN (624001, 624002, 625001, 625002, 626001, 626002, 627001, 627002);
+    INSERT INTO `creature_battleground` (`guid`, `event1`, `event2`) VALUES
+        (624001, 214, 0), (624002, 215, 0),
+        (625001, 214, 0), (625002, 215, 0),
+        (626001, 214, 0), (626002, 215, 0),
+        (627001, 214, 0), (627002, 215, 0);
+
+    DELETE FROM `battleground_events` WHERE `map` IN (624, 625, 626, 627) AND `event1` IN (212, 214, 215, 254);
     INSERT INTO `battleground_events` (`map`, `event1`, `event2`, `description`) VALUES
+        (624, 254, 0, 'Doors'), (625, 254, 0, 'Doors'), (626, 254, 0, 'Doors'), (627, 254, 0, 'Doors'),
+        (624, 214, 0, 'NPC Arena Watcher 1'), (624, 215, 0, 'NPC Arena Watcher 2'),
+        (625, 214, 0, 'NPC Arena Watcher 1'), (625, 215, 0, 'NPC Arena Watcher 2'),
+        (626, 214, 0, 'NPC Arena Watcher 1'), (626, 215, 0, 'NPC Arena Watcher 2'),
+        (627, 214, 0, 'NPC Arena Watcher 1'), (627, 215, 0, 'NPC Arena Watcher 2'),
         (624, 212, 0, 'Shadow Sight'),
         (625, 212, 0, 'Shadow Sight'),
         (626, 212, 0, 'Shadow Sight'),
