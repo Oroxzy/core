@@ -1095,12 +1095,12 @@
         (22, 0, 3, 3, 10, 60, 0, 0, 0, 0, 1450, 1451, 0),
         (23, 0, 5, 5, 10, 60, 0, 0, 0, 0, 1450, 1451, 0);
 
-    -- Authentische MoP-Startpositionen (Quelle: TrinityCore/AzerothCore BattlegroundTTP):
-    -- Teams starten in den Tor-Nischen West/Ost, nicht auf den Buff-Plattformen.
+    -- Authentische MoP-Startpositionen (Blizzard-Retail world_safe_locs 4534/4535 aus TDB 1200.26021, map 1134,
+    -- Facing dort in Grad: 0.00848 / 180.283): Teams starten in den Tor-Nischen West/Ost, nicht auf den Buff-Plattformen.
     DELETE FROM `world_safe_locs_facing` WHERE `id` IN (1450, 1451);
     INSERT INTO `world_safe_locs_facing` (`id`, `orientation`) VALUES
-        (1450, 0.0308292),
-        (1451, 3.12778);
+        (1450, 0.000148),
+        (1451, 3.146533);
 
     DELETE FROM `arena_start_location` WHERE `id` IN (1450, 1451);
     INSERT INTO `arena_start_location` (`id`, `x`, `y`, `z`, `comment`) VALUES
