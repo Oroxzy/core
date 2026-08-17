@@ -1731,7 +1731,9 @@ BattleGroundTypeId BattleGroundMgr::BgTemplateId(BattleGroundQueueTypeId bgQueue
         case BATTLEGROUND_QUEUE_AV:
             return BATTLEGROUND_AV;
         default:
-            if (bgQueueTypeId >= BATTLEGROUND_QUEUE_NA_1V1 && bgQueueTypeId <= BATTLEGROUND_QUEUE_DS_5V5)
+            // arenas: queue ids and battleground type ids use the same values (covers every arena map,
+            // do NOT spell out a first/last queue id here - the Tiger's Peak was missed that way once)
+            if (IsArenaBattleGroundTypeId(BattleGroundTypeId(bgQueueTypeId)))
                 return BattleGroundTypeId(bgQueueTypeId);
             return BattleGroundTypeId(0);                   // used for unknown template (it exist and do nothing)
     }
