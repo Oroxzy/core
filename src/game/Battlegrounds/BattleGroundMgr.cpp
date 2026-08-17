@@ -1288,6 +1288,13 @@ std::unique_ptr<ServerPacket> BattleGroundMgr::BuildPvpLogDataPacket(BattleGroun
                     auto arenaScore = static_cast<ArenaScore const*>(score);
                     entry.extraFields.push_back(arenaScore->damageDone);
                     entry.extraFields.push_back(arenaScore->healingDone);
+
+                    // The arena team, for the ArenaTeamColors addon (0 = green side, 1 = gold side).
+                    // MSG_PVP_LOG_DATA has no team field and the client derives the "faction" of a
+                    // score row from the player's RACE - so two players of the same faction on
+                    // opposite teams would be coloured alike. Bonus honor is always 0 in an arena
+                    // (no honor is awarded there), so it carries the team instead of adding a column.
+                    entry.bonusHonor = bg->GetPlayerTeam(itr->first) == HORDE ? 0 : 1;
                     break;
                 }
                 sLog.Out(LOG_BASIC, LOG_LVL_DEBUG, "Unhandled MSG_PVP_LOG_DATA for BG id %u", bg->GetTypeID());

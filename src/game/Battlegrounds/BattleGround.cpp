@@ -1828,7 +1828,7 @@ void BattleGround::HandleKillPlayer(Player* pVictim, Player* pKiller)
 
 // return the player's team based on battlegroundplayer info
 // used in same faction arena matches mainly
-Team BattleGround::GetPlayerTeam(ObjectGuid guid)
+Team BattleGround::GetPlayerTeam(ObjectGuid guid) const
 {
     BattleGroundPlayerMap::const_iterator itr = m_players.find(guid);
     if (itr != m_players.end())
