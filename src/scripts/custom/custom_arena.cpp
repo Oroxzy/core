@@ -47,8 +47,9 @@ namespace
         SENDER_LEAVE_QUEUE          = 100,                  // action = BattleGroundQueueTypeId
         SENDER_SPECTATE_LIST        = 200,
         SENDER_SPECTATE_MATCH       = 201,                  // action = low guid of a participant
-        SENDER_ADMIN                = 300,
-        SENDER_NOOP                 = 301,
+        SENDER_ADMIN                = 300,                  // action = ACTION_ADMIN_* (from the admin submenu)
+        SENDER_NOOP                 = 301,                  // back to the main menu
+        SENDER_ADMIN_MENU           = 302,                  // open the admin submenu
 
         // admin actions
         ACTION_ADMIN_MAX_ITEM_LEVEL     = 1,
@@ -352,6 +353,25 @@ namespace
 /***                     ARENA ORB                     ***/
 /*********************************************************/
 
+// admin submenu: gear rules (kept out of the main menu so it does not clutter the queue list)
+static bool ShowArenaAdminMenu(Player* player, GameObject* orb)
+{
+    player->PlayerTalkClass->ClearMenus();
+
+    std::ostringstream ilvl, patch, swap, trinket;
+    ilvl << "Arena.MaxItemLevel = " << sWorld.getConfig(CONFIG_UINT32_ARENA_MAX_ITEM_LEVEL);
+    patch << "Arena.MaxItemPatch = " << sWorld.getConfig(CONFIG_UINT32_ARENA_MAX_ITEM_PATCH) << " (" << ArenaMgr::GetPatchName(uint8(sWorld.getConfig(CONFIG_UINT32_ARENA_MAX_ITEM_PATCH))) << ")";
+    swap << "Arena.AllowItemSwap = " << (sWorld.getConfig(CONFIG_BOOL_ARENA_ALLOW_ITEM_SWAP) ? "on" : "off");
+    trinket << "Arena.AllowTrinketSwap = " << (sWorld.getConfig(CONFIG_BOOL_ARENA_ALLOW_TRINKET_SWAP) ? "on" : "off");
+    player->ADD_GOSSIP_ITEM_EXTENDED(GOSSIP_ICON_INTERACT_1, ilvl.str().c_str(), SENDER_ADMIN, ACTION_ADMIN_MAX_ITEM_LEVEL, "New value:", true);
+    player->ADD_GOSSIP_ITEM_EXTENDED(GOSSIP_ICON_INTERACT_1, patch.str().c_str(), SENDER_ADMIN, ACTION_ADMIN_MAX_ITEM_PATCH, "New value (0 = 1.2 ... 10 = 1.12):", true);
+    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, swap.str().c_str(), SENDER_ADMIN, ACTION_ADMIN_TOGGLE_ITEM_SWAP);
+    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, trinket.str().c_str(), SENDER_ADMIN, ACTION_ADMIN_TOGGLE_TRINKET_SWAP);
+    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Back", SENDER_NOOP, 0);
+    player->SEND_GOSSIP_MENU(ORB_NPC_TEXT_HELLO, orb->GetObjectGuid());
+    return true;
+}
+
 bool GossipHello_ArenaOrb(Player* player, GameObject* orb)
 {
     if (!sWorld.getConfig(CONFIG_BOOL_ARENA_ENABLED))
@@ -446,19 +466,9 @@ bool GossipHello_ArenaOrb(Player* player, GameObject* orb)
     if (anyMatch)
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Spectate a match", SENDER_SPECTATE_LIST, 0);
 
-    // admins can adjust the gear rules
+    // admins can adjust the gear rules (own submenu, see ShowArenaAdminMenu)
     if (player->GetSession()->GetSecurity() >= SEC_ADMINISTRATOR)
-    {
-        std::ostringstream ilvl, patch, swap, trinket;
-        ilvl << "<Admin> Arena.MaxItemLevel = " << sWorld.getConfig(CONFIG_UINT32_ARENA_MAX_ITEM_LEVEL);
-        patch << "<Admin> Arena.MaxItemPatch = " << sWorld.getConfig(CONFIG_UINT32_ARENA_MAX_ITEM_PATCH) << " (" << ArenaMgr::GetPatchName(uint8(sWorld.getConfig(CONFIG_UINT32_ARENA_MAX_ITEM_PATCH))) << ")";
-        swap << "<Admin> Arena.AllowItemSwap = " << (sWorld.getConfig(CONFIG_BOOL_ARENA_ALLOW_ITEM_SWAP) ? "on" : "off");
-        trinket << "<Admin> Arena.AllowTrinketSwap = " << (sWorld.getConfig(CONFIG_BOOL_ARENA_ALLOW_TRINKET_SWAP) ? "on" : "off");
-        player->ADD_GOSSIP_ITEM_EXTENDED(GOSSIP_ICON_INTERACT_1, ilvl.str().c_str(), SENDER_ADMIN, ACTION_ADMIN_MAX_ITEM_LEVEL, "New value:", true);
-        player->ADD_GOSSIP_ITEM_EXTENDED(GOSSIP_ICON_INTERACT_1, patch.str().c_str(), SENDER_ADMIN, ACTION_ADMIN_MAX_ITEM_PATCH, "New value (0 = 1.2 ... 10 = 1.12):", true);
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, swap.str().c_str(), SENDER_ADMIN, ACTION_ADMIN_TOGGLE_ITEM_SWAP);
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, trinket.str().c_str(), SENDER_ADMIN, ACTION_ADMIN_TOGGLE_TRINKET_SWAP);
-    }
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "<Admin> Arena settings", SENDER_ADMIN_MENU, 0);
 
     player->SEND_GOSSIP_MENU(ORB_NPC_TEXT_HELLO, orb->GetObjectGuid());
     return true;
@@ -520,6 +530,12 @@ bool GossipSelect_ArenaOrb(Player* player, GameObject* orb, uint32 sender, uint3
             SpectateArena(player, orb, ObjectGuid(HIGHGUID_PLAYER, action));
             return true;
         }
+        case SENDER_ADMIN_MENU:
+        {
+            if (player->GetSession()->GetSecurity() < SEC_ADMINISTRATOR)
+                break;
+            return ShowArenaAdminMenu(player, orb);
+        }
         case SENDER_ADMIN:
         {
             if (player->GetSession()->GetSecurity() < SEC_ADMINISTRATOR)
@@ -534,7 +550,8 @@ bool GossipSelect_ArenaOrb(Player* player, GameObject* orb, uint32 sender, uint3
                     sWorld.setConfig(CONFIG_BOOL_ARENA_ALLOW_TRINKET_SWAP, !sWorld.getConfig(CONFIG_BOOL_ARENA_ALLOW_TRINKET_SWAP));
                     break;
             }
-            break;
+            // stay in the submenu, the changed value is shown right away
+            return ShowArenaAdminMenu(player, orb);
         }
         default:
             break;
@@ -571,8 +588,8 @@ bool GossipSelectWithCode_ArenaOrb(Player* player, GameObject* orb, uint32 sende
             break;
     }
 
-    player->PlayerTalkClass->ClearMenus();
-    return GossipHello_ArenaOrb(player, orb);
+    // stay in the admin submenu
+    return ShowArenaAdminMenu(player, orb);
 }
 
 /*********************************************************/
