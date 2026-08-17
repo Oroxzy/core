@@ -414,21 +414,25 @@ void BattleGround::Update(uint32 diff)
 
             StartingEventOpenDoors();
 
-            ReturnPlayersToHomeGY();
+            // an arena with a missing team ends itself right there (no-show draw) - do not start it anyway
+            if (GetStatus() == STATUS_WAIT_JOIN)
+            {
+                ReturnPlayersToHomeGY();
 
 #if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_6_1
-            SendMessageToAll(m_startMessageIds[BG_STARTING_EVENT_FOURTH], CHAT_MSG_BG_SYSTEM_NEUTRAL);
+                SendMessageToAll(m_startMessageIds[BG_STARTING_EVENT_FOURTH], CHAT_MSG_BG_SYSTEM_NEUTRAL);
 #else
-            DoOrSimulateScriptTextForMap(m_startMessageIds[BG_STARTING_EVENT_FOURTH], GetHeraldEntry(), GetBgMap());
+                DoOrSimulateScriptTextForMap(m_startMessageIds[BG_STARTING_EVENT_FOURTH], GetHeraldEntry(), GetBgMap());
 #endif
-            SetStatus(STATUS_IN_PROGRESS);
-            SetStartDelayTime(m_startDelayTimes[BG_STARTING_EVENT_FOURTH]);
+                SetStatus(STATUS_IN_PROGRESS);
+                SetStartDelayTime(m_startDelayTimes[BG_STARTING_EVENT_FOURTH]);
 
-            PlaySoundToAll(IsArena() ? uint32(SOUND_ARENA_MATCH_START) : uint32(SOUND_BG_START));
+                PlaySoundToAll(IsArena() ? uint32(SOUND_ARENA_MATCH_START) : uint32(SOUND_BG_START));
 
-            //Announce BG starting
-            if (sWorld.getConfig(CONFIG_BOOL_BATTLEGROUND_QUEUE_ANNOUNCER_START))
-                sWorld.SendWorldText(LANG_BG_STARTED_ANNOUNCE_WORLD, GetName(), GetMinLevel(), GetMaxLevel());
+                //Announce BG starting (arenas start every few minutes - not worth a world message)
+                if (sWorld.getConfig(CONFIG_BOOL_BATTLEGROUND_QUEUE_ANNOUNCER_START) && !IsArena())
+                    sWorld.SendWorldText(LANG_BG_STARTED_ANNOUNCE_WORLD, GetName(), GetMinLevel(), GetMaxLevel());
+            }
         }
     }
     // Despawn des portes apres 2min (preparation) + 1min
@@ -989,8 +993,12 @@ void BattleGround::RemovePlayerAtLeave(ObjectGuid guid, bool transport, bool sen
         if (GetStatus() < STATUS_WAIT_LEAVE)
         {
             // a player has left the battleground, so there are free slots -> add to queue
-            AddToBGFreeSlotQueue();
-            sBattleGroundMgr.ScheduleQueueUpdate(bgQueueTypeId, bgTypeId, GetBracketId());
+            // (a running arena is never refilled - no point in walking it on every queue update)
+            if (!(IsArena() && GetStatus() == STATUS_IN_PROGRESS))
+            {
+                AddToBGFreeSlotQueue();
+                sBattleGroundMgr.ScheduleQueueUpdate(bgQueueTypeId, bgTypeId, GetBracketId());
+            }
 
             // Let others know
 #if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_6_1
@@ -1124,6 +1132,7 @@ void BattleGround::AddToBGFreeSlotQueue()
     // make sure to add only once
     if (!m_inBGFreeSlotQueue)
     {
+        std::lock_guard<std::mutex> guard(sBattleGroundMgr.m_freeSlotQueueLock);   // called from the bg map threads
         sBattleGroundMgr.m_bgFreeSlotQueue[m_typeId].push_front(this);
         m_inBGFreeSlotQueue = true;
     }
@@ -1134,6 +1143,7 @@ void BattleGround::RemoveFromBGFreeSlotQueue()
 {
     // set to be able to re-add if needed
     m_inBGFreeSlotQueue = false;
+    std::lock_guard<std::mutex> guard(sBattleGroundMgr.m_freeSlotQueueLock);       // called from the bg map threads
     BgFreeSlotQueueType& bgFreeSlot = sBattleGroundMgr.m_bgFreeSlotQueue[m_typeId];
 
     for (BgFreeSlotQueueType::iterator itr = bgFreeSlot.begin(); itr != bgFreeSlot.end(); ++itr)
@@ -1884,6 +1894,14 @@ WorldSafeLocsEntry const* BattleGround::GetClosestGraveYard(Player* player)
 
 void BattleGround::StopBattleGround()
 {
+    // arenas skip the premature countdown - end them as a draw right away
+    if (IsArena())
+    {
+        if (GetStatus() < STATUS_WAIT_LEAVE)
+            EndBattleGround(TEAM_NONE);
+        return;
+    }
+
     m_prematureCountDown      = true;
     m_prematureCountDownTimer = 100;
 }

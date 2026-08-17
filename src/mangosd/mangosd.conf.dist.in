@@ -3320,7 +3320,7 @@ DynamicRespawn.PlayersMaxLevelDiff = 0
 # ARENA SETTINGS (custom, requires the client patch and sql/arena/world_arena.sql)
 #
 #    Arena.Enable
-#        Enable the custom arenas (Nagrand, Blade's Edge, Ruins of Lordaeron, Dalaran Sewers in
+#        Enable the custom arenas (Nagrand, Blade's Edge, Ruins of Lordaeron, Dalaran Sewers, Tiger's Peak in
 #        1v1, 2v2, 3v3 and 5v5). When disabled the arena battleground templates are not created.
 #        Default: 0 (disabled)
 #                 1 (enabled)

@@ -8,7 +8,8 @@
 --   * Arena.Enable = 1 in mangosd.conf
 --   * maps / vmaps / mmaps of the arena maps (see arena_data/ in the source tree)
 --   * a client with the client patch (WorldSafeLocs.dbc must contain ids 929, 936, 939, 940,
---     1258, 1259, 1362, 1363 - the server reads its dbc files from the client)
+--     1258, 1259, 1362, 1363, 1450, 1451 - the server reads its dbc files from the client;
+--     the `arena_start_location` table of section 20 is the fallback if they are missing)
 --
 --  Sections:
 --   1. world_safe_locs_facing      11. creature_template
@@ -20,7 +21,12 @@
 --   7. gameobject                  17. game_tele
 --   8. gameobject_battleground     18. creature_display_info_addon
 --   9. broadcast_text              19. disabled_arena_spells
---  10. npc_text
+--  10. npc_text                    20. arena_start_location (dbc fallback)
+--                                  21. The Tiger's Peak (maps, templates, gates, watchers, weather)
+--
+--  The file is idempotent (DELETE + INSERT per block) and can be re-applied after an update.
+--  The Arena Orb (gameobject 187078) is placed by the admin (.gobj add 187078) and never touched here.
+--  The gear rules changed through the orb's admin menu are runtime only - persist them in mangosd.conf.
 --
 --  Note: the Dalaran Sewers area triggers (5326, 5328-5331, 5343, 5344, 5347, 5348) used by
 --  Arena::HandleAreaTrigger are not part of this file, the server needs `areatrigger_template`
@@ -137,7 +143,8 @@
 
 -- 7. gameobject
 
-    DELETE FROM `gameobject` WHERE `id` IN (184663, 184664, 185917, 185918, 183972, 183970, 183973, 183971, 183980, 183978, 183979, 183977, 192643, 192642, 194395, 191877, 191878, 187078);
+    -- (the Arena Orb 187078 is placed by the admin with .gobj add and is deliberately NOT deleted here)
+    DELETE FROM `gameobject` WHERE `id` IN (184663, 184664, 185917, 185918, 183972, 183970, 183973, 183971, 183980, 183978, 183979, 183977, 192643, 192642, 194395, 191877, 191878);
 
     INSERT INTO `gameobject` (`guid`, `id`, `map`, `position_x`, `position_y`, `position_z`, `orientation`, `rotation0`, `rotation1`, `rotation2`, `rotation3`, `spawntimesecsmin`, `spawntimesecsmax`, `animprogress`, `state`, `spawn_flags`, `visibility_mod`, `patch_min`, `patch_max`) VALUES
         (556003, 183979, 556, 4090.06, 2858.44, 10.2363, 0.492804, 0, 0, 0, 0, 86400, 86400, 100, 1, 0, 0, 0, 10),
@@ -242,7 +249,7 @@
 
 -- 8. gameobject_battleground
 
-    DELETE FROM `gameobject_battleground` WHERE `guid` BETWEEN 505560 AND 620007;
+    DELETE FROM `gameobject_battleground` WHERE `guid` IN (556006, 556005, 557006, 557005, 558006, 558005, 559006, 559005, 570004, 570003, 571004, 571003, 572004, 572003, 573004, 573003, 560003, 560004, 561003, 561004, 562003, 562004, 563003, 563004, 617003, 617004, 618003, 618004, 619003, 619004, 620003, 620004, 556001, 556002, 557001, 557002, 558001, 558002, 559001, 559002, 570001, 570002, 571001, 571002, 572001, 572002, 573001, 573002, 560002, 560001, 561002, 561001, 562002, 562001, 563002, 563001, 617002, 617001, 618002, 618001, 619002, 619001, 620002, 620001, 617005, 617006, 617007, 618005, 618006, 618007, 619005, 619006, 619007, 620005, 620006, 620007);
 
     -- Doors
     INSERT INTO `gameobject_battleground` (`guid`, `event1`, `event2`) VALUES
@@ -437,7 +444,7 @@
 
 -- 14. creature_battleground
 
-    DELETE FROM `creature_battleground` WHERE `guid` BETWEEN 556001 AND 620012;
+    DELETE FROM `creature_battleground` WHERE `guid` IN (617001, 617002, 617005, 617004, 617003, 618001, 618002, 618005, 618004, 618003, 619001, 619002, 619005, 619004, 619003, 620001, 620002, 620005, 620004, 620003, 556001, 556002, 557001, 557002, 558001, 558002, 559001, 559002, 560001, 560002, 561001, 561002, 562001, 562002, 563001, 563002, 570001, 570002, 571001, 571002, 572001, 572002, 573001, 573002, 617011, 617012, 618011, 618012, 619011, 619012, 620011, 620012);
 
     INSERT INTO `creature_battleground` (`guid`, `event1`, `event2`) VALUES
         (617001, 204, 0),
@@ -620,11 +627,20 @@
 
 -- 17. game_tele
 
-    DELETE FROM `game_tele` WHERE `id` IN (929, 939, 940);
+    -- ids 929/939/940 are STOCK teles (TerraceOfRepose/TheCharredValed/TheCleft) - restore them in case an older
+    -- version of this file overwrote them, the arena teles get their own ids
+    DELETE FROM `game_tele` WHERE `id` IN (929, 939, 940) AND `name` IN ('Nagrand Arena', 'Blades Edge Arena', 'Ruins of Lordaeron');
+    INSERT IGNORE INTO `game_tele` (`id`, `position_x`, `position_y`, `position_z`, `orientation`, `map`, `name`) VALUES
+        (929, 2844.08, -691.716, 139.331, 5.27247, 0, 'TerraceOfRepose'),
+        (939, 721.568, 1494.15, -18.1516, 1.85895, 1, 'TheCharredValed'),
+        (940, 10303.8, 1198.57, 1457.46, 3.0779, 1, 'TheCleft');
 
-    INSERT INTO `game_tele` (`id`, `position_x`, `position_y`, `position_z`, `orientation`, `map`, `name`) VALUES (929, 4027.26, 2973.32, 11.872, 1.15435, 559, 'Nagrand Arena');
-    INSERT INTO `game_tele` (`id`, `position_x`, `position_y`, `position_z`, `orientation`, `map`, `name`) VALUES (939, 6292.66, 288.579, 4.95929, 1.15435, 562, 'Blades Edge Arena');
-    INSERT INTO `game_tele` (`id`, `position_x`, `position_y`, `position_z`, `orientation`, `map`, `name`) VALUES (940, 1277.87, 1744.9, 32.5, 1.15435, 572, 'Ruins of Lordaeron');
+    DELETE FROM `game_tele` WHERE `name` IN ('NagrandArena', 'BladesEdgeArena', 'RuinsOfLordaeron', 'DalaranSewers');
+    INSERT INTO `game_tele` (`id`, `position_x`, `position_y`, `position_z`, `orientation`, `map`, `name`) VALUES
+        (1453, 4027.26, 2973.32, 11.872, 1.15435, 559, 'NagrandArena'),
+        (1454, 6292.66, 288.579, 4.95929, 1.15435, 562, 'BladesEdgeArena'),
+        (1455, 1277.87, 1744.9, 32.5, 1.15435, 572, 'RuinsOfLordaeron'),
+        (1456, 1359.77, 817.179, 14.87, 3.14, 620, 'DalaranSewers');
 
 -- 18. creature_display_info_addon
 
@@ -646,6 +662,7 @@
     PRIMARY KEY (`entry`)
     ) ENGINE=InnoDB DEFAULT CHARSET=latin1;
 
+    DELETE FROM `disabled_arena_spells`;
     INSERT INTO `disabled_arena_spells` (`entry`, `1v1`, `2v2`, `3v3`, `5v5`, `description`) VALUES
         (126, 1, 1, 1, 1, 'CONSUMABLE Eye of Arachnida'),
         (133, 1, 1, 1, 1, 'CONSUMABLE Magic Candle'),
@@ -1086,7 +1103,7 @@
 
     DELETE FROM `area_template` WHERE `entry` = 4600;
     INSERT INTO `area_template` (`entry`, `map_id`, `zone_id`, `explore_flag`, `flags`, `area_level`, `name`, `team`, `liquid_type`) VALUES
-        (4600, 0, 4600, 0, 65, 60, 'The Tigers Peak', 0, 0);
+        (4600, 0, 4600, 0, 128, 60, 'The Tigers Peak', 0, 0);   -- 128 = AREA_FLAG_ARENA (FFA PvP: same-faction opponents can fight)
 
     DELETE FROM `battleground_template` WHERE `id` IN (20, 21, 22, 23);
     INSERT INTO `battleground_template` (`id`, `patch`, `min_players_per_team`, `max_players_per_team`, `min_level`, `max_level`, `alliance_win_spell`, `alliance_lose_spell`, `horde_win_spell`, `horde_lose_spell`, `alliance_start_location`, `horde_start_location`, `player_loot_id`) VALUES

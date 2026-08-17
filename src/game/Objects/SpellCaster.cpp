@@ -781,7 +781,8 @@ int32 SpellCaster::DealHeal(Unit* pVictim, uint32 addhealth, SpellEntry const* s
     {
         if (Player* pHealerPlayer = pUnit->GetCharmerOrOwnerPlayerOrPlayerItself())
         {
-            if (BattleGround* bg = pHealerPlayer->GetBattleGround())
+            // the bg of the map we are on (thread local, no lookup in the global battleground list)
+            if (BattleGround* bg = GetMap()->IsBattleGround() ? static_cast<BattleGroundMap*>(GetMap())->GetBG() : nullptr)
                 if (bg->IsArena() && bg->GetStatus() == STATUS_IN_PROGRESS)
                     bg->UpdatePlayerScore(pHealerPlayer, SCORE_HEALING_DONE, uint32(gain));
         }

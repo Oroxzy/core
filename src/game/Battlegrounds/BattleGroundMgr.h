@@ -23,6 +23,7 @@
 #define MANGOS_BATTLEGROUNDMGR_H
 
 #include <memory>
+#include <mutex>
 #include <vector>
 
 #include "Common.h"
@@ -108,8 +109,12 @@ class BattleGroundQueue
         // Arena: removes the player from this queue (status packet, queue slot, queue update). Returns false if he was not queued here.
         bool LeaveQueue(Player* player);
 
-        // mutex that should not allow changing private data, nor allowing to update Queue during private data change.
-        //std::recursive_mutex  m_lock;
+        // Serialises all access to the queue containers. The world thread (BattleGroundMgr::Update, the
+        // PACKET_PROCESS_WORLD handlers) never runs while maps update, but map threads run in parallel with
+        // each other and several paths touch the queue from there (invite timeout event, level up, bot manager,
+        // BG leave) - two of them in the same tick corrupt the std::map/vector without this lock.
+        // Recursive because the public methods call each other (LeaveQueue -> RemovePlayer, Update -> ...).
+        mutable std::recursive_mutex m_lock;
 
 
         typedef std::map<ObjectGuid, PlayerQueueInfo> QueuedPlayersMap;
@@ -262,6 +267,7 @@ class BattleGroundMgr
         BattleGroundQueue m_battleGroundQueues[MAX_BATTLEGROUND_QUEUE_TYPES]; // public, because we need to access them in BG handler code
 
         BgFreeSlotQueueType m_bgFreeSlotQueue[MAX_BATTLEGROUND_TYPE_ID];
+        std::mutex m_freeSlotQueueLock;                                // m_bgFreeSlotQueue is modified from the BG map threads (start, leave, destructor)
 
         void ScheduleQueueUpdate(BattleGroundQueueTypeId bgQueueTypeId, BattleGroundTypeId bgTypeId, BattleGroundBracketId bracketId);
         uint32 GetPrematureFinishTime() const;
@@ -332,7 +338,7 @@ class BattleGroundMgr
         void PlayerLoggedIn(Player* player);
         void PlayerLoggedOut(Player* player);
     private:
-        //std::mutex    schedulerLock;
+        std::mutex m_schedulerLock;                                    // m_queueUpdateScheduler is filled from map threads (BG leave, orb, level up)
         BattleMastersMap    m_battleMastersMap;
         CreatureBattleEventIndexesMap m_creatureBattleEventIndexMap;
         GameObjectBattleEventIndexesMap m_gameObjectBattleEventIndexMap;

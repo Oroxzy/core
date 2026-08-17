@@ -181,6 +181,7 @@ class BattleGround
             MANGOS_ASSERT(m_map);
             return m_map;
         }
+        bool HasBgMap() const { return m_map != nullptr; }  // templates and destroyed instances have none
 
         void SetTeamStartLoc(Team team, float x, float y, float z, float o);
         void GetTeamStartLoc(Team team, float &x, float &y, float &z, float &o) const
@@ -197,7 +198,7 @@ class BattleGround
         virtual void FillInitialWorldStates(WorldPacket& /*data*/, uint32& /*count*/) {}
         void SendPacketToTeam(Team team, WorldPacket* packet, Player* sender = nullptr, bool self = true);
         void SendPacketToTeam(Team team, std::unique_ptr<ServerPacket> packet, Player* sender = nullptr, bool self = true);
-        void SendPacketToAll(WorldPacket* packet);
+        virtual void SendPacketToAll(WorldPacket* packet);  // arenas send to everybody on the map (spectating visitors)
         void SendPacketToAll(std::unique_ptr<ServerPacket> packet);
 
         template<class Do>

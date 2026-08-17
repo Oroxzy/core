@@ -41,6 +41,8 @@
 #include "SharedDefines.h"
 #include "VMapFactory.h"
 #include "BattleGround.h"
+#include "Arena.h"
+#include "Chat.h"
 #include "Util.h"
 #include "PathFinder.h"
 #include "CharacterDatabaseCache.h"
@@ -5777,7 +5779,16 @@ SpellCastResult Spell::CheckCast(bool strict)
         // zone check
         SpellCastResult locRes = sSpellMgr.GetSpellAllowedInLocationError(m_spellInfo, m_casterUnit, m_casterUnit->GetCharmerOrOwnerPlayerOrPlayerItself());
         if (locRes != SPELL_CAST_OK)
+        {
+            // arena: tell the player why his own cast was refused (not for procs / triggered casts)
+            if (locRes == SPELL_FAILED_NOT_HERE && !m_IsTriggeredSpell && m_casterUnit->IsPlayer())
+            {
+                Player* casterPlayer = static_cast<Player*>(m_casterUnit);
+                if (casterPlayer->InArena() && casterPlayer->GetSession() && sArenaMgr.IsSpellDisabled(m_spellInfo->Id, casterPlayer->GetArenaType()))
+                    ChatHandler(casterPlayer->GetSession()).PSendSysMessage("|cffffffff|Hspell:%u|h[%s]|h|r is not allowed in %s arenas.", m_spellInfo->Id, m_spellInfo->SpellName[0].c_str(), GetArenaTypeName(casterPlayer->GetArenaType()));
+            }
             return locRes;
+        }
 
         // not let players cast spells at mount (and let do it to creatures)
         if (m_casterUnit->IsMounted() && m_casterUnit->IsPlayer() && !m_IsTriggeredSpell &&

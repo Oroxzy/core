@@ -361,6 +361,11 @@ void WorldSession::HandleBattlefieldListOpcode(WorldPackets::Battleground::Battl
         return;
     }
 
+    // arena map ids resolve to a bg type as well - without a loaded template (Arena.Enable = 0) the list
+    // builder would assert on the missing template, and arenas are joined at the orb anyway
+    if (!sBattleGroundMgr.GetBattleGroundTemplate(bgTypeId))
+        return;
+
     SendPacket(sBattleGroundMgr.BuildBattleGroundListPacket(_player->GetObjectGuid(), _player, BattleGroundTypeId(bgTypeId)));
 }
 
@@ -472,6 +477,10 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPackets::Battleground::Battl
             _player->GetSession()->SendPacket(sBattleGroundMgr.BuildBattleGroundStatusPacket(bg, queueSlot, STATUS_IN_PROGRESS, 0, bg->GetStartTime()));
             // remove battleground queue status from BGmgr
             bgQueue.RemovePlayer(_player->GetObjectGuid(), false);
+            // arena: leave the other arena queues right here (world thread) - otherwise another arena can still
+            // pop during the loading screen; Arena::AddPlayer used to do this from the instance map thread
+            if (BattleGroundMgr::IsArenaQueue(bgQueueTypeId))
+                sBattleGroundMgr.RemovePlayerFromArenaQueues(_player, bgQueueTypeId);
             // this is still needed here if battleground "jumping" shouldn't add deserter debuff
             // also this is required to prevent stuck at old battleground after SetBattleGroundId set to new
             if (BattleGround *currentBg = _player->GetBattleGround())

@@ -29,6 +29,7 @@
 #include "Spell.h"
 #include "SpellAuras.h"
 #include "GameObject.h"
+#include "BattleGround.h"
 #include "Map.h"
 
 using namespace Spells;
@@ -465,6 +466,16 @@ void WorldSession::HandleSelfResOpcode(NullClientPacket const& /*packet*/)
 #if SUPPORTED_CLIENT_BUILD >= CLIENT_BUILD_1_6_1
     if (_player->GetUInt32Value(PLAYER_SELF_RES_SPELL))
     {
+        // no self resurrection (Reincarnation ...) during an arena match: dead is dead
+        if (BattleGround* bg = _player->GetBattleGround())
+        {
+            if (bg->IsArena() && bg->GetStatus() == STATUS_IN_PROGRESS)
+            {
+                _player->SetUInt32Value(PLAYER_SELF_RES_SPELL, 0);
+                return;
+            }
+        }
+
         SpellEntry const* spellInfo = sSpellMgr.GetSpellEntry(_player->GetUInt32Value(PLAYER_SELF_RES_SPELL));
         if (spellInfo)
             _player->CastSpell(_player, spellInfo, false);

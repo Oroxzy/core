@@ -2661,12 +2661,10 @@ SpellCastResult SpellMgr::GetSpellAllowedInLocationError(SpellEntry const* spell
     uint32 mapId = caster ? caster->GetMapId() : (player ? player->GetMapId() : 0);
 
     // Arena: spells disabled by `disabled_arena_spells` for this arena size
+    // (the chat message for the player is sent by Spell::CheckCast for real casts only - this function is
+    // also asked for triggered casts and by the area dependent aura update)
     if (player && player->InArena() && sArenaMgr.IsSpellDisabled(spellInfo->Id, player->GetArenaType()))
-    {
-        if (player->GetSession())
-            ChatHandler(player->GetSession()).PSendSysMessage("|cffffffff|Hspell:%u|h[%s]|h|r is not allowed in %s arenas.", spellInfo->Id, spellInfo->SpellName[0].c_str(), GetArenaTypeName(player->GetArenaType()));
         return SPELL_FAILED_NOT_HERE;
-    }
 
     switch (spellInfo->Id)
     {

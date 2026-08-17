@@ -77,10 +77,12 @@ void WorldSession::HandlePetAction(WorldPackets::Pet::PetAction const& packet)
         return;
     }
 
-    // arena: pets are only commanded while the match is running
-    if (BattleGround const* bg = _player->GetBattleGround())
-        if (bg->IsArena() && bg->GetStatus() != STATUS_IN_PROGRESS)
-            return;
+    // arena: no attack orders before the gates opened / after the end (stances, follow / stay and
+    // autocast toggles stay possible - hunters set up their pet during the preparation)
+    if (flag == ACT_COMMAND && spellid == COMMAND_ATTACK)
+        if (BattleGround const* bg = _player->GetBattleGround())
+            if (bg->IsArena() && bg->GetStatus() != STATUS_IN_PROGRESS)
+                return;
 
     switch (flag)
     {

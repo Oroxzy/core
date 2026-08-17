@@ -575,6 +575,10 @@ void WorldSession::HandleInitiateTradeOpcode(WorldPackets::Trade::InitiateTrade 
         return;
     }
 
+    // invisible arena spectators do not open trade windows on the fighters
+    if (GetPlayer()->IsArenaSpectator())
+        return;
+
     if (GetPlayer()->HasUnitState(UNIT_STATE_STUNNED | UNIT_STATE_PENDING_STUNNED))
     {
         SendTradeStatus(TRADE_STATUS_YOU_STUNNED);

@@ -2733,14 +2733,17 @@ void Player::SetArenaSpectator(bool on)
 
     if (on)
     {
-        // dead participants: back on their feet, the corpse is not needed anymore
+        // dead participants: back on their feet, the corpse is not needed anymore (their auras are gone
+        // already). Living visitors keep their buffs - a spectator is invisible, immune and can not act,
+        // and he may not share a group with a fighter (SpectateArena), so nothing can leak into the match.
         if (!IsAlive())
         {
             ResurrectPlayer(1.0f);
             SpawnCorpseBones();
+            RemoveAllAurasOnDeath();
         }
-
-        RemoveAllAurasOnDeath();
+        RemoveAurasDueToSpell(2584);                        // Waiting to Resurrect
+        InterruptNonMeleeSpells(true);
         CombatStopWithPets(true);
         GetHostileRefManager().deleteReferences();
         UnsummonPetTemporaryIfAny();
@@ -6734,7 +6737,7 @@ void Player::UpdateArea(uint32 newArea)
     // so apply them accordingly
     if (areaEntry && (areaEntry->Flags & AREA_FLAG_ARENA))
     {
-        if (!IsGameMaster())
+        if (!IsGameMaster() && !IsArenaSpectator())     // spectators are friendly to everybody
             SetFFAPvP(true);
     }
     else
@@ -8380,6 +8383,12 @@ void Player::SendInitWorldStates(uint32 zoneid) const
         case 3358:                                      // AB
             if (BattleGround* bg = GetBattleGround())
                 bg->FillInitialWorldStates(data, count);
+            break;
+        default:
+            // arenas (custom zones): alive counters and timer, also for spectating visitors
+            if (BattleGround* bg = GetBattleGround())
+                if (bg->IsArena())
+                    bg->FillInitialWorldStates(data, count);
             break;
     }
 

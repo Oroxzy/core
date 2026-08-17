@@ -40,6 +40,7 @@
 #include "CellImpl.h"
 #include "Anticheat.h"
 #include "AccountMgr.h"
+#include "BattleGround.h"
 
 bool WorldSession::SanitizeChatMessage(std::string& msg, uint32 lang, uint32 msgType)
 {
@@ -448,6 +449,18 @@ void WorldSession::HandleChatMessageOpcode(WorldPackets::Chat::ChatMessage const
 
             if (Player* toPlayer = player->GetSession()->GetPlayer())
             {
+                // arena visitors (invisible observers, not the dead team mates) may not feed the fighters of
+                // the match they are watching with positions
+                if (_player && _player->IsArenaSpectator() && toPlayer->InArena() && toPlayer->GetBattleGroundId() == _player->GetBattleGroundId())
+                {
+                    BattleGround* bg = _player->GetBattleGround();
+                    if (bg && !bg->IsPlayerInBattleGround(_player->GetObjectGuid()))
+                    {
+                        ChatHandler(this).SendSysMessage("You can not whisper the fighters while spectating.");
+                        return;
+                    }
+                }
+
                 bool allowIgnoreAntispam = toPlayer->IsAllowedWhisperFrom(masterPlr->GetObjectGuid());
                 bool allowSendWhisper = allowIgnoreAntispam;
 
@@ -716,6 +729,10 @@ private:
 void WorldSession::HandleTextEmoteOpcode(WorldPackets::Misc::TextEmote const& packet)
 {
     if (!GetPlayer()->IsAlive() || GetPlayer()->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PREVENT_ANIM))
+        return;
+
+    // invisible arena spectators do not /dance at the fighters
+    if (GetPlayer()->IsArenaSpectator())
         return;
 
     if (!GetPlayer()->CanSpeak())

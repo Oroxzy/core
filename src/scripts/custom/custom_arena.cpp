@@ -46,10 +46,12 @@ namespace
         SENDER_QUEUE                = GOSSIP_SENDER_MAIN,   // action = arena type index (0..3)
         SENDER_LEAVE_QUEUE          = 100,                  // action = BattleGroundQueueTypeId
         SENDER_SPECTATE_LIST        = 200,
-        SENDER_SPECTATE_MATCH       = 201,                  // action = low guid of a participant
+        SENDER_SPECTATE_MATCH       = 201,                  // action = arena instance id
         SENDER_ADMIN                = 300,                  // action = ACTION_ADMIN_* (from the admin submenu)
         SENDER_NOOP                 = 301,                  // back to the main menu
         SENDER_ADMIN_MENU           = 302,                  // open the admin submenu
+
+        ARENA_SPECTATE_LIST_MAX     = 20,                   // gossip menus hold 32 buttons
 
         // admin actions
         ACTION_ADMIN_MAX_ITEM_LEVEL     = 1,
@@ -133,9 +135,51 @@ namespace
 
     void Refuse(Player* player, GameObject* orb, char const* text)
     {
-        orb->PlayDirectSound(SOUND_ARENA_ORB_DENIED, player);
+        if (orb)
+            orb->PlayDirectSound(SOUND_ARENA_ORB_DENIED, player);
         player->GetSession()->SendNotification("%s", text);
         player->CLOSE_GOSSIP_MENU();
+    }
+
+    uint32 GetArenaMinLevel(BattleGround const* anyTemplate)
+    {
+        return std::max<uint32>(anyTemplate->GetMinLevel(), sWorld.getConfig(CONFIG_UINT32_ARENA_MIN_LEVEL));
+    }
+
+    // Level / combat / GM gates for everybody who wants to queue at the orb. Checked when the menu is built
+    // AND when a queue action arrives - the client can send a gossip action without having seen the menu.
+    bool PassesOrbGates(Player* player, GameObject* orb, BattleGround const* anyTemplate)
+    {
+        uint32 const minLevel = GetArenaMinLevel(anyTemplate);
+        if (player->GetLevel() < minLevel)
+        {
+            std::ostringstream ss;
+            ss << "You must be level " << minLevel << " or higher.";
+            Refuse(player, orb, ss.str().c_str());
+            return false;
+        }
+
+        if (player->IsInCombat())
+        {
+            Refuse(player, orb, "You are in combat.");
+            return false;
+        }
+
+        if (player->IsGameMaster())
+        {
+            Refuse(player, orb, "Please disable GM mode.");
+            return false;
+        }
+
+        // the stock battlemaster refuses deserters as well - otherwise the invite is voided at accept time
+        // and the opponent waits through the whole preparation for nobody
+        if (!player->CanJoinToBattleground())
+        {
+            Refuse(player, orb, "You can not queue while you are a deserter.");
+            return false;
+        }
+
+        return true;
     }
 
     void AnnounceQueueJoin(Player* player, GameObject* orb, ArenaType type, bool asGroup)
@@ -165,6 +209,9 @@ namespace
         }
 
         if (player->InBattleGround())
+            return false;
+
+        if (!PassesOrbGates(player, orb, anyTemplate))
             return false;
 
         if (IsInArenaQueueOfType(player, type))
@@ -249,12 +296,32 @@ namespace
                 return false;
             }
 
-            // everybody in the group must pass the gear checks
+            // everybody in the group must pass the same gates as the leader (CanJoinBattleGroundQueue only
+            // checks the level bracket, deserter and this exact queue) and the gear checks
+            uint32 const minLevel = GetArenaMinLevel(anyTemplate);
             for (GroupReference* itr = group->GetFirstMember(); itr != nullptr; itr = itr->next())
             {
                 Player* member = itr->getSource();
                 if (!member || member == player)
                     continue;
+
+                std::ostringstream why;
+                if (member->GetLevel() < minLevel)
+                    why << member->GetName() << " must be level " << minLevel << " or higher.";
+                else if (member->InBattleGround())
+                    why << member->GetName() << " is inside a battleground.";
+                else if (member->IsInCombat())
+                    why << member->GetName() << " is in combat.";
+                else if (member->IsGameMaster())
+                    why << member->GetName() << " is in GM mode.";
+                else if (IsInArenaQueueOfType(member, type))
+                    why << member->GetName() << " is already queued for this arena size.";
+
+                if (!why.str().empty())
+                {
+                    Refuse(player, orb, why.str().c_str());
+                    return false;
+                }
 
                 std::string memberReason;
                 if (member->HasForbiddenArenaItems(type, &memberReason))
@@ -296,18 +363,11 @@ namespace
         return true;
     }
 
-    // Teleports a player into the arena of the given participant as an invisible spectator.
-    bool SpectateArena(Player* player, GameObject* orb, ObjectGuid targetGuid)
+    // Teleports a player into the running arena instance as an invisible spectator.
+    bool SpectateArena(Player* player, GameObject* orb, uint32 instanceId)
     {
-        Player* target = sObjectMgr.GetPlayer(targetGuid);
-        if (!target || !target->InArena())
-        {
-            Refuse(player, orb, "This match is over.");
-            return false;
-        }
-
-        BattleGround* bg = target->GetBattleGround();
-        if (!bg || bg->GetStatus() == STATUS_WAIT_LEAVE)
+        BattleGround* bg = sBattleGroundMgr.GetBattleGround(instanceId, BATTLEGROUND_TYPE_NONE);
+        if (!bg || !bg->IsArena() || bg->GetStatus() != STATUS_IN_PROGRESS)
         {
             Refuse(player, orb, "This match is over.");
             return false;
@@ -316,19 +376,60 @@ namespace
         if (player->InBattleGround() || player->IsInCombat())
             return false;
 
+        // a free status slot lets the client show the "leave battleground" button - without one the visitor
+        // could not get out before the match ends (arena queues are left below, so their slots count as free)
+        bool slotAvailable = false;
+        for (uint8 slot = 0; slot < PLAYER_MAX_BATTLEGROUND_QUEUES && !slotAvailable; ++slot)
+        {
+            BattleGroundQueueTypeId const queueTypeId = player->GetBattleGroundQueueTypeId(slot);
+            slotAvailable = queueTypeId == BATTLEGROUND_QUEUE_NONE || BattleGroundMgr::IsArenaQueue(queueTypeId);
+        }
+        if (!slotAvailable)
+        {
+            Refuse(player, orb, "Leave a battleground queue first.");
+            return false;
+        }
+
+        // group members of a fighter would see his health and position in the party frames
+        if (Group* group = player->GetGroup())
+        {
+            for (GroupReference* itr = group->GetFirstMember(); itr != nullptr; itr = itr->next())
+            {
+                Player* member = itr->getSource();
+                if (member && member != player && bg->IsPlayerInBattleGround(member->GetObjectGuid()))
+                {
+                    Refuse(player, orb, "You can not watch a match of your own group.");
+                    return false;
+                }
+            }
+        }
+
+        // somebody to land next to: prefer a fighter who is still alive
+        Player* target = nullptr;
+        for (const auto& itr : bg->GetPlayers())
+        {
+            Player* participant = sObjectMgr.GetPlayer(itr.first);
+            if (!participant || !participant->IsInWorld() || participant->GetMapId() != bg->GetMapId())
+                continue;
+
+            bool const better = !target
+                || (target->IsArenaSpectator() && !participant->IsArenaSpectator())
+                || (!target->IsAlive() && participant->IsAlive());
+            if (better)
+                target = participant;
+        }
+        if (!target)
+        {
+            Refuse(player, orb, "This match is over.");
+            return false;
+        }
+
         // no queue popping while watching
         sBattleGroundMgr.RemovePlayerFromArenaQueues(player);
 
-        // a free status slot lets the client show the "leave battleground" button
-        uint32 statusSlot = PLAYER_MAX_BATTLEGROUND_QUEUES;
-        for (uint8 slot = 0; slot < PLAYER_MAX_BATTLEGROUND_QUEUES; ++slot)
-        {
-            if (player->GetBattleGroundQueueTypeId(slot) == BATTLEGROUND_QUEUE_NONE)
-            {
-                statusSlot = slot;
-                break;
-            }
-        }
+        uint32 statusSlot = 0;
+        while (statusSlot < PLAYER_MAX_BATTLEGROUND_QUEUES && player->GetBattleGroundQueueTypeId(statusSlot) != BATTLEGROUND_QUEUE_NONE)
+            ++statusSlot;
 
         // the spectator state itself is applied on arrival (WorldSession::HandleMoveWorldportAck)
         player->SetBattleGroundEntryPoint(player, false);   // current position, must be set before the bg id
@@ -353,6 +454,34 @@ namespace
 /***                     ARENA ORB                     ***/
 /*********************************************************/
 
+// Everything the orb does runs in the WORLD thread. The gossip opcodes are PACKET_PROCESS_MAP, i.e. they
+// are handled inside the map update of the orb's continent while all other maps update in parallel - but
+// queue joins/leaves, the list of running matches and spectating touch global battleground state that
+// other map threads (a second orb on another continent, an arena that ends) touch as well. The stock join
+// opcode CMSG_BATTLEMASTER_JOIN is PACKET_PROCESS_WORLD for exactly this reason. World::Update executes
+// the messager before the map updates start, so the deferred body never runs next to a map thread.
+// Cost: the menu shows up one world tick (~50 ms) later.
+template <typename Func>
+static void RunOrbActionInWorldThread(Player* player, GameObject* orb, Func func)
+{
+    ObjectGuid const playerGuid = player->GetObjectGuid();
+    ObjectGuid const orbGuid = orb->GetObjectGuid();
+    sWorld.GetMessager().AddMessage([playerGuid, orbGuid, func](World*)
+    {
+        Player* player = sObjectMgr.GetPlayer(playerGuid);
+        if (!player || !player->IsInWorld() || player->IsBeingTeleported())
+            return;
+
+        GameObject* orb = player->GetMap()->GetGameObject(orbGuid);
+        if (!orb)   // moved to another map in the meantime
+            return;
+
+        func(player, orb);
+    });
+}
+
+static bool ShowArenaOrbMenu(Player* player, GameObject* orb);
+
 // admin submenu: gear rules (kept out of the main menu so it does not clutter the queue list)
 static bool ShowArenaAdminMenu(Player* player, GameObject* orb)
 {
@@ -372,8 +501,11 @@ static bool ShowArenaAdminMenu(Player* player, GameObject* orb)
     return true;
 }
 
-bool GossipHello_ArenaOrb(Player* player, GameObject* orb)
+// main menu (world thread)
+static bool ShowArenaOrbMenu(Player* player, GameObject* orb)
 {
+    player->PlayerTalkClass->ClearMenus();
+
     if (!sWorld.getConfig(CONFIG_BOOL_ARENA_ENABLED))
     {
         Refuse(player, orb, "The arenas are closed.");
@@ -391,26 +523,19 @@ bool GossipHello_ArenaOrb(Player* player, GameObject* orb)
         return true;
     }
 
-    uint32 const minLevel = std::max<uint32>(anyTemplate->GetMinLevel(), sWorld.getConfig(CONFIG_UINT32_ARENA_MIN_LEVEL));
-    if (player->GetLevel() < minLevel)
+    bool const admin = player->GetSession()->GetSecurity() >= SEC_ADMINISTRATOR;
+
+    // an admin in GM mode still gets to the settings, only queueing needs GM mode off
+    if (admin && player->IsGameMaster())
     {
-        std::ostringstream ss;
-        ss << "You must be level " << minLevel << " or higher.";
-        Refuse(player, orb, ss.str().c_str());
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Disable GM mode to queue for an arena.", SENDER_NOOP, 0);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "<Admin> Arena settings", SENDER_ADMIN_MENU, 0);
+        player->SEND_GOSSIP_MENU(ORB_NPC_TEXT_HELLO, orb->GetObjectGuid());
         return true;
     }
 
-    if (player->IsInCombat())
-    {
-        Refuse(player, orb, "You are in combat.");
+    if (!PassesOrbGates(player, orb, anyTemplate))
         return true;
-    }
-
-    if (player->IsGameMaster())
-    {
-        Refuse(player, orb, "Please disable GM mode.");
-        return true;
-    }
 
     Group* group = player->GetGroup();
     if (group && group->GetLeaderGuid() != player->GetObjectGuid())
@@ -467,20 +592,22 @@ bool GossipHello_ArenaOrb(Player* player, GameObject* orb)
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Spectate a match", SENDER_SPECTATE_LIST, 0);
 
     // admins can adjust the gear rules (own submenu, see ShowArenaAdminMenu)
-    if (player->GetSession()->GetSecurity() >= SEC_ADMINISTRATOR)
+    if (admin)
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "<Admin> Arena settings", SENDER_ADMIN_MENU, 0);
 
     player->SEND_GOSSIP_MENU(ORB_NPC_TEXT_HELLO, orb->GetObjectGuid());
     return true;
 }
 
-bool GossipSelect_ArenaOrb(Player* player, GameObject* orb, uint32 sender, uint32 action)
+// menu selection (world thread)
+static bool HandleArenaOrbSelect(Player* player, GameObject* orb, uint32 sender, uint32 action)
 {
     switch (sender)
     {
         case SENDER_QUEUE:
         {
-            JoinArenaQueue(player, orb, GetArenaTypeByIndex(uint8(action)));
+            if (action < ARENA_TYPES_COUNT)
+                JoinArenaQueue(player, orb, GetArenaTypeByIndex(uint8(action)));
             break;
         }
         case SENDER_LEAVE_QUEUE:
@@ -491,9 +618,11 @@ bool GossipSelect_ArenaOrb(Player* player, GameObject* orb, uint32 sender, uint3
         }
         case SENDER_SPECTATE_LIST:
         {
-            for (uint32 bgTypeId = BATTLEGROUND_ARENA_FIRST; bgTypeId <= BATTLEGROUND_ARENA_LAST; ++bgTypeId)
+            player->PlayerTalkClass->ClearMenus();
+            uint32 shownMatches = 0;
+            for (uint32 bgTypeId = BATTLEGROUND_ARENA_FIRST; bgTypeId <= BATTLEGROUND_ARENA_LAST && shownMatches < ARENA_SPECTATE_LIST_MAX; ++bgTypeId)
             {
-                for (BattleGroundSet::iterator itr = sBattleGroundMgr.GetBattleGroundsBegin(BattleGroundTypeId(bgTypeId)); itr != sBattleGroundMgr.GetBattleGroundsEnd(BattleGroundTypeId(bgTypeId)); ++itr)
+                for (BattleGroundSet::iterator itr = sBattleGroundMgr.GetBattleGroundsBegin(BattleGroundTypeId(bgTypeId)); itr != sBattleGroundMgr.GetBattleGroundsEnd(BattleGroundTypeId(bgTypeId)) && shownMatches < ARENA_SPECTATE_LIST_MAX; ++itr)
                 {
                     BattleGround* bg = itr->second;
                     if (bg->GetStatus() != STATUS_IN_PROGRESS)
@@ -501,7 +630,6 @@ bool GossipSelect_ArenaOrb(Player* player, GameObject* orb, uint32 sender, uint3
 
                     std::ostringstream ss;
                     ss << bg->GetName() << ":";
-                    ObjectGuid firstGuid;
                     uint32 shown = 0;
                     for (const auto& playerItr : bg->GetPlayers())
                     {
@@ -509,15 +637,16 @@ bool GossipSelect_ArenaOrb(Player* player, GameObject* orb, uint32 sender, uint3
                         if (!participant)
                             continue;
 
-                        if (!firstGuid)
-                            firstGuid = playerItr.first;
-
                         ss << (shown ? ", " : " ") << participant->GetName() << " (" << participant->GetTalentSpecName() << " " << GetClassNameForPlayer(participant) << ")";
                         ++shown;
                     }
 
-                    if (firstGuid)
-                        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, ss.str().c_str(), SENDER_SPECTATE_MATCH, firstGuid.GetCounter());
+                    if (shown)
+                    {
+                        // the instance id survives participants leaving (a participant guid did not)
+                        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, ss.str().c_str(), SENDER_SPECTATE_MATCH, bg->GetInstanceID());
+                        ++shownMatches;
+                    }
                 }
             }
             player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Back", SENDER_NOOP, 0);
@@ -527,7 +656,7 @@ bool GossipSelect_ArenaOrb(Player* player, GameObject* orb, uint32 sender, uint3
         case SENDER_SPECTATE_MATCH:
         {
             player->CLOSE_GOSSIP_MENU();
-            SpectateArena(player, orb, ObjectGuid(HIGHGUID_PLAYER, action));
+            SpectateArena(player, orb, action);
             return true;
         }
         case SENDER_ADMIN_MENU:
@@ -558,16 +687,15 @@ bool GossipSelect_ArenaOrb(Player* player, GameObject* orb, uint32 sender, uint3
     }
 
     // back to the main menu
-    player->PlayerTalkClass->ClearMenus();
-    return GossipHello_ArenaOrb(player, orb);
+    return ShowArenaOrbMenu(player, orb);
 }
 
-bool GossipSelectWithCode_ArenaOrb(Player* player, GameObject* orb, uint32 sender, uint32 action, char const* code)
+// admin value input (world thread)
+static bool HandleArenaOrbSelectWithCode(Player* player, GameObject* orb, uint32 sender, uint32 action, std::string const& value)
 {
     if (sender != SENDER_ADMIN || player->GetSession()->GetSecurity() < SEC_ADMINISTRATOR)
         return true;
 
-    std::string value = code ? code : "";
     if (value.empty() || value.length() > 3 || value.find_first_not_of("0123456789") != std::string::npos)
     {
         player->GetSession()->SendNotification("Invalid number.");
@@ -590,6 +718,27 @@ bool GossipSelectWithCode_ArenaOrb(Player* player, GameObject* orb, uint32 sende
 
     // stay in the admin submenu
     return ShowArenaAdminMenu(player, orb);
+}
+
+// script entry points (map thread) - they only hand the request over to the world thread
+
+bool GossipHello_ArenaOrb(Player* player, GameObject* orb)
+{
+    RunOrbActionInWorldThread(player, orb, [](Player* p, GameObject* o) { ShowArenaOrbMenu(p, o); });
+    return true;
+}
+
+bool GossipSelect_ArenaOrb(Player* player, GameObject* orb, uint32 sender, uint32 action)
+{
+    RunOrbActionInWorldThread(player, orb, [sender, action](Player* p, GameObject* o) { HandleArenaOrbSelect(p, o, sender, action); });
+    return true;
+}
+
+bool GossipSelectWithCode_ArenaOrb(Player* player, GameObject* orb, uint32 sender, uint32 action, char const* code)
+{
+    std::string const value = code ? code : "";
+    RunOrbActionInWorldThread(player, orb, [sender, action, value](Player* p, GameObject* o) { HandleArenaOrbSelectWithCode(p, o, sender, action, value); });
+    return true;
 }
 
 /*********************************************************/
@@ -755,6 +904,15 @@ struct npc_nagrand_tornadoAI : public ScriptedAI
             {
                 case TORNADO_EVENT_KNOCKBACK:
                 {
+                    // match over (everybody frozen at the scoreboard) or not started: vanish quietly
+                    BattleGround* bg = m_creature->GetMap()->IsBattleGround() ? static_cast<BattleGroundMap*>(m_creature->GetMap())->GetBG() : nullptr;
+                    if (!bg || bg->GetStatus() != STATUS_IN_PROGRESS)
+                    {
+                        m_creature->RemoveAurasDueToSpell(SPELL_ARENA_TORNADO_VISUAL);
+                        m_creature->DespawnOrUnsummon();
+                        break;
+                    }
+
                     std::list<Player*> players;
                     m_creature->GetAlivePlayerListInRange(m_creature, players, TORNADO_KNOCKBACK_RANGE);
                     for (Player* target : players)
@@ -773,6 +931,8 @@ struct npc_nagrand_tornadoAI : public ScriptedAI
                 }
                 case TORNADO_EVENT_DESPAWN:
                 {
+                    // fade out: no more knockbacks from an invisible tornado
+                    m_events.CancelEvent(TORNADO_EVENT_KNOCKBACK);
                     m_creature->RemoveAurasDueToSpell(SPELL_ARENA_TORNADO_VISUAL);
                     m_creature->DespawnOrUnsummon(4000);
                     break;

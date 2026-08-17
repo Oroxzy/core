@@ -763,7 +763,8 @@ uint32 Unit::DealDamage(Unit* pVictim, uint32 damage, CleanDamage const* cleanDa
     {
         if (Player* pDealer = GetCharmerOrOwnerPlayerOrPlayerItself())
         {
-            if (BattleGround* bg = pDealer->GetBattleGround())
+            // the bg of the map we are on (thread local, no lookup in the global battleground list)
+            if (BattleGround* bg = GetMap()->IsBattleGround() ? static_cast<BattleGroundMap*>(GetMap())->GetBG() : nullptr)
             {
                 if (bg->IsArena() && bg->GetStatus() == STATUS_IN_PROGRESS)
                 {

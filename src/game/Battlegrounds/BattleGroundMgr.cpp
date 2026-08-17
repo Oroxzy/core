@@ -146,6 +146,7 @@ bool BattleGroundQueue::SelectionPool::AddGroup(GroupQueueInfo* ginfo, uint32 de
 // add group or player (grp == nullptr) to bg queue with the given leader and bg specifications
 GroupQueueInfo* BattleGroundQueue::AddGroup(Player* leader, Group* grp, BattleGroundTypeId bgTypeId, BattleGroundBracketId bracketId, bool isPremade, uint32 instanceId, std::vector<uint32>* excludedMembers)
 {
+    std::lock_guard<std::recursive_mutex> guard(m_lock);
     // create new ginfo
     GroupQueueInfo* ginfo = new GroupQueueInfo;
     ginfo->bgTypeId                  = bgTypeId;
@@ -278,6 +279,7 @@ GroupQueueInfo* BattleGroundQueue::AddGroup(Player* leader, Group* grp, BattleGr
 
 void BattleGroundQueue::PlayerInvitedToBgUpdateAverageWaitTime(GroupQueueInfo* ginfo, BattleGroundBracketId bracketId)
 {
+    std::lock_guard<std::recursive_mutex> guard(m_lock);
     uint32 timeInQueue = WorldTimer::getMSTimeDiff(ginfo->joinTime, WorldTimer::getMSTime());
     uint8 teamIndex = BG_TEAM_ALLIANCE;                    //default set to BG_TEAM_ALLIANCE - or non rated arenas!
 
@@ -299,6 +301,7 @@ void BattleGroundQueue::PlayerInvitedToBgUpdateAverageWaitTime(GroupQueueInfo* g
 
 uint32 BattleGroundQueue::GetAverageQueueWaitTime(GroupQueueInfo* ginfo, BattleGroundBracketId bracketId)
 {
+    std::lock_guard<std::recursive_mutex> guard(m_lock);
     uint8 teamIndex = BG_TEAM_ALLIANCE;                    //default set to BG_TEAM_ALLIANCE - or non rated arenas!
     if (ginfo->groupTeam == HORDE)
         teamIndex = BG_TEAM_HORDE;
@@ -313,8 +316,7 @@ uint32 BattleGroundQueue::GetAverageQueueWaitTime(GroupQueueInfo* ginfo, BattleG
 // remove player from queue and from group info, if group info is empty then remove it too
 void BattleGroundQueue::RemovePlayer(ObjectGuid guid, bool decreaseInvitedCount)
 {
-    //Player* player = sObjectMgr.GetPlayer(guid);
-    //ACE_Guard<ACE_Recursive_Thread_Mutex> guard(m_lock);
+    std::lock_guard<std::recursive_mutex> guard(m_lock);
 
     int32 bracketId = -1;                                     // signed for proper for-loop finish
     QueuedPlayersMap::iterator itr;
@@ -400,7 +402,7 @@ void BattleGroundQueue::RemovePlayer(ObjectGuid guid, bool decreaseInvitedCount)
 //returns true when player playerGuid is in queue and is invited to bgInstanceGuid
 bool BattleGroundQueue::IsPlayerInvited(ObjectGuid playerGuid, uint32 const bgInstanceGuid, uint32 const removeTime)
 {
-    //ACE_Guard<ACE_Recursive_Thread_Mutex> g(m_lock);
+    std::lock_guard<std::recursive_mutex> guard(m_lock);
     QueuedPlayersMap::const_iterator qItr = m_queuedPlayers.find(playerGuid);
     return (qItr != m_queuedPlayers.end()
             && qItr->second.groupInfo->isInvitedToBgInstanceGuid == bgInstanceGuid
@@ -409,7 +411,7 @@ bool BattleGroundQueue::IsPlayerInvited(ObjectGuid playerGuid, uint32 const bgIn
 
 bool BattleGroundQueue::GetPlayerGroupInfoData(ObjectGuid guid, GroupQueueInfo* ginfo)
 {
-    //ACE_Guard<ACE_Recursive_Thread_Mutex> g(m_lock);
+    std::lock_guard<std::recursive_mutex> guard(m_lock);
     QueuedPlayersMap::const_iterator qItr = m_queuedPlayers.find(guid);
     if (qItr == m_queuedPlayers.end())
         return false;
@@ -483,10 +485,14 @@ large groups are disadvantageous, because they will be kicked first if invitatio
 */
 void BattleGroundQueue::FillPlayersToBg(BattleGround* bg, BattleGroundBracketId bracketId)
 {
-    // arenas: only fill up while the match did not start yet, teams are balanced from the mixed queue
+    // arenas: only fill up while the match did not start yet AND a replacement can still accept and load
+    // before the gates open (an invite in the last seconds arrives after the start or into an ended match);
+    // teams are balanced from the mixed queue
     if (bg->IsArena())
     {
-        if (bg->GetStatus() < STATUS_IN_PROGRESS)
+        // (start delay 0 = nobody entered yet, the preparation timer did not start)
+        int32 const startDelay = bg->GetStartDelayTime();
+        if (bg->GetStatus() < STATUS_IN_PROGRESS && (startDelay == 0 || startDelay > int32(BattleGroundMgr::GetInviteAcceptWaitTime(bg->GetTypeID()))))
             FillArenaSelectionPools(bg, bracketId, false);
         return;
     }
@@ -726,6 +732,7 @@ bool BattleGroundQueue::CheckArenaMatch(BattleGroundBracketId bracketId, BattleG
 
 uint32 BattleGroundQueue::GetWaitingArenaPlayersCount(BattleGroundBracketId bracketId) const
 {
+    std::lock_guard<std::recursive_mutex> guard(m_lock);
     if (bracketId == BG_BRACKET_ID_NONE)
         return 0;
 
@@ -738,6 +745,7 @@ uint32 BattleGroundQueue::GetWaitingArenaPlayersCount(BattleGroundBracketId brac
 
 bool BattleGroundQueue::LeaveQueue(Player* player)
 {
+    std::lock_guard<std::recursive_mutex> guard(m_lock);
     if (!player)
         return false;
 
@@ -1027,7 +1035,7 @@ bool BattleGroundQueue::CheckCreateNewBg(BattleGroundTypeId bgTypeId, BattleGrou
 
 void BattleGroundQueue::Update(BattleGroundTypeId bgTypeId, BattleGroundBracketId bracketId)
 {
-    //ACE_Guard<ACE_Recursive_Thread_Mutex> guard(m_lock);
+    std::lock_guard<std::recursive_mutex> guard(m_lock);
 
     RemoveOfflinePlayer();
 
@@ -1167,16 +1175,12 @@ void BattleGroundMgr::DeleteAllBattleGrounds()
 void BattleGroundMgr::Update(uint32 diff)
 {
     // update scheduled queues
-    if (!m_queueUpdateScheduler.empty())
+    if (!m_queueUpdateScheduler.empty())            // world thread, no map thread runs now - the plain read is fine
     {
         std::vector<uint32> scheduled;
         {
-            //create mutex
-            //ACE_Guard<ACE_Thread_Mutex> guard(schedulerLock);
-            //copy vector and clear the other
-            scheduled = std::vector<uint32>(m_queueUpdateScheduler);
-            m_queueUpdateScheduler.clear();
-            //release lock
+            std::lock_guard<std::mutex> guard(m_schedulerLock);
+            scheduled.swap(m_queueUpdateScheduler);
         }
 
         for (uint32 i : scheduled)
@@ -1773,14 +1777,19 @@ uint32 BattleGroundMgr::GetArenaPlayersWaitingCount(BattleGroundTypeId bgTypeId,
     // waiting in the queue ...
     uint32 count = m_battleGroundQueues[BgQueueTypeId(bgTypeId)].GetWaitingArenaPlayersCount(bracketId);
 
-    // ... or already invited to / inside an arena that did not start yet and still has free slots
+    // ... or already invited to / inside an arena that did not start yet and can still take somebody
+    // (invite slots, not ported players - a freshly popped full match is not "waiting" for anybody)
     for (BattleGroundSet::iterator itr = GetBattleGroundsBegin(bgTypeId); itr != GetBattleGroundsEnd(bgTypeId); ++itr)
     {
         BattleGround* bg = itr->second;
-        if (bg->GetBracketId() != bracketId || bg->GetStatus() != STATUS_WAIT_JOIN || !bg->HasFreeSlots())
+        if (bg->GetBracketId() != bracketId || bg->GetStatus() != STATUS_WAIT_JOIN)
             continue;
 
-        count += bg->GetInvitedCount(ALLIANCE) + bg->GetInvitedCount(HORDE);
+        uint32 const invited = bg->GetInvitedCount(ALLIANCE) + bg->GetInvitedCount(HORDE);
+        if (invited >= bg->GetMaxPlayers())
+            continue;
+
+        count += invited;
     }
     return count;
 }
@@ -1826,7 +1835,7 @@ void BattleGroundMgr::ToggleTesting()
 
 void BattleGroundMgr::ScheduleQueueUpdate(BattleGroundQueueTypeId bgQueueTypeId, BattleGroundTypeId bgTypeId, BattleGroundBracketId bracketId)
 {
-    //ACE_Guard<ACE_Thread_Mutex> guard(schedulerLock);
+    std::lock_guard<std::mutex> guard(m_schedulerLock);
     //we will use only 1 number created of bgTypeId and queue_id
     uint32 schedule_id = (bgQueueTypeId << 16) | (bgTypeId << 8) | bracketId;
     bool found = false;
@@ -2095,6 +2104,7 @@ void BattleGroundMgr::PlayerLoggedOut(Player* player)
 
 void BattleGroundQueue::PlayerLoggedOut(ObjectGuid guid)
 {
+    std::lock_guard<std::recursive_mutex> guard(m_lock);
     QueuedPlayersMap::iterator itr;
 
     //remove player from map, if he's there
@@ -2110,6 +2120,7 @@ void BattleGroundQueue::PlayerLoggedOut(ObjectGuid guid)
 
 bool BattleGroundQueue::PlayerLoggedIn(Player* player)
 {
+    std::lock_guard<std::recursive_mutex> guard(m_lock);
     QueuedPlayersMap::iterator itr;
 
     //remove player from map, if he's there

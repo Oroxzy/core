@@ -39,6 +39,7 @@
 
 #include <sstream>
 #include <algorithm>
+#include <set>
 
 INSTANTIATE_SINGLETON_1(ArenaMgr);
 
@@ -237,6 +238,8 @@ Arena::Arena()
     m_pipeKnockbackCount = 0;
     m_waterfallState = WATERFALL_OFF;
     m_underMapCheckTimer = 0;
+    m_leaverIsParticipant = false;
+    m_spectatorsRemoved = false;
 }
 
 Arena::~Arena()
@@ -281,6 +284,8 @@ void Arena::Reset()
     m_pipeKnockbackCount = 0;
     m_waterfallState = WATERFALL_OFF;
     m_underMapCheckTimer = 0;
+    m_leaverIsParticipant = false;
+    m_spectatorsRemoved = false;
 }
 
 /*********************************************************/
@@ -289,9 +294,15 @@ void Arena::Reset()
 
 void Arena::Update(uint32 diff)
 {
-    // visitors are removed shortly before the participants
-    if (GetStatus() == STATUS_WAIT_LEAVE && GetEndTime() <= diff)
+    // visitors are removed shortly before the participants - or right away when the last participant is
+    // gone (the base class deletes an empty arena on the spot and the map would unload under their feet
+    // without the status slot ever being cleared)
+    bool const aboutToBeDeleted = !GetPlayersSize() && !GetInvitedCount(HORDE) && !GetInvitedCount(ALLIANCE);
+    if (!m_spectatorsRemoved && ((GetStatus() == STATUS_WAIT_LEAVE && GetEndTime() <= diff) || aboutToBeDeleted))
+    {
+        m_spectatorsRemoved = true;
         RemoveSpectators();
+    }
 
     if (GetStatus() == STATUS_WAIT_JOIN)
         UpdatePreparation(diff);
@@ -499,7 +510,8 @@ void Arena::CheckPlayersUnderMap()
     switch (GetArenaMapType())
     {
         case ARENA_MAP_NAGRAND:     minZ = 10.0f;  break;   // floor / start rooms ~12.1
-        case ARENA_MAP_BLADES_EDGE: minZ = 2.5f;   break;   // start rooms ~4.96, bridge above
+        case ARENA_MAP_BLADES_EDGE: minZ = -5.0f;  break;   // lower fight floor 1.0-4.5 (navmesh), terrain 0.5 directly under it:
+                                                            // a z threshold cannot separate fallen players from fighters, only a real void fall is caught
         case ARENA_MAP_LORDAERON:   minZ = 30.0f;  break;   // floor ~32.5
         case ARENA_MAP_DALARAN:     minZ = 1.0f;   break;   // floor ~3.2, water channel ~2.8, terrain plane at 0
         case ARENA_MAP_TIGERS_PEAK: minZ = 370.0f; break;   // plateau terrain ~380.7, platforms ~381.5
@@ -555,6 +567,13 @@ void Arena::StartingEventOpenDoors()
     SpawnEvent(ARENA_EVENT_WATCHER_2, 0, false, true);
     SpawnEvent(ARENA_EVENT_SHADOW_SIGHT, 0, true, false, ARENA_SHADOW_SIGHT_SPAWN_DELAY);
 
+    // a team did not show up: no fight (except in .debug bg mode) - and no repair / cooldown reset either
+    if ((!GetPlayersCountByTeam(ALLIANCE) || !GetPlayersCountByTeam(HORDE)) && !sBattleGroundMgr.isTesting())
+    {
+        EndBattleGround(TEAM_NONE);
+        return;
+    }
+
     for (const auto& itr : m_players)
         if (Player* player = sObjectMgr.GetPlayer(itr.first))
             ResetPlayerForFight(player);
@@ -578,12 +597,6 @@ void Arena::StartingEventOpenDoors()
 
     m_matchTimer = 0;
     m_timeLimitReached = false;
-
-    // a team did not show up: no fight (except in .debug bg mode)
-    if ((!GetPlayersCountByTeam(ALLIANCE) || !GetPlayersCountByTeam(HORDE)) && !sBattleGroundMgr.isTesting())
-        EndBattleGround(TEAM_NONE);
-    else
-        CheckWinConditions();
 }
 
 /*********************************************************/
@@ -596,8 +609,8 @@ void Arena::AddPlayer(Player* player)
 
     m_playerScores[player->GetObjectGuid()] = new ArenaScore;
 
-    // no queue popping for another arena while playing this one
-    sBattleGroundMgr.RemovePlayerFromArenaQueues(player, BattleGroundMgr::BgQueueTypeId(GetTypeID()));
+    // (the other arena queues were already left in HandleBattleFieldPortOpcode - world thread; the map
+    // thread we run in here must not touch the queue containers of other maps)
 
     PrepareArenaPlayer(player);
 
@@ -613,6 +626,15 @@ void Arena::AddPlayer(Player* player)
     UpdateWorldStates();
 }
 
+void Arena::RemovePlayerAtLeave(ObjectGuid guid, bool transport, bool sendPacket)
+{
+    // the base class erases the player from m_players before it calls RemovePlayer - remember whether
+    // this was a fighter or only a visitor of the match
+    m_leaverIsParticipant = m_players.find(guid) != m_players.end();
+    BattleGround::RemovePlayerAtLeave(guid, transport, sendPacket);
+    m_leaverIsParticipant = false;
+}
+
 void Arena::RemovePlayer(Player* player, ObjectGuid /*guid*/)
 {
     // spectators (visitors and dead participants) leave silently, fighters are announced
@@ -625,7 +647,7 @@ void Arena::RemovePlayer(Player* player, ObjectGuid /*guid*/)
     }
 
     if (player)
-        RestorePlayer(player);
+        RestorePlayer(player, m_leaverIsParticipant);
 
     // the leaving player is already removed from the player list here
     if (GetStatus() == STATUS_IN_PROGRESS)
@@ -646,16 +668,15 @@ void Arena::PrepareArenaPlayer(Player* player)
 
     player->UnequipForbiddenArenaItems(type);
     player->Unmount();
-    player->DurabilityRepairAll(false, 0.0f);
 
-    // fresh start: no buffs, no cooldowns (the preparation aura is applied by AddPlayer)
+    // fresh start: no buffs (the preparation aura is applied by AddPlayer). The free repair and the
+    // cooldown reset happen in ResetPlayerForFight when the gates open - entering and leaving during
+    // the preparation must not hand out anything (free repairs / cooldown resets on demand).
     player->RemoveAllAurasOnDeath();
-    ResetArenaCooldowns(player);
 
     if (Pet* pet = player->GetPet())
     {
         pet->RemoveAllAurasOnDeath();
-        pet->RemoveAllCooldowns();
         pet->SetHealth(pet->GetMaxHealth());
         pet->SetPower(POWER_MANA, pet->GetMaxPower(POWER_MANA));
         if (pet->GetPetType() == HUNTER_PET)
@@ -665,12 +686,20 @@ void Arena::PrepareArenaPlayer(Player* player)
 
 void Arena::ResetPlayerForFight(Player* player)
 {
-    if (!player->IsAlive() || player->IsArenaSpectator())
+    if (player->IsArenaSpectator())
         return;
+
+    // died during the preparation (Hellfire, a fall): the fight starts for everybody on their feet
+    if (!player->IsAlive())
+    {
+        player->ResurrectPlayer(1.0f);
+        player->SpawnCorpseBones();
+    }
 
     player->RemoveAurasDueToSpell(SPELL_ARENA_PREPARATION);
     player->RemoveAurasDueToSpell(SPELL_ARENA_RECENTLY_BANDAGED);
     player->RemoveShortDurationBuffs(ARENA_SHORT_BUFF_DURATION);
+    player->DurabilityRepairAll(false, 0.0f);
     ResetArenaCooldowns(player);
     player->SetHealthPercent(100.0f);
     player->SetPower(POWER_MANA, player->GetMaxPower(POWER_MANA));
@@ -687,14 +716,19 @@ void Arena::ResetPlayerForFight(Player* player)
     }
 }
 
-void Arena::RestorePlayer(Player* player)
+void Arena::RestorePlayer(Player* player, bool participant)
 {
     if (player->IsArenaSpectator())
         player->SetArenaSpectator(false);
 
     player->Unmount();
-    player->RemoveAllAurasOnDeath();
     player->CombatStopWithPets(true);
+
+    // visitors keep their buffs (they never fought), fighters leave the arena clean
+    if (!participant)
+        return;
+
+    player->RemoveAllAurasOnDeath();
 
     if (Pet* pet = player->GetPet())
     {
@@ -748,6 +782,33 @@ bool Arena::AreAllPlayersReady() const
     return true;
 }
 
+void Arena::SendPacketToAll(WorldPacket* packet)
+{
+    // the template has no map; visitors are on the map but not in m_players, participants that are
+    // being ported out are in m_players but no longer on the map - so send to the union of both
+    if (!HasBgMap())
+    {
+        BattleGround::SendPacketToAll(packet);
+        return;
+    }
+
+    BattleGroundMap* map = GetBgMap();
+    std::set<ObjectGuid> sent;
+    for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+    {
+        if (Player* player = itr->getSource())
+        {
+            player->GetSession()->SendPacket(packet);
+            sent.insert(player->GetObjectGuid());
+        }
+    }
+
+    for (const auto& itr : m_players)
+        if (sent.find(itr.first) == sent.end())
+            if (Player* player = sObjectMgr.GetPlayer(itr.first))
+                player->GetSession()->SendPacket(packet);
+}
+
 void Arena::RemoveSpectators()
 {
     Map::PlayerList const& players = GetBgMap()->GetPlayers();
@@ -778,6 +839,9 @@ void Arena::HandleKillPlayer(Player* pVictim, Player* pKiller)
 
     // no insignia in arenas
     pVictim->RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_SKINNABLE);
+
+    // no self resurrection (Reincarnation, Twisting Nether ...): dead is dead in the arena
+    pVictim->SetUInt32Value(PLAYER_SELF_RES_SPELL, 0);
 
     PlaySoundToAll(SOUND_ARENA_KILL);
     CheckWinConditions();
@@ -866,7 +930,7 @@ void Arena::EndBattleGround(Team winner)
 
     for (const auto& itr : m_players)
         if (Player* player = sObjectMgr.GetPlayer(itr.first))
-            RestorePlayer(player);
+            RestorePlayer(player, true);
 
     BattleGround::EndBattleGround(winner);
 

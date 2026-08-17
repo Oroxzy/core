@@ -221,8 +221,12 @@ class Arena : public BattleGround
         void StartingEventOpenDoors() override;
 
         void AddPlayer(Player* player) override;
+        void RemovePlayerAtLeave(ObjectGuid guid, bool transport, bool sendPacket) override;
         void RemovePlayer(Player* player, ObjectGuid guid) override;
         void HandleKillPlayer(Player* pVictim, Player* pKiller) override;
+        // world states, sounds and messages go to everybody on the map (visitors are not in m_players)
+        void SendPacketToAll(WorldPacket* packet) override;
+        using BattleGround::SendPacketToAll;
         bool HandleAreaTrigger(Player* player, uint32 trigger) override;
         void EndBattleGround(Team winner) override;
         void UpdatePlayerScore(Player* source, uint32 type, uint32 value) override;
@@ -254,10 +258,12 @@ class Arena : public BattleGround
         void UpdateTimeWorldStates(uint32 remainingMs);
 
         // player handling
-        void PrepareArenaPlayer(Player* player);            // on join: strip buffs, cooldowns, forbidden gear, apply preparation
-        void ResetPlayerForFight(Player* player);           // on gate opening: short buffs, cooldowns, health and power
-        void RestorePlayer(Player* player);                 // on leave / end
+        void PrepareArenaPlayer(Player* player);            // on join: strip buffs, forbidden gear (the preparation aura is applied by AddPlayer)
+        void ResetPlayerForFight(Player* player);           // on gate opening: short buffs, cooldowns, repair, health and power
+        void RestorePlayer(Player* player, bool participant);   // on leave / end (visitors keep their buffs)
         static void ResetArenaCooldowns(Player* player);
+        bool m_leaverIsParticipant;                         // set by RemovePlayerAtLeave for RemovePlayer (the base erased the player list already)
+        bool m_spectatorsRemoved;                           // RemoveSpectators ran after the end
 
         // Nagrand Arena
         bool SummonTornado();
