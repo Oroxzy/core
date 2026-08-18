@@ -50,6 +50,9 @@ namespace
         SENDER_ADMIN                = 300,                  // action = ACTION_ADMIN_* (from the admin submenu)
         SENDER_NOOP                 = 301,                  // back to the main menu
         SENDER_ADMIN_MENU           = 302,                  // open the admin submenu
+        SENDER_ADMIN_MAP_MENU       = 303,                  // open the map picker
+        SENDER_ADMIN_MAP_PICK       = 304,                  // action = ArenaMapType, lists that map's brackets
+        SENDER_ADMIN_MAP_QUEUE      = 305,                  // action = map * ARENA_TYPES_COUNT + arena type index
 
         ARENA_SPECTATE_LIST_MAX     = 20,                   // gossip menus hold 32 buttons
 
@@ -58,7 +61,23 @@ namespace
         ACTION_ADMIN_MAX_ITEM_PATCH     = 2,
         ACTION_ADMIN_TOGGLE_ITEM_SWAP   = 3,
         ACTION_ADMIN_TOGGLE_TRINKET_SWAP = 4,
+        ACTION_ADMIN_MAP_ANY            = 5,                 // release the pinned map again
     };
+
+    // Arena names for the gamemaster's map picker, indexed by ArenaMapType.
+    char const* GetArenaMapName(ArenaMapType map)
+    {
+        switch (map)
+        {
+            case ARENA_MAP_NAGRAND:     return "Nagrand Arena";
+            case ARENA_MAP_BLADES_EDGE: return "Blade's Edge Arena";
+            case ARENA_MAP_LORDAERON:   return "Ruins of Lordaeron";
+            case ARENA_MAP_DALARAN:     return "Dalaran Sewers";
+            case ARENA_MAP_TIGERS_PEAK: return "The Tiger's Peak";
+            case ARENA_MAP_TOLVIRON:    return "Tol'Viron Arena";
+            default:                    return "Unknown";
+        }
+    }
 
     enum ArenaWatcherGossip
     {
@@ -496,7 +515,64 @@ static bool ShowArenaAdminMenu(Player* player, GameObject* orb)
     player->ADD_GOSSIP_ITEM_EXTENDED(GOSSIP_ICON_INTERACT_1, patch.str().c_str(), SENDER_ADMIN, ACTION_ADMIN_MAX_ITEM_PATCH, "New value (0 = 1.2 ... 10 = 1.12):", true);
     player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, swap.str().c_str(), SENDER_ADMIN, ACTION_ADMIN_TOGGLE_ITEM_SWAP);
     player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, trinket.str().c_str(), SENDER_ADMIN, ACTION_ADMIN_TOGGLE_TRINKET_SWAP);
+
+    std::ostringstream pinned;
+    pinned << "Queue on a chosen arena (currently ";
+    ArenaMapType const forced = sBattleGroundMgr.GetForcedArenaMap();
+    pinned << (forced < ARENA_MAPS_COUNT ? GetArenaMapName(forced) : "any map") << ")";
+    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, pinned.str().c_str(), SENDER_ADMIN_MAP_MENU, 0);
+
     player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Back", SENDER_NOOP, 0);
+    player->SEND_GOSSIP_MENU(ORB_NPC_TEXT_HELLO, orb->GetObjectGuid());
+    return true;
+}
+
+// admin submenu: pick the arena map to test on. Picking one pins every arena that starts from now on to
+// that map - the queue normally rolls for it - so the picker also offers releasing it again.
+static bool ShowArenaMapMenu(Player* player, GameObject* orb)
+{
+    player->PlayerTalkClass->ClearMenus();
+
+    for (uint8 map = 0; map < ARENA_MAPS_COUNT; ++map)
+    {
+        // an arena without a battleground template is not set up on this realm - do not offer it
+        if (!sBattleGroundMgr.GetBattleGroundTemplate(GetArenaBattleGroundTypeId(ArenaMapType(map), ARENA_TYPE_2V2)) &&
+            !sBattleGroundMgr.GetBattleGroundTemplate(GetArenaBattleGroundTypeId(ArenaMapType(map), ARENA_TYPE_1V1)))
+            continue;
+
+        std::ostringstream ss;
+        ss << GetArenaMapName(ArenaMapType(map));
+        if (sBattleGroundMgr.GetForcedArenaMap() == ArenaMapType(map))
+            ss << "  <pinned>";
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, ss.str().c_str(), SENDER_ADMIN_MAP_PICK, map);
+    }
+
+    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Release the map again (random as usual)", SENDER_ADMIN, ACTION_ADMIN_MAP_ANY);
+    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Back", SENDER_ADMIN_MENU, 0);
+    player->SEND_GOSSIP_MENU(ORB_NPC_TEXT_HELLO, orb->GetObjectGuid());
+    return true;
+}
+
+// admin submenu: the brackets of one chosen arena, so a gamemaster queues map and size in one click
+static bool ShowArenaMapBracketMenu(Player* player, GameObject* orb, ArenaMapType map)
+{
+    player->PlayerTalkClass->ClearMenus();
+
+    for (uint8 index = 0; index < ARENA_TYPES_COUNT; ++index)
+    {
+        ArenaType const type = GetArenaTypeByIndex(index);
+        BattleGroundTypeId const bgTypeId = GetArenaBattleGroundTypeId(map, type);
+        if (!sBattleGroundMgr.GetBattleGroundTemplate(bgTypeId))
+            continue;
+
+        std::ostringstream ss;
+        ss << GetArenaMapName(map) << " - " << GetArenaTypeName(type);
+        if (IsInArenaQueueOfType(player, type))
+            ss << " (already queued)";
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, ss.str().c_str(), SENDER_ADMIN_MAP_QUEUE, map * ARENA_TYPES_COUNT + index);
+    }
+
+    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Back", SENDER_ADMIN_MAP_MENU, 0);
     player->SEND_GOSSIP_MENU(ORB_NPC_TEXT_HELLO, orb->GetObjectGuid());
     return true;
 }
@@ -665,6 +741,32 @@ static bool HandleArenaOrbSelect(Player* player, GameObject* orb, uint32 sender,
                 break;
             return ShowArenaAdminMenu(player, orb);
         }
+        case SENDER_ADMIN_MAP_MENU:
+        {
+            if (player->GetSession()->GetSecurity() < SEC_ADMINISTRATOR)
+                break;
+            return ShowArenaMapMenu(player, orb);
+        }
+        case SENDER_ADMIN_MAP_PICK:
+        {
+            if (player->GetSession()->GetSecurity() < SEC_ADMINISTRATOR || action >= ARENA_MAPS_COUNT)
+                break;
+            sBattleGroundMgr.SetForcedArenaMap(ArenaMapType(action));
+            player->GetSession()->SendAreaTriggerMessage("Arena pinned to %s until you release it.", GetArenaMapName(ArenaMapType(action)));
+            return ShowArenaMapBracketMenu(player, orb, ArenaMapType(action));
+        }
+        case SENDER_ADMIN_MAP_QUEUE:
+        {
+            if (player->GetSession()->GetSecurity() < SEC_ADMINISTRATOR)
+                break;
+            uint32 const map = action / ARENA_TYPES_COUNT;
+            uint32 const index = action % ARENA_TYPES_COUNT;
+            if (map >= ARENA_MAPS_COUNT || index >= ARENA_TYPES_COUNT)
+                break;
+            sBattleGroundMgr.SetForcedArenaMap(ArenaMapType(map));
+            JoinArenaQueue(player, orb, GetArenaTypeByIndex(uint8(index)));
+            return true;
+        }
         case SENDER_ADMIN:
         {
             if (player->GetSession()->GetSecurity() < SEC_ADMINISTRATOR)
@@ -677,6 +779,10 @@ static bool HandleArenaOrbSelect(Player* player, GameObject* orb, uint32 sender,
                     break;
                 case ACTION_ADMIN_TOGGLE_TRINKET_SWAP:
                     sWorld.setConfig(CONFIG_BOOL_ARENA_ALLOW_TRINKET_SWAP, !sWorld.getConfig(CONFIG_BOOL_ARENA_ALLOW_TRINKET_SWAP));
+                    break;
+                case ACTION_ADMIN_MAP_ANY:
+                    sBattleGroundMgr.SetForcedArenaMap(ArenaMapType(ARENA_MAPS_COUNT));
+                    player->GetSession()->SendAreaTriggerMessage("%s", "Arena map released - the queue picks one as usual again.");
                     break;
             }
             // stay in the submenu, the changed value is shown right away

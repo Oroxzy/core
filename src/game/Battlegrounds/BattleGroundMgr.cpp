@@ -1803,6 +1803,14 @@ uint32 BattleGroundMgr::GetArenaPlayersWaitingCount(BattleGroundTypeId bgTypeId,
 
 BattleGroundTypeId BattleGroundMgr::SelectArenaBattleGroundTypeId(ArenaType type, BattleGroundBracketId bracketId)
 {
+    // a gamemaster can pin the arena to one map for testing; it wins over both rules below
+    if (m_forcedArenaMap < ARENA_MAPS_COUNT)
+    {
+        BattleGroundTypeId const forced = GetArenaBattleGroundTypeId(m_forcedArenaMap, type);
+        if (GetBattleGroundTemplate(forced))
+            return forced;
+    }
+
     // prefer the arena map where players of this size are already waiting in the bracket ...
     BattleGroundTypeId best = BATTLEGROUND_TYPE_NONE;
     uint32 bestCount = 0;

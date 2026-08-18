@@ -330,6 +330,10 @@ class BattleGroundMgr
         // Picks the arena map (bg type) of the wanted size a player should queue for: prefers a queue where players
         // are already waiting in his bracket, otherwise a random map.
         BattleGroundTypeId SelectArenaBattleGroundTypeId(ArenaType type, BattleGroundBracketId bracketId);
+        // Testing aid: pins every new arena to one map, so a gamemaster can queue straight onto the map he
+        // wants to look at instead of rolling for it. ARENA_MAPS_COUNT means "off", which is the default.
+        void SetForcedArenaMap(ArenaMapType map) { m_forcedArenaMap = map; }
+        ArenaMapType GetForcedArenaMap() const { return m_forcedArenaMap; }
 
         static HolidayIds BgTypeToWeekendHolidayId(BattleGroundTypeId bgTypeId);
         static BattleGroundTypeId WeekendHolidayIdToBgType(HolidayIds holiday);
@@ -338,6 +342,7 @@ class BattleGroundMgr
         void PlayerLoggedIn(Player* player);
         void PlayerLoggedOut(Player* player);
     private:
+        ArenaMapType m_forcedArenaMap = ArenaMapType(ARENA_MAPS_COUNT); // ARENA_MAPS_COUNT = pick a map normally
         std::mutex m_schedulerLock;                                    // m_queueUpdateScheduler is filled from map threads (BG leave, orb, level up)
         BattleMastersMap    m_battleMastersMap;
         CreatureBattleEventIndexesMap m_creatureBattleEventIndexMap;
