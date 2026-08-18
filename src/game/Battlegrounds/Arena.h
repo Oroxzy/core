@@ -152,7 +152,9 @@ enum ArenaAreaTriggers
 enum ArenaTimers
 {
     ARENA_WORLD_STATE_UPDATE_INTERVAL       = 1 * IN_MILLISECONDS,
-    ARENA_DOORS_DESPAWN_DELAY               = 3 * IN_MILLISECONDS,
+    // TrinityCore never despawns the gates at all; ours go away so their collision stops blocking
+    // the start box. Three seconds cut the door's own opening animation off half way, so wait five.
+    ARENA_DOORS_DESPAWN_DELAY               = 5 * IN_MILLISECONDS,
     ARENA_SHADOW_SIGHT_SPAWN_DELAY          = 90,       // seconds after the gates opened
     ARENA_TP_ZONE_ID                        = 4600,     // area_template / AreaTable zone of The Tiger's Peak (weather)
     ARENA_SHORT_BUFF_DURATION               = 30 * IN_MILLISECONDS,     // buffs with less remaining time are removed on start
