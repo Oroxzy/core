@@ -187,8 +187,12 @@ enum BattleGroundQueueTypeId
     BATTLEGROUND_QUEUE_TP_2V2   = 21,
     BATTLEGROUND_QUEUE_TP_3V3   = 22,
     BATTLEGROUND_QUEUE_TP_5V5   = 23,
+    BATTLEGROUND_QUEUE_TV_1V1   = 24,
+    BATTLEGROUND_QUEUE_TV_2V2   = 25,
+    BATTLEGROUND_QUEUE_TV_3V3   = 26,
+    BATTLEGROUND_QUEUE_TV_5V5   = 27,
 };
-#define MAX_BATTLEGROUND_QUEUE_TYPES 24
+#define MAX_BATTLEGROUND_QUEUE_TYPES 28
 
 enum BattleGroundBracketId                                  // bracketId for level ranges
 {
