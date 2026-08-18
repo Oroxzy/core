@@ -79,11 +79,26 @@ namespace
         }
     }
 
+    char const* GetWeatherName(WeatherType type)
+    {
+        switch (type)
+        {
+            case WEATHER_TYPE_FINE:  return "Clear sky";
+            case WEATHER_TYPE_RAIN:  return "Rain";
+            case WEATHER_TYPE_SNOW:  return "Snow";
+            case WEATHER_TYPE_STORM: return "Sandstorm";
+        }
+        return "Unknown";
+    }
+
     enum ArenaWatcherGossip
     {
         WATCHER_ACTION_READY            = 1,
         WATCHER_ACTION_LEAVE            = 2,
         WATCHER_ACTION_CONFIRM_LEAVE    = 3,
+        WATCHER_ACTION_WEATHER_MENU     = 4,                 // admin: weather of this running match
+        WATCHER_ACTION_WEATHER_TOGGLE   = 5,                 // admin: flip Arena.RandomWeather
+        WATCHER_ACTION_WEATHER_SET      = 10,                // admin: + WeatherType, sets it right away
         WATCHER_NPC_TEXT_HELLO          = 800100,
         WATCHER_NPC_TEXT_LEAVE_CONFIRM  = 800101,
         ORB_NPC_TEXT_HELLO              = 800102,
@@ -860,6 +875,32 @@ bool GossipHello_ArenaWatcher(Player* player, Creature* creature)
     if (bg->GetStatus() == STATUS_WAIT_JOIN && !Arena::IsPlayerReady(player))
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, "I'm ready!", GOSSIP_SENDER_MAIN, WATCHER_ACTION_READY);
     player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "I want to leave the arena.", GOSSIP_SENDER_MAIN, WATCHER_ACTION_LEAVE);
+    if (player->GetSession()->GetSecurity() >= SEC_ADMINISTRATOR)
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "<Admin> Weather", GOSSIP_SENDER_MAIN, WATCHER_ACTION_WEATHER_MENU);
+    player->SEND_GOSSIP_MENU(WATCHER_NPC_TEXT_HELLO, creature->GetObjectGuid());
+    return true;
+}
+
+// admin submenu at the watcher: change the weather of the match you are standing in, without leaving it
+static bool ShowWatcherWeatherMenu(Player* player, Creature* creature, Arena* arena)
+{
+    player->PlayerTalkClass->ClearMenus();
+
+    WeatherType kinds[4];
+    uint8 const count = arena->GetSuitableWeather(kinds, 4);
+    for (uint8 i = 0; i < count; ++i)
+    {
+        std::ostringstream ss;
+        ss << "Set: " << GetWeatherName(kinds[i]);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, ss.str().c_str(), GOSSIP_SENDER_MAIN, WATCHER_ACTION_WEATHER_SET + kinds[i]);
+    }
+    if (count == 1)
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "This arena has no sky - nothing else fits here.", GOSSIP_SENDER_MAIN, WATCHER_ACTION_WEATHER_MENU);
+
+    std::ostringstream toggle;
+    toggle << "Arena.RandomWeather = " << (sWorld.getConfig(CONFIG_BOOL_ARENA_RANDOM_WEATHER) ? "on" : "off");
+    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, toggle.str().c_str(), GOSSIP_SENDER_MAIN, WATCHER_ACTION_WEATHER_TOGGLE);
+
     player->SEND_GOSSIP_MENU(WATCHER_NPC_TEXT_HELLO, creature->GetObjectGuid());
     return true;
 }
@@ -869,6 +910,23 @@ bool GossipSelect_ArenaWatcher(Player* player, Creature* creature, uint32 /*send
     BattleGround* bg = player->GetBattleGround();
     if (!bg || !bg->IsArena())
         return false;
+
+    if (action >= WATCHER_ACTION_WEATHER_MENU && action <= WATCHER_ACTION_WEATHER_SET + WEATHER_TYPE_STORM)
+    {
+        if (player->GetSession()->GetSecurity() < SEC_ADMINISTRATOR)
+            return false;
+
+        Arena* arena = static_cast<Arena*>(bg);
+        if (action == WATCHER_ACTION_WEATHER_TOGGLE)
+            sWorld.setConfig(CONFIG_BOOL_ARENA_RANDOM_WEATHER, !sWorld.getConfig(CONFIG_BOOL_ARENA_RANDOM_WEATHER));
+        else if (action >= WATCHER_ACTION_WEATHER_SET)
+        {
+            WeatherType const type = WeatherType(action - WATCHER_ACTION_WEATHER_SET);
+            arena->SetArenaWeather(type, type == WEATHER_TYPE_FINE ? 0.0f : frand(0.3f, 0.9f));
+            player->GetSession()->SendAreaTriggerMessage("Weather set to %s.", GetWeatherName(type));
+        }
+        return ShowWatcherWeatherMenu(player, creature, arena);
+    }
 
     switch (action)
     {

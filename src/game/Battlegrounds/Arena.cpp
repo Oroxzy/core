@@ -567,30 +567,17 @@ uint32 Arena::GetArenaZoneId() const
     return 0;
 }
 
-void Arena::ApplyArenaWeather()
+uint8 Arena::GetSuitableWeather(WeatherType* out, uint8 max) const
 {
-    uint32 const zoneId = GetArenaZoneId();
-    if (!zoneId)
-        return;
+    // WEATHER_TYPE_STORM is the sandstorm, so it belongs to Uldum and nowhere else, and snow belongs on
+    // the mountain rather than in a desert or a sewer. Fine weather is always an option.
+    static WeatherType const desert[]    = { WEATHER_TYPE_FINE, WEATHER_TYPE_STORM };
+    static WeatherType const mountain[]  = { WEATHER_TYPE_FINE, WEATHER_TYPE_SNOW };
+    static WeatherType const temperate[] = { WEATHER_TYPE_FINE, WEATHER_TYPE_RAIN };
+    static WeatherType const indoors[]   = { WEATHER_TYPE_FINE };
 
-    // Weather is set permanently so the world's own weather regeneration cannot clear it mid match.
-    // Tiger's Peak sits on a snowy mountain and keeps its snow whether the option is on or not.
-    if (!sWorld.getConfig(CONFIG_BOOL_ARENA_RANDOM_WEATHER))
-    {
-        if (IsTigersPeakArena())
-            GetBgMap()->SetWeather(zoneId, WEATHER_TYPE_SNOW, 0.5f, true);
-        return;
-    }
-
-    // Only the kinds that suit the place: WEATHER_TYPE_STORM is the sandstorm, so it belongs to Uldum
-    // and nowhere else, and snow belongs on the mountain rather than in a desert or a sewer.
     WeatherType const* kinds;
     uint8 count;
-    static WeatherType const desert[]   = { WEATHER_TYPE_FINE, WEATHER_TYPE_STORM };
-    static WeatherType const mountain[] = { WEATHER_TYPE_FINE, WEATHER_TYPE_SNOW };
-    static WeatherType const temperate[]= { WEATHER_TYPE_FINE, WEATHER_TYPE_RAIN };
-    static WeatherType const indoors[]  = { WEATHER_TYPE_FINE };
-
     switch (GetArenaMapType())
     {
         case ARENA_MAP_TOLVIRON:    kinds = desert;    count = 2; break;   // Uldum
@@ -599,10 +586,38 @@ void Arena::ApplyArenaWeather()
         default:                    kinds = temperate; count = 2; break;   // Nagrand, Blade's Edge, Lordaeron
     }
 
+    if (count > max)
+        count = max;
+    for (uint8 i = 0; i < count; ++i)
+        out[i] = kinds[i];
+    return count;
+}
+
+void Arena::SetArenaWeather(WeatherType type, float grade)
+{
+    // permanently, so the world's own weather regeneration cannot clear it mid match
+    if (uint32 const zoneId = GetArenaZoneId())
+        GetBgMap()->SetWeather(zoneId, type, grade, true);
+}
+
+void Arena::ApplyArenaWeather()
+{
+    if (!GetArenaZoneId())
+        return;
+
+    // Tiger's Peak sits on a snowy mountain and keeps its snow whether the option is on or not.
+    if (!sWorld.getConfig(CONFIG_BOOL_ARENA_RANDOM_WEATHER))
+    {
+        if (IsTigersPeakArena())
+            SetArenaWeather(WEATHER_TYPE_SNOW, 0.5f);
+        return;
+    }
+
+    WeatherType kinds[4];
+    uint8 const count = GetSuitableWeather(kinds, 4);
     WeatherType const type = kinds[urand(0, count - 1)];
     // fine weather carries no grade; the others get a light to heavy roll
-    float const grade = (type == WEATHER_TYPE_FINE) ? 0.0f : frand(0.3f, 0.9f);
-    GetBgMap()->SetWeather(zoneId, type, grade, true);
+    SetArenaWeather(type, (type == WEATHER_TYPE_FINE) ? 0.0f : frand(0.3f, 0.9f));
 }
 
 void Arena::StartingEventOpenDoors()

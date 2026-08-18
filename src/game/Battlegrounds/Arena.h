@@ -257,6 +257,13 @@ class Arena : public BattleGround
         bool IsNagrandArena() const { return GetArenaMapType() == ARENA_MAP_NAGRAND; }
         bool IsDalaranArena() const { return GetArenaMapType() == ARENA_MAP_DALARAN; }
         bool IsTigersPeakArena() const { return GetArenaMapType() == ARENA_MAP_TIGERS_PEAK; }
+        // Zone of this arena, so weather can be sent into the instance. 0 for an arena without one.
+        uint32 GetArenaZoneId() const;
+        // Weather kinds that suit this arena, most specific first. Used by the gamemaster's weather menu
+        // so it cannot offer a sandstorm on a snowy peak. Returns how many were written.
+        uint8 GetSuitableWeather(WeatherType* out, uint8 max) const;
+        // Sets one weather for this running match, permanently so the regeneration cannot clear it.
+        void SetArenaWeather(WeatherType type, float grade);
         bool IsTolvironArena() const { return GetArenaMapType() == ARENA_MAP_TOLVIRON; }
 
         uint32 GetTeamDamageDone(Team team) const;
@@ -289,8 +296,6 @@ class Arena : public BattleGround
 
         // Dalaran Sewers
         void SetWaterActive(uint8 event1, bool active);
-        // Zone of this arena, so weather can be sent into the instance. 0 for an arena without one.
-        uint32 GetArenaZoneId() const;
         // Sets the weather for this match: the map's own permanent weather, or a roll from the kinds that
         // suit it when Arena.RandomWeather is on. It never snows in the desert and never storms on a peak.
         void ApplyArenaWeather();
