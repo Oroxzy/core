@@ -157,6 +157,12 @@ enum ArenaTimers
     ARENA_DOORS_DESPAWN_DELAY               = 5 * IN_MILLISECONDS,
     ARENA_SHADOW_SIGHT_SPAWN_DELAY          = 90,       // seconds after the gates opened
     ARENA_TP_ZONE_ID                        = 4600,     // area_template / AreaTable zone of The Tiger's Peak (weather)
+    // the remaining arena zones, taken from Map.dbc - needed to send weather into an arena instance
+    ARENA_NA_ZONE_ID                        = 3698,     // Nagrand Arena
+    ARENA_BE_ZONE_ID                        = 3702,     // Blade's Edge Arena
+    ARENA_RL_ZONE_ID                        = 3968,     // Ruins of Lordaeron
+    ARENA_DS_ZONE_ID                        = 4378,     // Dalaran Sewers
+    ARENA_TV_ZONE_ID                        = 4601,     // Tol'Viron Arena
     ARENA_SHORT_BUFF_DURATION               = 30 * IN_MILLISECONDS,     // buffs with less remaining time are removed on start
     ARENA_COOLDOWN_RESET_MAX_DURATION       = 10 * MINUTE * IN_MILLISECONDS,   // only shorter cooldowns are reset (unless configured)
     ARENA_TIME_TO_AUTOREMOVE_ABORTED        = 15 * IN_MILLISECONDS,     // players are removed this fast after an aborted match
@@ -283,6 +289,11 @@ class Arena : public BattleGround
 
         // Dalaran Sewers
         void SetWaterActive(uint8 event1, bool active);
+        // Zone of this arena, so weather can be sent into the instance. 0 for an arena without one.
+        uint32 GetArenaZoneId() const;
+        // Sets the weather for this match: the map's own permanent weather, or a roll from the kinds that
+        // suit it when Arena.RandomWeather is on. It never snows in the desert and never storms on a peak.
+        void ApplyArenaWeather();
         void DoWaterFlush();
         void DoWaterfallKick();
         void KickFromPipes();

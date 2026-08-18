@@ -548,12 +548,61 @@ void Arena::StartingEventCloseDoors()
         SetWaterActive(ARENA_EVENT_DS_DOODAD_SEWER01, true);
     }
 
-    // Tiger's Peak: it always snows on the mountain (permanent, so the random weather
-    // regeneration never clears it during a match)
-    if (IsTigersPeakArena())
-        GetBgMap()->SetWeather(ARENA_TP_ZONE_ID, WEATHER_TYPE_SNOW, 0.5f, true);
+    ApplyArenaWeather();
 
     UpdateWorldStates();
+}
+
+uint32 Arena::GetArenaZoneId() const
+{
+    switch (GetArenaMapType())
+    {
+        case ARENA_MAP_NAGRAND:     return ARENA_NA_ZONE_ID;
+        case ARENA_MAP_BLADES_EDGE: return ARENA_BE_ZONE_ID;
+        case ARENA_MAP_LORDAERON:   return ARENA_RL_ZONE_ID;
+        case ARENA_MAP_DALARAN:     return ARENA_DS_ZONE_ID;
+        case ARENA_MAP_TIGERS_PEAK: return ARENA_TP_ZONE_ID;
+        case ARENA_MAP_TOLVIRON:    return ARENA_TV_ZONE_ID;
+    }
+    return 0;
+}
+
+void Arena::ApplyArenaWeather()
+{
+    uint32 const zoneId = GetArenaZoneId();
+    if (!zoneId)
+        return;
+
+    // Weather is set permanently so the world's own weather regeneration cannot clear it mid match.
+    // Tiger's Peak sits on a snowy mountain and keeps its snow whether the option is on or not.
+    if (!sWorld.getConfig(CONFIG_BOOL_ARENA_RANDOM_WEATHER))
+    {
+        if (IsTigersPeakArena())
+            GetBgMap()->SetWeather(zoneId, WEATHER_TYPE_SNOW, 0.5f, true);
+        return;
+    }
+
+    // Only the kinds that suit the place: WEATHER_TYPE_STORM is the sandstorm, so it belongs to Uldum
+    // and nowhere else, and snow belongs on the mountain rather than in a desert or a sewer.
+    WeatherType const* kinds;
+    uint8 count;
+    static WeatherType const desert[]   = { WEATHER_TYPE_FINE, WEATHER_TYPE_STORM };
+    static WeatherType const mountain[] = { WEATHER_TYPE_FINE, WEATHER_TYPE_SNOW };
+    static WeatherType const temperate[]= { WEATHER_TYPE_FINE, WEATHER_TYPE_RAIN };
+    static WeatherType const indoors[]  = { WEATHER_TYPE_FINE };
+
+    switch (GetArenaMapType())
+    {
+        case ARENA_MAP_TOLVIRON:    kinds = desert;    count = 2; break;   // Uldum
+        case ARENA_MAP_TIGERS_PEAK: kinds = mountain;  count = 2; break;   // snowy peak
+        case ARENA_MAP_DALARAN:     kinds = indoors;   count = 1; break;   // underground, weather is not visible
+        default:                    kinds = temperate; count = 2; break;   // Nagrand, Blade's Edge, Lordaeron
+    }
+
+    WeatherType const type = kinds[urand(0, count - 1)];
+    // fine weather carries no grade; the others get a light to heavy roll
+    float const grade = (type == WEATHER_TYPE_FINE) ? 0.0f : frand(0.3f, 0.9f);
+    GetBgMap()->SetWeather(zoneId, type, grade, true);
 }
 
 void Arena::StartingEventOpenDoors()
