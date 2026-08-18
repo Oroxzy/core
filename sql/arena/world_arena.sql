@@ -23,6 +23,7 @@
 --   9. broadcast_text              19. disabled_arena_spells
 --  10. npc_text                    20. arena_start_location (dbc fallback)
 --                                  21. The Tiger's Peak (maps, templates, gates, watchers, weather)
+--                                  22. Tol'Viron Arena (maps, templates, gates, orbs, watchers)
 --
 --  The file is idempotent (DELETE + INSERT per block) and can be re-applied after an update.
 --  The Arena Orb (gameobject 187078) is placed by the admin (.gobj add 187078) and never touched here.

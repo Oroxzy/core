@@ -1,9 +1,17 @@
 # Custom Arenas (1.12 client)
 
 Server side of the arena patch originally published at https://github.com/Oroxzy/core/tree/TheArena,
-ported to the current core and cleaned up. Five arenas - Nagrand Arena, Blade's Edge Arena, Ruins of
-Lordaeron, Dalaran Sewers (TBC / WotLK) and The Tiger's Peak (Mists of Pandaria, maps 624-627,
-battleground ids 20-23) - can be played in 1v1, 2v2, 3v3 and 5v5, solo or as group, cross faction.
+ported to the current core and cleaned up. Six arenas - Nagrand Arena, Blade's Edge Arena, Ruins of
+Lordaeron, Dalaran Sewers (TBC / WotLK), The Tiger's Peak (Mists of Pandaria, maps 624-627,
+battleground ids 20-23) and Tol'Viron Arena (Mists of Pandaria, maps 628-631, battleground ids 24-27,
+area 4601) - can be played in 1v1, 2v2, 3v3 and 5v5, solo or as group, cross faction.
+
+The client patch, the prebuilt server data and the map conversion tool chain live in their own
+repositories: [`VMaNGOS_Arena_1.12.1_Client_source`](https://github.com/Oroxzy/VMaNGOS_Arena_1.12.1_Client_source)
+(patch sources, maps/vmaps/mmaps, scoreboard addon), the optional texture-only
+[`VMaNGOS_Arena_1.12.1_HD_Textures`](https://github.com/Oroxzy/VMaNGOS_Arena_1.12.1_HD_Textures)
+and [`VMaNGOS_MapPort`](https://github.com/Oroxzy/VMaNGOS_MapPort), the converter that produced
+Tol'Viron.
 
 ## Setup
 
@@ -50,6 +58,15 @@ battleground ids 20-23) - can be played in 1v1, 2v2, 3v3 and 5v5, solo or as gro
 * Tiger's Peak: teams start in the west/east gate alcoves behind the original MoP gates
   (GO 212921, retail display 8600 = PA_ShadowpanDoor, size 1.45449), watcher npcs in both alcoves,
   Shadow Sight spawns on the two round platforms (layout as in the original MoP arena). It snows.
+* Tol'Viron: gates 213196/213197 (client patch display 8601 = Uldum_Door_01, open/close sounds
+  26879/26878), Shadow Sight in the two side alcoves, watcher npcs in both start boxes. Gate and orb
+  positions are Blizzard's own, taken from TDB 1200.26021 map 980; the rear gates that seal the start
+  boxes are doodads of the arena building itself and need no spawn. Uldum's desert ambience.
+* Weather: `Arena.RandomWeather` rolls the weather per match, but only from what suits the place -
+  the sandstorm belongs to Uldum, snow to The Tiger's Peak, rain to the three outdoor arenas, and
+  the Dalaran sewers stay clear because there is no sky to see it in. With the option off The
+  Tiger's Peak still snows permanently, as before. An admin entry at the arena watcher switches the
+  weather of the running match; the orb's admin menu can pin the arena to one map for testing.
 
 ## Tables added / used
 
