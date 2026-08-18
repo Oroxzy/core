@@ -515,6 +515,7 @@ void Arena::CheckPlayersUnderMap()
         case ARENA_MAP_LORDAERON:   minZ = 30.0f;  break;   // floor ~32.5
         case ARENA_MAP_DALARAN:     minZ = 1.0f;   break;   // floor ~3.2, water channel ~2.8, terrain plane at 0
         case ARENA_MAP_TIGERS_PEAK: minZ = 370.0f; break;   // plateau terrain ~380.7, platforms ~381.5
+        case ARENA_MAP_TOLVIRON:    minZ = 14.0f;  break;   // fight floor ~24.4 (Blizzard's own teleport targets sit at 24.41)
         default:                    return;
     }
 

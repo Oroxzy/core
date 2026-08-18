@@ -1207,3 +1207,73 @@
         (625, 212, 0, 'Shadow Sight'),
         (626, 212, 0, 'Shadow Sight'),
         (627, 212, 0, 'Shadow Sight');
+
+-- 22. Tol'Viron Arena (TolVirArena, Cataclysm content taken from the MoP 5.4.8 client, converted 2026-08-18)
+--     maps 628-631, battleground ids 24-27, area 4601, start locs 1460 (Alliance) / 1461 (Horde)
+--     Blizzard's own values, from TrinityCore TDB 1200.26021 (battleground_template 719: alliance 4137,
+--     horde 4136) resolved against the MoP WorldSafeLocs.dbc. Careful: that dbc stores the facing in
+--     DEGREES (182.3845 / 0.3328), the values below are the radians the core wants.
+
+    DELETE FROM `map_template` WHERE `entry` IN (628, 629, 630, 631);
+    INSERT INTO `map_template` (`entry`, `patch`, `parent`, `map_type`, `linked_zone`, `player_limit`, `reset_delay`, `ghost_entrance_map`, `ghost_entrance_x`, `ghost_entrance_y`, `map_name`, `script_name`) VALUES
+        (628, 0, 0, 3, 4601, 0, 0, -1, 0, 0, 'TolViron Arena 1v1', ''),
+        (629, 0, 0, 3, 4601, 0, 0, -1, 0, 0, 'TolViron Arena 2v2', ''),
+        (630, 0, 0, 3, 4601, 0, 0, -1, 0, 0, 'TolViron Arena 3v3', ''),
+        (631, 0, 0, 3, 4601, 0, 0, -1, 0, 0, 'TolViron Arena 5v5', '');
+
+    DELETE FROM `area_template` WHERE `entry` = 4601;
+    INSERT INTO `area_template` (`entry`, `map_id`, `zone_id`, `explore_flag`, `flags`, `area_level`, `name`, `team`, `liquid_type`) VALUES
+        (4601, 0, 4601, 0, 128, 60, 'Tol''Viron Arena', 0, 0);   -- 128 = AREA_FLAG_ARENA (FFA PvP: same-faction opponents can fight)
+
+    DELETE FROM `battleground_template` WHERE `id` IN (24, 25, 26, 27);
+    INSERT INTO `battleground_template` (`id`, `patch`, `min_players_per_team`, `max_players_per_team`, `min_level`, `max_level`, `alliance_win_spell`, `alliance_lose_spell`, `horde_win_spell`, `horde_lose_spell`, `alliance_start_location`, `horde_start_location`, `player_loot_id`) VALUES
+        (24, 0, 1, 1, 10, 60, 0, 0, 0, 0, 1460, 1461, 0),
+        (25, 0, 2, 2, 10, 60, 0, 0, 0, 0, 1460, 1461, 0),
+        (26, 0, 3, 3, 10, 60, 0, 0, 0, 0, 1460, 1461, 0),
+        (27, 0, 5, 5, 10, 60, 0, 0, 0, 0, 1460, 1461, 0);
+
+    DELETE FROM `world_safe_locs_facing` WHERE `id` IN (1460, 1461);
+    INSERT INTO `world_safe_locs_facing` (`id`, `orientation`) VALUES
+        (1460, 0.005808),
+        (1461, 3.183210);
+
+    DELETE FROM `arena_start_location` WHERE `id` IN (1460, 1461);
+    INSERT INTO `arena_start_location` (`id`, `x`, `y`, `z`, `comment`) VALUES
+        (1460, -10778.220, 430.875, 24.412, 'TolViron - Alliance side (retail world safe loc 4137)'),
+        (1461, -10649.910, 428.172, 24.419, 'TolViron - Horde side (retail world safe loc 4136)');
+
+    DELETE FROM `game_tele` WHERE `name` = 'TolViron';
+    INSERT INTO `game_tele` (`id`, `position_x`, `position_y`, `position_z`, `orientation`, `map`, `name`) VALUES
+        (1462, -10714.07, 429.52, 26.0, 0.0, 628, 'TolViron');
+
+    -- Arena Watcher npcs (ready check), one behind each start point, looking the way the team looks
+    DELETE FROM `creature` WHERE `guid` IN (628001, 628002, 629001, 629002, 630001, 630002, 631001, 631002);
+    INSERT INTO `creature` (`guid`, `id`, `id2`, `id3`, `id4`, `map`, `position_x`, `position_y`, `position_z`, `orientation`, `spawntimesecsmin`, `spawntimesecsmax`, `wander_distance`, `health_percent`, `mana_percent`, `movement_type`, `spawn_flags`, `visibility_mod`, `patch_min`, `patch_max`) VALUES
+        (628001, 800100, 0, 0, 0, 628, -10782.5, 431.0, 24.41, 0.005808, 25, 25, 0, 100, 100, 0, 0, 0, 0, 10),
+        (628002, 800100, 0, 0, 0, 628, -10645.5, 428.1, 24.42, 3.183210, 25, 25, 0, 100, 100, 0, 0, 0, 0, 10),
+        (629001, 800100, 0, 0, 0, 629, -10782.5, 431.0, 24.41, 0.005808, 25, 25, 0, 100, 100, 0, 0, 0, 0, 10),
+        (629002, 800100, 0, 0, 0, 629, -10645.5, 428.1, 24.42, 3.183210, 25, 25, 0, 100, 100, 0, 0, 0, 0, 10),
+        (630001, 800100, 0, 0, 0, 630, -10782.5, 431.0, 24.41, 0.005808, 25, 25, 0, 100, 100, 0, 0, 0, 0, 10),
+        (630002, 800100, 0, 0, 0, 630, -10645.5, 428.1, 24.42, 3.183210, 25, 25, 0, 100, 100, 0, 0, 0, 0, 10),
+        (631001, 800100, 0, 0, 0, 631, -10782.5, 431.0, 24.41, 0.005808, 25, 25, 0, 100, 100, 0, 0, 0, 0, 10),
+        (631002, 800100, 0, 0, 0, 631, -10645.5, 428.1, 24.42, 3.183210, 25, 25, 0, 100, 100, 0, 0, 0, 0, 10);
+
+    DELETE FROM `creature_battleground` WHERE `guid` IN (628001, 628002, 629001, 629002, 630001, 630002, 631001, 631002);
+    INSERT INTO `creature_battleground` (`guid`, `event1`, `event2`) VALUES
+        (628001, 214, 0), (628002, 215, 0),
+        (629001, 214, 0), (629002, 215, 0),
+        (630001, 214, 0), (630002, 215, 0),
+        (631001, 214, 0), (631002, 215, 0);
+
+    DELETE FROM `battleground_events` WHERE `map` IN (628, 629, 630, 631) AND `event1` IN (214, 215);
+    INSERT INTO `battleground_events` (`map`, `event1`, `event2`, `description`) VALUES
+        (628, 214, 0, 'NPC Arena Watcher 1'), (628, 215, 0, 'NPC Arena Watcher 2'),
+        (629, 214, 0, 'NPC Arena Watcher 1'), (629, 215, 0, 'NPC Arena Watcher 2'),
+        (630, 214, 0, 'NPC Arena Watcher 1'), (630, 215, 0, 'NPC Arena Watcher 2'),
+        (631, 214, 0, 'NPC Arena Watcher 1'), (631, 215, 0, 'NPC Arena Watcher 2');
+
+    -- NOT here yet, deliberately: the gates (event 254) and the Shadow Sight orbs. Retail spawns them from
+    -- code rather than from the world tables, so the TDB carries no positions for this map, and guessing
+    -- them would put doors into walls. They come once the Cataclysm client is available - it is the
+    -- authentic source for this map anyway, including the GameObjectDisplayInfo sound slots that MoP
+    -- leaves empty. Until then a match simply starts without physical gates.

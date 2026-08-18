@@ -249,6 +249,7 @@ class Arena : public BattleGround
         bool IsNagrandArena() const { return GetArenaMapType() == ARENA_MAP_NAGRAND; }
         bool IsDalaranArena() const { return GetArenaMapType() == ARENA_MAP_DALARAN; }
         bool IsTigersPeakArena() const { return GetArenaMapType() == ARENA_MAP_TIGERS_PEAK; }
+        bool IsTolvironArena() const { return GetArenaMapType() == ARENA_MAP_TOLVIRON; }
 
         uint32 GetTeamDamageDone(Team team) const;
         uint32 GetRemainingTime() const;                    // ms until the time limit is reached
