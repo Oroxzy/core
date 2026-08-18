@@ -1265,15 +1265,60 @@
         (630001, 214, 0), (630002, 215, 0),
         (631001, 214, 0), (631002, 215, 0);
 
-    DELETE FROM `battleground_events` WHERE `map` IN (628, 629, 630, 631) AND `event1` IN (214, 215);
+    DELETE FROM `battleground_events` WHERE `map` IN (628, 629, 630, 631) AND `event1` IN (212, 214, 215, 254);
     INSERT INTO `battleground_events` (`map`, `event1`, `event2`, `description`) VALUES
         (628, 214, 0, 'NPC Arena Watcher 1'), (628, 215, 0, 'NPC Arena Watcher 2'),
         (629, 214, 0, 'NPC Arena Watcher 1'), (629, 215, 0, 'NPC Arena Watcher 2'),
         (630, 214, 0, 'NPC Arena Watcher 1'), (630, 215, 0, 'NPC Arena Watcher 2'),
-        (631, 214, 0, 'NPC Arena Watcher 1'), (631, 215, 0, 'NPC Arena Watcher 2');
+        (631, 214, 0, 'NPC Arena Watcher 1'), (631, 215, 0, 'NPC Arena Watcher 2'),
+        (628, 212, 0, 'Shadow Sight'), (628, 254, 0, 'Doors'),
+        (629, 212, 0, 'Shadow Sight'), (629, 254, 0, 'Doors'),
+        (630, 212, 0, 'Shadow Sight'), (630, 254, 0, 'Doors'),
+        (631, 212, 0, 'Shadow Sight'), (631, 254, 0, 'Doors');
 
-    -- NOT here yet, deliberately: the gates (event 254) and the Shadow Sight orbs. Retail spawns them from
-    -- code rather than from the world tables, so the TDB carries no positions for this map, and guessing
-    -- them would put doors into walls. They come once the Cataclysm client is available - it is the
-    -- authentic source for this map anyway, including the GameObjectDisplayInfo sound slots that MoP
-    -- leaves empty. Until then a match simply starts without physical gates.
+    -- Shadow Sight on the two side alcoves (Blizzard retail spawns 3000053/3000054 from TDB 1200.26021, map 980)
+    DELETE FROM `gameobject` WHERE `guid` IN (628005, 628006, 629005, 629006, 630005, 630006, 631005, 631006);
+    INSERT INTO `gameobject` (`guid`, `id`, `map`, `position_x`, `position_y`, `position_z`, `orientation`, `rotation0`, `rotation1`, `rotation2`, `rotation3`, `spawntimesecsmin`, `spawntimesecsmax`, `animprogress`, `state`, `visibility_mod`, `patch_min`, `patch_max`) VALUES
+        (628005, 184663, 628, -10715.200, 484.535, 24.6963, 2.46091, 0, 0, 0.942641, 0.333808, 150, 150, 100, 1, 0, 0, 10),
+        (628006, 184664, 628, -10715.900, 375.997, 24.4469, 3.31614, 0, 0, -0.996194, 0.087165, 150, 150, 100, 1, 0, 0, 10),
+        (629005, 184663, 629, -10715.200, 484.535, 24.6963, 2.46091, 0, 0, 0.942641, 0.333808, 150, 150, 100, 1, 0, 0, 10),
+        (629006, 184664, 629, -10715.900, 375.997, 24.4469, 3.31614, 0, 0, -0.996194, 0.087165, 150, 150, 100, 1, 0, 0, 10),
+        (630005, 184663, 630, -10715.200, 484.535, 24.6963, 2.46091, 0, 0, 0.942641, 0.333808, 150, 150, 100, 1, 0, 0, 10),
+        (630006, 184664, 630, -10715.900, 375.997, 24.4469, 3.31614, 0, 0, -0.996194, 0.087165, 150, 150, 100, 1, 0, 0, 10),
+        (631005, 184663, 631, -10715.200, 484.535, 24.6963, 2.46091, 0, 0, 0.942641, 0.333808, 150, 150, 100, 1, 0, 0, 10),
+        (631006, 184664, 631, -10715.900, 375.997, 24.4469, 3.31614, 0, 0, -0.996194, 0.087165, 150, 150, 100, 1, 0, 0, 10);
+
+    DELETE FROM `gameobject_battleground` WHERE `guid` IN (628005, 628006, 629005, 629006, 630005, 630006, 631005, 631006);
+    INSERT INTO `gameobject_battleground` (`guid`, `event1`, `event2`) VALUES
+        (628005, 212, 0), (628006, 212, 0),
+        (629005, 212, 0), (629006, 212, 0),
+        (630005, 212, 0), (630006, 212, 0),
+        (631005, 212, 0), (631006, 212, 0);
+
+    -- Arena gates (MoP door doodad Uldum_Door_01, converted into the client patch as
+    -- GameObjectDisplayInfo 8601). Blizzard retail values (TDB 1200.26021, map 980 spawns
+    -- 3000046/3000047, templates 213197/213196): Alliance side (-10774.6, 431.238, 23.5428) o=0,
+    -- Horde side (-10654.3, 428.305, 23.5428) o=pi - both sit just inside their start location.
+    -- Retail uses faction 114 / flags 32; flags 36 keeps this file consistent with the other five arenas.
+    DELETE FROM `gameobject_template` WHERE `entry` IN (213196, 213197);
+    INSERT INTO `gameobject_template` (`entry`, `patch`, `type`, `displayId`, `name`, `faction`, `flags`, `size`, `data0`, `data1`, `data2`, `data3`, `data4`, `data5`, `data6`, `data7`, `data8`, `data9`, `data10`, `data11`, `data12`, `data13`, `data14`, `data15`, `data16`, `data17`, `data18`, `data19`, `data20`, `data21`, `data22`, `data23`, `mingold`, `maxgold`, `script_name`) VALUES
+        (213196, 0, 0, 8601, 'Doodad_Uldum_Door_01', 114, 36, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ''),
+        (213197, 0, 0, 8601, 'Doodad_Uldum_Door_01', 114, 36, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '');
+
+    DELETE FROM `gameobject` WHERE `guid` IN (628003, 628004, 629003, 629004, 630003, 630004, 631003, 631004);
+    INSERT INTO `gameobject` (`guid`, `id`, `map`, `position_x`, `position_y`, `position_z`, `orientation`, `rotation0`, `rotation1`, `rotation2`, `rotation3`, `spawntimesecsmin`, `spawntimesecsmax`, `animprogress`, `state`, `visibility_mod`, `patch_min`, `patch_max`) VALUES
+        (628003, 213197, 628, -10774.600, 431.238, 23.5428, 0, 0, 0, 0, 1, 86400, 86400, 100, 1, 0, 0, 10),
+        (628004, 213196, 628, -10654.300, 428.305, 23.5428, 3.14159265, 0, 0, -1, 0, 86400, 86400, 100, 1, 0, 0, 10),
+        (629003, 213197, 629, -10774.600, 431.238, 23.5428, 0, 0, 0, 0, 1, 86400, 86400, 100, 1, 0, 0, 10),
+        (629004, 213196, 629, -10654.300, 428.305, 23.5428, 3.14159265, 0, 0, -1, 0, 86400, 86400, 100, 1, 0, 0, 10),
+        (630003, 213197, 630, -10774.600, 431.238, 23.5428, 0, 0, 0, 0, 1, 86400, 86400, 100, 1, 0, 0, 10),
+        (630004, 213196, 630, -10654.300, 428.305, 23.5428, 3.14159265, 0, 0, -1, 0, 86400, 86400, 100, 1, 0, 0, 10),
+        (631003, 213197, 631, -10774.600, 431.238, 23.5428, 0, 0, 0, 0, 1, 86400, 86400, 100, 1, 0, 0, 10),
+        (631004, 213196, 631, -10654.300, 428.305, 23.5428, 3.14159265, 0, 0, -1, 0, 86400, 86400, 100, 1, 0, 0, 10);
+
+    DELETE FROM `gameobject_battleground` WHERE `guid` IN (628003, 628004, 629003, 629004, 630003, 630004, 631003, 631004);
+    INSERT INTO `gameobject_battleground` (`guid`, `event1`, `event2`) VALUES
+        (628003, 254, 0), (628004, 254, 0),
+        (629003, 254, 0), (629004, 254, 0),
+        (630003, 254, 0), (630004, 254, 0),
+        (631003, 254, 0), (631004, 254, 0);
