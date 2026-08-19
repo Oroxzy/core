@@ -48,6 +48,10 @@ enum ArenaSounds
     // entry names an open and a close sound. Both are played from here instead, with Blizzard's own ids.
     SOUND_ARENA_DS_WATER_FLUSH              = 15196,    // DalaranSewer_ArenaWaterFall_Close
     SOUND_ARENA_DS_DOOR_OPEN                = 15030,    // Dalaran_SewerDoor_01_Open (display 8308 sound slot 1)
+    // Tol'Viron has the same trouble for the same reason: Blizzard's own display for ULDUM_DOOR_03
+    // (MoP GameObjectDisplayInfo 11943) carries no sound at all, and the model has no $GO trigger, so
+    // the gate is silent. This is the Uldum door family's own sound, played from the core like Dalaran's.
+    SOUND_ARENA_TV_DOOR_OPEN                = 17790,    // Uldum_Door_01_Open
     SOUND_ARENA_PLAYER_LEFT                 = 17341,    // LFG denied
     SOUND_ARENA_MATCH_END                   = 17318,    // LFG dungeon ready
     SOUND_ARENA_MATCH_START                 = 17316,    // LFG rewards

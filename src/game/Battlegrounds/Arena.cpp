@@ -645,13 +645,15 @@ void Arena::StartingEventOpenDoors()
 
     PlaySoundToAll(SOUND_ARENA_LET_THE_GAMES_BEGIN);
 
-    // every other arena gets its gate sound from the door model's own $GO trigger; the Dalaran sewer
-    // door has none (see SOUND_ARENA_DS_DOOR_OPEN), so it is played from the doors themselves - they
-    // are visible, so the sound stays positional like the others
-    if (IsDalaranArena())
+    // The four TBC arenas get their gate sound from the door model's own $GO trigger. The Dalaran
+    // sewer door and the Tol'Viron gate have none, so theirs is played from the doors themselves -
+    // they are visible, so the sound stays positional like the others.
+    uint32 const doorSound = IsDalaranArena()  ? SOUND_ARENA_DS_DOOR_OPEN
+                           : IsTolvironArena() ? SOUND_ARENA_TV_DOOR_OPEN : 0;
+    if (doorSound)
         for (auto const& guid : m_eventObjects[MAKE_PAIR32(BG_EVENT_DOOR, 0)].gameobjects)
             if (GameObject* door = GetBgMap()->GetGameObject(guid))
-                door->PlayDistanceSound(SOUND_ARENA_DS_DOOR_OPEN);
+                door->PlayDistanceSound(doorSound);
 
     // the ready check npcs leave, the shadow sight orbs come later
     SpawnEvent(ARENA_EVENT_WATCHER_1, 0, false, true);
