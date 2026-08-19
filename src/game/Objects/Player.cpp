@@ -18980,10 +18980,18 @@ void Player::LeaveBattleground(bool teleportToEntryPoint)
                         AddAura(26013, 0, this);               // Deserter
                 }
             }
-            // arena: no regular deserter, but a participant (not a visitor) who walks out of an unfinished match
-            // is locked out for Arena.LeaveLockoutMinutes (0 = off) - keeps friends from farming the repair /
-            // cooldown reset of the gate opening in one-minute cycles
-            else if (sWorld.getConfig(CONFIG_UINT32_ARENA_LEAVE_LOCKOUT_MINUTES) && bg->IsPlayerInBattleGround(GetObjectGuid()))
+            // Arena: no regular deserter, but a participant (not a visitor) who walks out of a match
+            // that is already running is locked out for Arena.LeaveLockoutMinutes (0 = off) - that
+            // keeps friends from farming the repair and cooldown reset of the gate opening in
+            // one-minute cycles.
+            //
+            // Only once it is running. Leaving during the preparation costs nothing, because there is
+            // nothing to farm yet: PrepareArenaPlayer hands out neither the repair nor the cooldown
+            // reset, those happen in ResetPlayerForFight when the gates open. Locking someone out for
+            // walking back out of the starting box was punishing him for changing his mind.
+            else if (bg->GetStatus() == STATUS_IN_PROGRESS
+                     && sWorld.getConfig(CONFIG_UINT32_ARENA_LEAVE_LOCKOUT_MINUTES)
+                     && bg->IsPlayerInBattleGround(GetObjectGuid()))
             {
                 if (IsBeingTeleportedFar())
                     ScheduleDelayedOperation(DELAYED_ARENA_LEAVE_LOCKOUT);

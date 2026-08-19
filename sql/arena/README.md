@@ -56,9 +56,11 @@ Tol'Viron.
 * Dead players can not be resurrected or reclaim their corpse; after releasing they watch the rest of
   the match as invisible spectators. A team wins when the other team has no alive players left, or,
   after `Arena.TimeLimitMinutes`, by damage done.
-* Kills inside arenas give no honor. Losing a match costs nothing either, but *leaving* an unfinished
-  one does: participants get the Deserter debuff for `Arena.LeaveLockoutMinutes` (default 10, 0 turns
-  it off), including on logout and on teleporting out.
+* Kills inside arenas give no honor. Losing a match costs nothing either, but walking out of a
+  *running* one does: participants get the Deserter debuff for `Arena.LeaveLockoutMinutes` (default
+  10, 0 turns it off), including on logout and on teleporting out. Leaving during the preparation is
+  free - the free repair and the cooldown reset are handed out when the gates open, so before that
+  there is nothing to farm and nothing to punish.
 * Damage done and healing done are tracked and shown on the scoreboard (client patch). The teams are
   Gold and Green as on retail, not Alliance and Horde - the team travels in the bonus honor field so
   the scoreboard tells same faction matches apart (see the ArenaTeamColors addon in the client patch).

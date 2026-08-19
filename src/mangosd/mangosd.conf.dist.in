@@ -3397,10 +3397,11 @@ DynamicRespawn.PlayersMaxLevelDiff = 0
 #                 1 (all cooldowns)
 #
 #    Arena.LeaveLockoutMinutes
-#        A participant who leaves an unfinished match (during the preparation or the fight, also by
-#        logging out) gets the Deserter debuff for this many minutes and can not queue for arenas or
-#        battlegrounds meanwhile. Keeps friends from farming the free repair / cooldown reset of the
-#        gate opening. Visitors, finished matches and no-show aborts are not affected.
+#        A participant who walks out of a match that is already running (also by logging out) gets the
+#        Deserter debuff for this many minutes and can not queue for arenas or battlegrounds meanwhile.
+#        Keeps friends from farming the free repair / cooldown reset of the gate opening.
+#        Leaving during the preparation is free - nothing has been handed out yet at that point.
+#        Visitors, finished matches and no-show aborts are not affected either.
 #        Default: 10
 #                 0 (disabled)
 #
