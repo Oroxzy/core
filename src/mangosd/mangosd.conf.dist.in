@@ -3341,6 +3341,13 @@ DynamicRespawn.PlayersMaxLevelDiff = 0
 #        nothing in the Dalaran sewers where the sky is not visible. Off, The Tiger's Peak still snows.
 #        Default: 0 (disabled)
 #
+#    Arena.Spectate
+#        Offer the arena orb's spectate menu, which lets anybody watch a running match as an invisible
+#        observer. A spectator can not be seen, targeted, damaged, healed, buffed or spoken to, and
+#        can not act or speak himself; he leaves by going afk or logging out.
+#        Default: 1 (enabled)
+#                 0 (disabled, the menu entry is not offered and spectating is refused)
+#
 #    Arena.AllowItemSwap
 #        Allow changing armor while the match is running (weapons, offhands and ranged slots can always be swapped).
 #        Default: 0 (disabled)
@@ -3404,6 +3411,7 @@ Arena.MaxItemLevel = 92
 Arena.MaxItemPatch = 10
 Arena.AllowItemSwap = 0
 Arena.RandomWeather = 0
+Arena.Spectate = 1
 Arena.AllowTrinketSwap = 1
 Arena.TimeLimitMinutes = 25
 Arena.ReadyStartDelaySeconds = 10

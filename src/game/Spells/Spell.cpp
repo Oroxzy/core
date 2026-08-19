@@ -7737,6 +7737,17 @@ CurrentSpellTypes Spell::GetCurrentContainer() const
 
 bool Spell::CheckTarget(Unit* target, SpellEffectIndex eff)
 {
+    // An arena visitor stands outside the match and nothing reaches him, friendly or hostile. The
+    // unit flags alone are not enough: he is friendly to everybody through faction 35, and the
+    // friendly area search (AnyFriendlyUnitInObjectRangeCheck) does not look at visibility at all, so
+    // every group heal and buff cast in the arena would find him, burn a charge on him and give him
+    // away in the combat log. Every targeting path ends up here, so one check covers all of them.
+    //
+    // A fighter who released his spirit is deliberately NOT covered: he is an observer too, but his
+    // team must still be able to resurrect him.
+    if (target != m_caster && target->IsPlayer() && static_cast<Player*>(target)->IsArenaVisitor())
+        return false;
+
     if (m_casterUnit && target != m_casterUnit && m_spellInfo->IsPositiveSpell())
     {
         // prevent buffing low level players with group wide buffs

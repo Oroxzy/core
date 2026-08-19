@@ -140,9 +140,11 @@ void WorldSession::HandleMoveWorldportAck()
         {
             if (_player->IsInvitedForBattleGroundInstance(_player->GetBattleGroundId()))
                 bg->AddPlayer(_player);
-            // arena visitors (arena orb "spectate") become invisible spectators on arrival
+            // arena visitors (arena orb "spectate") become invisible spectators on arrival, and are
+            // marked as visitors: unlike a fighter who released his spirit, nothing of the match may
+            // reach them and they may not reach into it
             else if (bg->IsArena() && !bg->IsPlayerInBattleGround(_player->GetObjectGuid()) && !_player->IsGameMaster())
-                _player->SetArenaSpectator(true);
+                _player->SetArenaSpectator(true, true);
         }
     }
 

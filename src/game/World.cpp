@@ -1313,6 +1313,7 @@ void World::LoadConfigSettings(bool reload)
     setConfig(CONFIG_BOOL_ARENA_ALLOW_ITEM_SWAP, "Arena.AllowItemSwap", false);
     setConfig(CONFIG_BOOL_ARENA_ALLOW_TRINKET_SWAP, "Arena.AllowTrinketSwap", true);
     setConfig(CONFIG_BOOL_ARENA_RANDOM_WEATHER, "Arena.RandomWeather", false);
+    setConfig(CONFIG_BOOL_ARENA_SPECTATE, "Arena.Spectate", true);
     setConfigMinMax(CONFIG_UINT32_ARENA_TIME_LIMIT_MINUTES, "Arena.TimeLimitMinutes", 25, 1, 120);
     setConfigMinMax(CONFIG_UINT32_ARENA_READY_START_DELAY_SECONDS, "Arena.ReadyStartDelaySeconds", 10, 3, 60);
     setConfigMinMax(CONFIG_UINT32_ARENA_INVITE_ACCEPT_TIME_SECONDS, "Arena.InviteAcceptTimeSeconds", 30, 10, 80);

@@ -2727,12 +2727,13 @@ void Player::SetGameMaster(bool on, bool notify)
 // Arena spectator: an alive but invisible, unselectable and immune observer that can neither act
 // nor be acted upon. Used for dead arena participants (after releasing) and for visitors that
 // watch a match through the arena orb. Runtime state only, restored when the player leaves the map.
-void Player::SetArenaSpectator(bool on)
+void Player::SetArenaSpectator(bool on, bool visitor)
 {
     if (m_arenaSpectator == on)
         return;
 
     m_arenaSpectator = on;
+    m_arenaVisitor = on && visitor;
 
     if (on)
     {

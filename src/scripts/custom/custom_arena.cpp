@@ -422,6 +422,14 @@ namespace
     // Teleports a player into the running arena instance as an invisible spectator.
     bool SpectateArena(Player* player, GameObject* orb, uint32 instanceId)
     {
+        // checked here as well as at the menu entry: the gossip action carries an instance id and
+        // would otherwise still work for anybody who kept the menu open when the switch was turned off
+        if (!sWorld.getConfig(CONFIG_BOOL_ARENA_SPECTATE))
+        {
+            Refuse(player, orb, "Spectating is disabled on this realm.");
+            return false;
+        }
+
         BattleGround* bg = sBattleGroundMgr.GetBattleGround(instanceId, BATTLEGROUND_TYPE_NONE);
         if (!bg || !bg->IsArena() || bg->GetStatus() != STATUS_IN_PROGRESS)
         {
@@ -699,7 +707,7 @@ static bool ShowArenaOrbMenu(Player* player, GameObject* orb)
                 anyMatch = true;
                 break;
             }
-    if (anyMatch)
+    if (anyMatch && sWorld.getConfig(CONFIG_BOOL_ARENA_SPECTATE))
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Spectate a match", SENDER_SPECTATE_LIST, 0);
 
     // admins can adjust the gear rules (own submenu, see ShowArenaAdminMenu)

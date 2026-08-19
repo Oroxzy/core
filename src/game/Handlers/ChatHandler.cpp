@@ -251,7 +251,10 @@ void WorldSession::HandleChatMessageOpcode(WorldPackets::Chat::ChatMessage const
                 return;
     }
 
-    // Arena spectators are invisible observers: no local chat
+    // Arena spectators are invisible observers: no local chat. Group and raid chat stay open on
+    // purpose - a fighter who released his spirit becomes one of these too, and he is meant to keep
+    // talking to his team. A visitor who came through the orb has no battleground group at all, so
+    // there is nothing of the match for him to talk into either way.
     if (_player && _player->IsArenaSpectator() && (packet.type == CHAT_MSG_SAY || packet.type == CHAT_MSG_YELL || packet.type == CHAT_MSG_EMOTE))
         return;
 

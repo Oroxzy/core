@@ -801,7 +801,12 @@ class Player final: public Unit
         void SetGameMaster(bool on, bool notify = false);
         // Arena spectator: invisible, immune, unselectable observer inside an arena (dead participants and visitors).
         bool IsArenaSpectator() const { return m_arenaSpectator; }
-        void SetArenaSpectator(bool on);
+        // Came to watch through the arena orb, as opposed to a fighter who released his spirit and now
+        // follows the rest of the match. Both are invisible observers, but only the visitor is sealed
+        // off completely - the dead fighter stays part of his team and can still be talked to and
+        // resurrected by it.
+        bool IsArenaVisitor() const { return m_arenaVisitor; }
+        void SetArenaSpectator(bool on, bool visitor = false);
         bool IsGMChat() const { return GetSession()->GetSecurity() >= SEC_MODERATOR && (m_ExtraFlags & PLAYER_EXTRA_GM_CHAT); }
         void SetGMChat(bool on, bool notify = false);
         bool IsTaxiCheater() const { return m_ExtraFlags & PLAYER_EXTRA_TAXICHEAT; }
@@ -1674,6 +1679,7 @@ class Player final: public Unit
 
         // arena spectator state (runtime only, never saved)
         bool m_arenaSpectator = false;
+        bool m_arenaVisitor = false;
 
         // knockback/jumping states
         bool m_launched;
