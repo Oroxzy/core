@@ -48,6 +48,11 @@ Tol'Viron.
 * Team colours: gold and green go on the moment a player enters the arena, and the watcher in each
   start box wears the same banner, so a team sees at a glance which colour it plays. Which watcher
   takes which colour is decided by the start location he stands closer to, so it needs no table.
+  The banner says two things at once - the colour is the arena side, the crest is the player's own
+  faction, so a Horde player on the gold side carries a gold banner with the Horde crest. All four
+  spells exist (32724/32725 alliance, 35774/35775 horde) and the client patch already carries the
+  models and textures for them. The watcher takes the crest of the faction standing in his box,
+  majority decides on a mixed side.
 * Dead players can not be resurrected or reclaim their corpse; after releasing they watch the rest of
   the match as invisible spectators. A team wins when the other team has no alive players left, or,
   after `Arena.TimeLimitMinutes`, by damage done.

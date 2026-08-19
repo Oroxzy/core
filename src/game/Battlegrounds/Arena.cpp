@@ -855,9 +855,19 @@ void Arena::ResetArenaCooldowns(Player* player)
     }
 }
 
+uint32 Arena::GetTeamBannerSpell(Team side, bool horde)
+{
+    if (side == HORDE)
+        return horde ? SPELL_ARENA_TEAM_GREEN_HORDE : SPELL_ARENA_TEAM_GREEN;
+    return horde ? SPELL_ARENA_TEAM_GOLD_HORDE : SPELL_ARENA_TEAM_GOLD;
+}
+
 void Arena::ApplyTeamAura(Player* player)
 {
-    uint32 const spellId = player->GetBGTeam() == HORDE ? SPELL_ARENA_TEAM_GREEN : SPELL_ARENA_TEAM_GOLD;
+    // The colour is the arena side he was put on, the crest is the faction he actually plays - a
+    // Horde player can end up on the gold side, and then he carries a gold banner with the Horde
+    // crest. Blizzard has all four; only this pick was missing.
+    uint32 const spellId = GetTeamBannerSpell(player->GetBGTeam(), player->GetTeam() == HORDE);
     if (!player->HasAura(spellId))
         player->AddAura(spellId);
 }
@@ -868,11 +878,16 @@ bool Arena::IsPlayerReady(ObjectGuid guid) const
     return itr != m_playerScores.end() && static_cast<ArenaScore*>(itr->second)->ready;
 }
 
-void Arena::SetPlayerReady(Player* player)
+bool Arena::SetPlayerReady(Player* player)
 {
+    // Reports whether it took. Without a score there is nothing to mark, and the gossip would
+    // otherwise keep offering "I'm ready!" and replay the sound and the watcher's yell on every click.
     auto const itr = m_playerScores.find(player->GetObjectGuid());
-    if (itr != m_playerScores.end())
-        static_cast<ArenaScore*>(itr->second)->ready = true;
+    if (itr == m_playerScores.end())
+        return false;
+
+    static_cast<ArenaScore*>(itr->second)->ready = true;
+    return true;
 }
 
 void Arena::ApplyWatcherTeamColours()
@@ -890,10 +905,27 @@ void Arena::ApplyWatcherTeamColours()
             if (!watcher)
                 continue;
 
-            uint32 const spellId = watcher->GetDistance2d(hx, hy) < watcher->GetDistance2d(ax, ay)
-                                 ? SPELL_ARENA_TEAM_GREEN : SPELL_ARENA_TEAM_GOLD;
-            if (!watcher->HasAura(spellId))
-                watcher->AddAura(spellId);
+            Team const side = watcher->GetDistance2d(hx, hy) < watcher->GetDistance2d(ax, ay) ? HORDE : ALLIANCE;
+
+            // he carries the crest of the faction standing in his box, so the banner reads the same
+            // as the one on their backs. A mixed side takes the majority, alliance on a tie.
+            int32 balance = 0;
+            for (const auto& itr : m_players)
+                if (Player const* player = sObjectMgr.GetPlayer(itr.first))
+                    if (player->GetBGTeam() == side)
+                        balance += player->GetTeam() == HORDE ? 1 : -1;
+
+            uint32 const spellId = GetTeamBannerSpell(side, balance > 0);
+            if (watcher->HasAura(spellId))
+                continue;
+
+            // the side can still fill up while they gather, so an earlier guess is taken off again
+            for (uint32 const other : { SPELL_ARENA_TEAM_GOLD, SPELL_ARENA_TEAM_GREEN,
+                                        SPELL_ARENA_TEAM_GOLD_HORDE, SPELL_ARENA_TEAM_GREEN_HORDE })
+                if (other != spellId)
+                    watcher->RemoveAurasDueToSpell(other);
+
+            watcher->AddAura(spellId);
         }
     }
 }

@@ -973,7 +973,8 @@ bool GossipSelect_ArenaWatcher(Player* player, Creature* creature, uint32 /*send
             // The team colours are already on him - he wears them from the moment he enters. Being
             // ready is now its own flag on the arena, not something read back off the aura.
             Arena* readyArena = static_cast<Arena*>(bg);
-            readyArena->SetPlayerReady(player);
+            if (!readyArena->SetPlayerReady(player))
+                break;
             player->PlayDirectSound(SOUND_ARENA_READY_CHECK, player);
 
             uint32 readyAlliance = 0, readyHorde = 0;

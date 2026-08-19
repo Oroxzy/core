@@ -90,11 +90,17 @@ enum ArenaSpells
     SPELL_ARENA_PREPARATION                 = 32727,    // no power costs during the preparation, removed when the gates open
     // Retail arena teams are Gold and Green, not Alliance and Horde (a Horde player can end up on the
     // "alliance side" of a match). Blizzard's mapping (MoP WorldStateFrame.lua): faction 0 = Green,
-    // faction 1 = Gold. The auras carry the team banner on the player's back and go on the moment he
+    // faction 1 = Gold. The aura hangs the team banner on the player's back and goes on the moment he
     // enters, not when he reports ready - readiness is a flag of its own on ArenaScore. The watcher in
-    // each start box wears the same banner, so a team can see at a glance which colour it is playing.
-    SPELL_ARENA_TEAM_GOLD                   = 32724,    // alliance side, visual 8378/8379 -> SPELLS\GoldArenaflag_spell
-    SPELL_ARENA_TEAM_GREEN                  = 32725,    // horde side, visual 8380/8381 -> SPELLS\GreenArenaflag_spell
+    // each start box wears the same banner, so a team sees at a glance which colour it is playing.
+    //
+    // The banner says two things at once: the colour is the arena side, the crest is the player's own
+    // faction. All four combinations exist and the client patch already carries every model and
+    // texture behind them - only this pick was missing, which is why everyone wore the lion.
+    SPELL_ARENA_TEAM_GOLD                   = 32724,    // gold side,  alliance crest -> SPELLS\GoldArenaflag_spell
+    SPELL_ARENA_TEAM_GREEN                  = 32725,    // green side, alliance crest -> SPELLS\GreenArenaflag_spell
+    SPELL_ARENA_TEAM_GOLD_HORDE             = 35774,    // gold side,  horde crest    -> SPELLS\GoldHordeflag_spell
+    SPELL_ARENA_TEAM_GREEN_HORDE            = 35775,    // green side, horde crest    -> SPELLS\GreenHordeflag_spell
     SPELL_ARENA_SHADOW_SIGHT                = 34709,
     SPELL_ARENA_DS_FLUSH                    = 37405,    // visual water flush cast by the water spouts
     SPELL_ARENA_RECENTLY_BANDAGED           = 11196,
@@ -284,7 +290,9 @@ class Arena : public BattleGround
         // ready check takes, only without waiting for anybody to be ready.
         void StartMatchNow();
         bool IsPlayerReady(ObjectGuid guid) const;
-        void SetPlayerReady(Player* player);
+        bool SetPlayerReady(Player* player);            // false when he has no score to mark
+        // colour by arena side, crest by the player's own faction
+        static uint32 GetTeamBannerSpell(Team side, bool horde);
         static void ApplyTeamAura(Player* player);          // the team's colours, worn from the moment he enters
         // Puts the same colours on the two watchers, each taking the team whose start box he stands in.
         void ApplyWatcherTeamColours();
