@@ -229,6 +229,7 @@ Arena::Arena()
     m_lastCountdownSecond = 0;
     m_playersReady = false;
     m_timeLimitReached = false;
+    m_preparationExtended = false;
     m_tornadoTimer[0] = 0;
     m_tornadoTimer[1] = 0;
     m_waterfallTimer = 0;
@@ -275,6 +276,7 @@ void Arena::Reset()
     m_lastCountdownSecond = 0;
     m_playersReady = false;
     m_timeLimitReached = false;
+    m_preparationExtended = false;
     m_tornadoTimer[0] = 0;
     m_tornadoTimer[1] = 0;
     m_waterfallTimer = 0;
@@ -747,6 +749,26 @@ void Arena::RemovePlayer(Player* player, ObjectGuid /*guid*/)
 
     if (player)
         RestorePlayer(player, m_leaverIsParticipant);
+
+    // Somebody walked out before the gates opened, so the match is short of players. The queue can
+    // send a replacement - BattleGround::RemovePlayerAtLeave puts the instance back among the invite
+    // candidates right after this - but only while more of the countdown is left than an invite needs
+    // to be accepted (BattleGroundQueue::FillPlayersToBg). With a one minute preparation that window
+    // shuts after thirty seconds, and anybody leaving later left the others watching the clock run
+    // down to a no-show draw. So the countdown is held open long enough for one replacement to arrive.
+    //
+    // Once per match. Otherwise two friends could keep a lobby open indefinitely by taking turns
+    // leaving and rejoining.
+    if (GetStatus() == STATUS_WAIT_JOIN && GetPlayersSize() < GetMaxPlayers() && !m_preparationExtended)
+    {
+        int32 const needed = int32(BattleGroundMgr::GetInviteAcceptWaitTime(GetTypeID())) + ARENA_REFILL_LOAD_TIME;
+        if (GetStartDelayTime() < needed)
+        {
+            SetStartDelayTime(needed);
+            m_lastCountdownSecond = 0;                      // let the last ten seconds be announced again
+            m_preparationExtended = true;
+        }
+    }
 
     // the leaving player is already removed from the player list here
     if (GetStatus() == STATUS_IN_PROGRESS)

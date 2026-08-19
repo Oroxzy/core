@@ -265,7 +265,10 @@ namespace
         }
 
         if (player->InBattleGround())
+        {
+            Refuse(player, orb, "You are already in a battleground.");
             return false;
+        }
 
         if (!PassesOrbGates(player, orb, anyTemplate))
             return false;
@@ -308,8 +311,12 @@ namespace
         Group* group = player->GetGroup();
         if (!group)
         {
+            // the check above catches the same size on another map; this one is the exact queue
             if (player->GetBattleGroundQueueIndex(bgQueueTypeId) < PLAYER_MAX_BATTLEGROUND_QUEUES)
+            {
+                Refuse(player, orb, "You are already queued for this arena.");
                 return false;
+            }
 
             if (!player->HasFreeBattleGroundQueueId())
             {

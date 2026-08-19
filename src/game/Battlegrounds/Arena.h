@@ -197,6 +197,9 @@ enum ArenaTimers
     ARENA_DS_PIPE_KNOCKBACK_COUNT           = 2,
     ARENA_DS_PIPE_RECHECK_INTERVAL          = 2 * IN_MILLISECONDS,  // server side replacement for the pipe area triggers
     ARENA_UNDER_MAP_CHECK_INTERVAL          = 3 * IN_MILLISECONDS,
+    // Extra time on top of the invite accept window when the countdown is held open for a replacement:
+    // he still has to accept and load in before the gates open.
+    ARENA_REFILL_LOAD_TIME                  = 10 * IN_MILLISECONDS,
 };
 
 class ArenaScore : public BattleGroundScore
@@ -335,6 +338,7 @@ class Arena : public BattleGround
         uint32 m_lastCountdownSecond;
         bool   m_playersReady;
         bool   m_timeLimitReached;
+        bool   m_preparationExtended;                       // the countdown was held open once for a replacement
 
         // Nagrand
         uint32 m_tornadoTimer[2];
