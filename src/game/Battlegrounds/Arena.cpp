@@ -817,9 +817,10 @@ void Arena::ResetPlayerForFight(Player* player)
 
 void Arena::RestorePlayer(Player* player, bool participant)
 {
-    if (player->IsArenaSpectator())
-        player->SetArenaSpectator(false);
-
+    // The spectator state is deliberately NOT cleared here. This runs while he is still standing in
+    // the arena and the far teleport has not happened yet, so restoring his visibility now makes him
+    // appear in the middle of the map for the length of the handshake. BattleGroundMap::Remove clears
+    // it at the one moment he has actually left.
     player->Unmount();
     player->CombatStopWithPets(true);
 

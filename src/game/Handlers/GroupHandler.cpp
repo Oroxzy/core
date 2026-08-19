@@ -161,6 +161,15 @@ void WorldSession::HandleGroupAcceptOpcode(NullClientPacket const& /*packet*/)
     if (!group)
         return;
 
+    // The invite itself is refused for an observer, but one that was already pending when he entered
+    // the arena could still be accepted from in there, which would put him in a fighter's group.
+    if (GetPlayer()->IsArenaSpectator())
+    {
+        GetPlayer()->SetGroupInvite(nullptr);
+        SendPartyResult(PARTY_OP_INVITE, "", ERR_PARTY_RESULT_OK);
+        return;
+    }
+
     if (group->GetLeaderGuid() == GetPlayer()->GetObjectGuid())
     {
         sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "HandleGroupAcceptOpcode: %s tried to accept an invite to his own group",

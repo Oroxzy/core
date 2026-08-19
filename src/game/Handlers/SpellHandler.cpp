@@ -42,6 +42,15 @@ void WorldSession::HandleUseItemOpcode(WorldPackets::Spell::UseItem const& packe
     if (!pUser->IsSelfMover())
         return;
 
+    // An arena observer uses nothing. Spell::CheckCast already refuses his casts, but it exempts
+    // triggered spells, and an item's on-use effect can be one - so the item is stopped here, before
+    // any of its spells are reached.
+    if (pUser->IsArenaSpectator())
+    {
+        pUser->SendEquipError(EQUIP_ERR_CANT_DO_RIGHT_NOW, nullptr, nullptr);
+        return;
+    }
+
     Item *pItem = pUser->GetItemByPos(packet.bagIndex, packet.slot);
     if (!pItem)
     {

@@ -681,6 +681,10 @@ void WorldSession::HandleEmoteOpcode(WorldPackets::Misc::Emote const& packet)
     if (!GetPlayer()->IsAlive() || GetPlayer()->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PREVENT_ANIM))
         return;
 
+    // the text emote handler below already refuses an observer; the plain animation opcode did not
+    if (GetPlayer()->IsArenaSpectator())
+        return;
+
     if (!GetPlayer()->CanSpeak())
     {
         std::string timeStr = secsToTimeString(m_muteTime - time(nullptr));

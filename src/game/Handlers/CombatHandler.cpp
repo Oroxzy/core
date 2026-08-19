@@ -43,7 +43,11 @@ void WorldSession::HandleAttackSwingOpcode(WorldPackets::Combat::AttackSwing con
         return;
     }
 
-    if (_player->IsFriendlyTo(pEnemy) || pEnemy->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_SPAWNING | UNIT_FLAG_NOT_SELECTABLE))
+    // An arena spectator does not swing at anything. UNIT_FLAG_PACIFIED already stops the blow in
+    // Unit::CanAutoAttackTarget, but without this he would still enter the attack state and see
+    // himself in combat with a fighter.
+    if (_player->IsArenaSpectator() || _player->IsFriendlyTo(pEnemy)
+        || pEnemy->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_SPAWNING | UNIT_FLAG_NOT_SELECTABLE))
     {
         // stop attack state at client
         SendAttackStop(pEnemy);

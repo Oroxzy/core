@@ -2503,7 +2503,9 @@ void BattleGroundMap::Remove(Player* player, bool remove)
 {
     sLog.Out(LOG_BASIC, LOG_LVL_DETAIL, "MAP: Removing player '%s' from bg '%u' of map '%s' before relocating to other map", player->GetName(), GetInstanceId(), GetMapName());
 
-    // arena spectators never leave the map as spectators (safety net for teleports / logout)
+    // The one place an observer gets his body back. Everything earlier - leaving the battleground,
+    // the match ending - still has him standing in the arena, where becoming visible again would show
+    // him to the players still fighting. Here he is on his way off the map, so nobody in there sees it.
     if (player->IsArenaSpectator())
         player->SetArenaSpectator(false);
 

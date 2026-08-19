@@ -109,6 +109,15 @@ void WorldSession::HandleMoveWorldportAck()
     else
         GetPlayer()->Relocate(loc.x, loc.y, loc.z, loc.o);
 
+    // An arena visitor is made invisible BEFORE he is put on the map. Doing it afterwards, where the
+    // rest of the battleground bookkeeping happens, creates him on every nearby fighter's client
+    // first and takes him away again a moment later - a visible flash in the middle of their match.
+    if (GetPlayer()->InBattleGround() && mEntry->IsBattleGround() && !GetPlayer()->IsGameMaster())
+        if (BattleGround* bg = GetPlayer()->GetBattleGround())
+            if (bg->IsArena() && !bg->IsPlayerInBattleGround(GetPlayer()->GetObjectGuid())
+                && !GetPlayer()->IsInvitedForBattleGroundInstance(GetPlayer()->GetBattleGroundId()))
+                GetPlayer()->SetArenaSpectator(true, true);
+
     GetPlayer()->SendInitialPacketsBeforeAddToMap();
     // the CanEnter checks are done in TeleporTo but conditions may change
     // while the player is in transit, for example the map may get full

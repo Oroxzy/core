@@ -958,9 +958,9 @@ void BattleGround::RemovePlayerAtLeave(ObjectGuid guid, bool transport, bool sen
 
     RemovePlayer(pPlayer, guid);                                // BG subclass specific code
 
-    // arena spectators (participants and visitors) become normal players again
-    if (pPlayer && pPlayer->IsArenaSpectator())
-        pPlayer->SetArenaSpectator(false);
+    // The spectator state is cleared by BattleGroundMap::Remove, not here: at this point he is still
+    // standing in the arena waiting for the far teleport, and giving him his body back now shows him
+    // to everybody still fighting.
 
     if (participant) // if the player was a match participant, remove auras, calc rating, update queue
     {

@@ -7743,9 +7743,12 @@ bool Spell::CheckTarget(Unit* target, SpellEffectIndex eff)
     // every group heal and buff cast in the arena would find him, burn a charge on him and give him
     // away in the combat log. Every targeting path ends up here, so one check covers all of them.
     //
-    // A fighter who released his spirit is deliberately NOT covered: he is an observer too, but his
-    // team must still be able to resurrect him.
-    if (target != m_caster && target->IsPlayer() && static_cast<Player*>(target)->IsArenaVisitor())
+    // This covers the fighter who released his spirit as well, and it costs him nothing: he only
+    // becomes an observer at the moment he releases, and until then he lies there as an ordinary
+    // corpse his team can resurrect. Afterwards nothing could target him anyway - he is invisible and
+    // unselectable - so the only thing this changes for him is that group heals stop being spent on
+    // somebody who is out of the fight.
+    if (target != m_caster && target->IsPlayer() && static_cast<Player*>(target)->IsArenaSpectator())
         return false;
 
     if (m_casterUnit && target != m_casterUnit && m_spellInfo->IsPositiveSpell())

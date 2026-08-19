@@ -2751,10 +2751,23 @@ void Player::SetArenaSpectator(bool on, bool visitor)
         CombatStopWithPets(true);
         GetHostileRefManager().deleteReferences();
         UnsummonPetTemporaryIfAny();
+        // the pet goes away but totems and guardians would stay behind, visible and acting, next to an
+        // observer who is neither
+        UnsummonAllTotems();
         Unmount();
+        // borrowed from game master mode: an observer does not drown, suffocate or starve on fatigue
+        // while he watches
+        FreezeMirrorTimers(true);
 
-        // friendly to everybody, can not be targeted, attacked or affected, can not act
-        SetFactionTemplateId(35);
+        // can not be targeted, attacked or affected, can not act
+        //
+        // His own faction is left alone on purpose. Faction 35 used to be set here to make him
+        // friendly to everybody, but the flags below already cover being attacked by players and by
+        // npcs, PACIFIED already stops his swings in Unit::CanAutoAttackTarget, and Spell::CheckTarget
+        // refuses him as a spell target outright. What the override did on top of that was harmful:
+        // "friendly to everybody" made him a legal target for every group heal and buff in the arena,
+        // because the friendly area search does not look at visibility. Restoring it afterwards was
+        // blunt too - SetFactionForRace overwrites whatever faction he may have carried.
         SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE | UNIT_FLAG_IMMUNE_TO_NPC | UNIT_FLAG_IMMUNE_TO_PLAYER | UNIT_FLAG_SILENCED | UNIT_FLAG_PACIFIED);
         SetFFAPvP(false);
         UpdatePvPContested(false, true);
@@ -2772,8 +2785,8 @@ void Player::SetArenaSpectator(bool on, bool visitor)
     }
     else
     {
-        SetFactionForRace(GetRace());
         RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE | UNIT_FLAG_IMMUNE_TO_NPC | UNIT_FLAG_IMMUNE_TO_PLAYER | UNIT_FLAG_SILENCED | UNIT_FLAG_PACIFIED);
+        FreezeMirrorTimers(false);
         SetVisibility(VISIBILITY_ON);
 
         InitPlayerDisplayIds();
@@ -6741,7 +6754,7 @@ void Player::UpdateArea(uint32 newArea)
     // so apply them accordingly
     if (areaEntry && (areaEntry->Flags & AREA_FLAG_ARENA))
     {
-        if (!IsGameMaster() && !IsArenaSpectator())     // spectators are friendly to everybody
+        if (!IsGameMaster() && !IsArenaSpectator())     // an observer takes no part in the fighting
             SetFFAPvP(true);
     }
     else
