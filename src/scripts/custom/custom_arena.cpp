@@ -99,6 +99,7 @@ namespace
         WATCHER_ACTION_WEATHER_MENU     = 4,                 // admin: weather of this running match
         WATCHER_ACTION_WEATHER_TOGGLE   = 5,                 // admin: flip Arena.RandomWeather
         WATCHER_ACTION_WEATHER_SET      = 10,                // admin: + WeatherType, sets it right away
+        WATCHER_ACTION_START_NOW        = 6,                 // admin: end the preparation immediately
         WATCHER_NPC_TEXT_HELLO          = 800100,
         WATCHER_NPC_TEXT_LEAVE_CONFIRM  = 800101,
         ORB_NPC_TEXT_HELLO              = 800102,
@@ -130,12 +131,33 @@ namespace
         return nullptr;
     }
 
-    bool IsInArenaQueueOfType(Player const* player, ArenaType type)
+    // The queue the player is actually sitting in for this size, or BATTLEGROUND_QUEUE_NONE. The menu
+    // needs the concrete queue id to offer leaving it, and it identifies the arena map he was put on.
+    BattleGroundQueueTypeId GetArenaQueueOfType(Player const* player, ArenaType type)
     {
         for (uint8 map = 0; map < ARENA_MAPS_COUNT; ++map)
-            if (player->InBattleGroundQueueForBattleGroundQueueType(BattleGroundMgr::BgQueueTypeId(GetArenaBattleGroundTypeId(ArenaMapType(map), type))))
-                return true;
-        return false;
+        {
+            BattleGroundQueueTypeId const queueTypeId = BattleGroundMgr::BgQueueTypeId(GetArenaBattleGroundTypeId(ArenaMapType(map), type));
+            if (player->InBattleGroundQueueForBattleGroundQueueType(queueTypeId))
+                return queueTypeId;
+        }
+        return BATTLEGROUND_QUEUE_NONE;
+    }
+
+    bool IsInArenaQueueOfType(Player const* player, ArenaType type)
+    {
+        return GetArenaQueueOfType(player, type) != BATTLEGROUND_QUEUE_NONE;
+    }
+
+    // "Leave 2v2 queue (Arena (2v2))" - built in one place because the main menu and the admin map
+    // picker both show it, each in the slot where the queue entry for that size would otherwise be.
+    std::string LeaveQueueLabel(ArenaType type, BattleGroundQueueTypeId queueTypeId)
+    {
+        std::ostringstream ss;
+        ss << "Leave " << GetArenaTypeName(type) << " queue";
+        if (BattleGround* bg = sBattleGroundMgr.GetBattleGroundTemplate(BattleGroundMgr::BgTemplateId(queueTypeId)))
+            ss << " (" << bg->GetName() << ")";
+        return ss.str();
     }
 
     uint32 GetWaitingPlayersCount(Player const* player, ArenaType type)
@@ -580,10 +602,17 @@ static bool ShowArenaMapBracketMenu(Player* player, GameObject* orb, ArenaMapTyp
         if (!sBattleGroundMgr.GetBattleGroundTemplate(bgTypeId))
             continue;
 
+        // same rule as the main menu: where the gamemaster is already queued, the entry becomes the
+        // way out of that queue instead of a second way in
+        BattleGroundQueueTypeId const queued = GetArenaQueueOfType(player, type);
+        if (queued != BATTLEGROUND_QUEUE_NONE)
+        {
+            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, LeaveQueueLabel(type, queued).c_str(), SENDER_LEAVE_QUEUE, queued);
+            continue;
+        }
+
         std::ostringstream ss;
         ss << GetArenaMapName(map) << " - " << GetArenaTypeName(type);
-        if (IsInArenaQueueOfType(player, type))
-            ss << " (already queued)";
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, ss.str().c_str(), SENDER_ADMIN_MAP_QUEUE, map * ARENA_TYPES_COUNT + index);
     }
 
@@ -638,6 +667,15 @@ static bool ShowArenaOrbMenu(Player* player, GameObject* orb)
         if (!GetArenaTemplate(type))
             continue;
 
+        // already queued for this size: the leave entry takes the place of the queue entry, so the
+        // list keeps one line per bracket instead of growing a second block at the bottom
+        BattleGroundQueueTypeId const queued = GetArenaQueueOfType(player, type);
+        if (queued != BATTLEGROUND_QUEUE_NONE)
+        {
+            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, LeaveQueueLabel(type, queued).c_str(), SENDER_LEAVE_QUEUE, queued);
+            continue;
+        }
+
         // groups: leader only, group must fit into a team; solo: everything
         if (group)
         {
@@ -645,29 +683,11 @@ static bool ShowArenaOrbMenu(Player* player, GameObject* orb)
                 continue;
         }
 
-        if (IsInArenaQueueOfType(player, type))
-            continue;
-
         std::ostringstream ss;
         ss << (group ? "Group queue for " : "Queue for ") << GetArenaTypeName(type) << " arena";
         if (uint32 waiting = GetWaitingPlayersCount(player, type))
             ss << " (" << waiting << (waiting == 1 ? " player" : " players") << " waiting)";
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, ss.str().c_str(), SENDER_QUEUE, index);
-    }
-
-    // queues the player is in
-    for (uint8 slot = 0; slot < PLAYER_MAX_BATTLEGROUND_QUEUES; ++slot)
-    {
-        BattleGroundQueueTypeId const queueTypeId = player->GetBattleGroundQueueTypeId(slot);
-        if (queueTypeId == BATTLEGROUND_QUEUE_NONE || !BattleGroundMgr::IsArenaQueue(queueTypeId))
-            continue;
-
-        BattleGround* bg = sBattleGroundMgr.GetBattleGroundTemplate(BattleGroundMgr::BgTemplateId(queueTypeId));
-        std::ostringstream ss;
-        ss << "Leave " << GetArenaTypeName(GetArenaTypeForBattleGroundTypeId(BattleGroundMgr::BgTemplateId(queueTypeId))) << " queue";
-        if (bg)
-            ss << " (" << bg->GetName() << ")";
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, ss.str().c_str(), SENDER_LEAVE_QUEUE, queueTypeId);
     }
 
     // running matches
@@ -876,7 +896,11 @@ bool GossipHello_ArenaWatcher(Player* player, Creature* creature)
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, "I'm ready!", GOSSIP_SENDER_MAIN, WATCHER_ACTION_READY);
     player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "I want to leave the arena.", GOSSIP_SENDER_MAIN, WATCHER_ACTION_LEAVE);
     if (player->GetSession()->GetSecurity() >= SEC_ADMINISTRATOR)
+    {
+        if (bg->GetStatus() == STATUS_WAIT_JOIN)
+            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, "<Admin> Start the match now", GOSSIP_SENDER_MAIN, WATCHER_ACTION_START_NOW);
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "<Admin> Weather", GOSSIP_SENDER_MAIN, WATCHER_ACTION_WEATHER_MENU);
+    }
     player->SEND_GOSSIP_MENU(WATCHER_NPC_TEXT_HELLO, creature->GetObjectGuid());
     return true;
 }
@@ -910,6 +934,17 @@ bool GossipSelect_ArenaWatcher(Player* player, Creature* creature, uint32 /*send
     BattleGround* bg = player->GetBattleGround();
     if (!bg || !bg->IsArena())
         return false;
+
+    if (action == WATCHER_ACTION_START_NOW)
+    {
+        if (player->GetSession()->GetSecurity() < SEC_ADMINISTRATOR || bg->GetStatus() != STATUS_WAIT_JOIN)
+            return false;
+
+        static_cast<Arena*>(bg)->StartMatchNow();
+        player->GetSession()->SendAreaTriggerMessage("%s", "The match starts now.");
+        player->CLOSE_GOSSIP_MENU();
+        return true;
+    }
 
     if (action >= WATCHER_ACTION_WEATHER_MENU && action <= WATCHER_ACTION_WEATHER_SET + WEATHER_TYPE_STORM)
     {

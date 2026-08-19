@@ -553,6 +553,19 @@ void Arena::StartingEventCloseDoors()
     UpdateWorldStates();
 }
 
+void Arena::StartMatchNow()
+{
+    if (GetStatus() != STATUS_WAIT_JOIN)
+        return;
+
+    // the last second is left standing so the normal countdown path runs once and opens the doors,
+    // plays the sound and spawns what it always spawns - nothing here duplicates that work
+    m_playersReady = true;
+    m_events |= (BG_STARTING_EVENT_1 | BG_STARTING_EVENT_2 | BG_STARTING_EVENT_3);
+    if (GetStartDelayTime() > int32(IN_MILLISECONDS))
+        SetStartDelayTime(int32(IN_MILLISECONDS));
+}
+
 uint32 Arena::GetArenaZoneId() const
 {
     switch (GetArenaMapType())

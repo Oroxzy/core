@@ -268,6 +268,9 @@ class Arena : public BattleGround
 
         uint32 GetTeamDamageDone(Team team) const;
         uint32 GetRemainingTime() const;                    // ms until the time limit is reached
+        // Testing aid: ends the preparation immediately, whatever the countdown says. Same path the
+        // ready check takes, only without waiting for anybody to be ready.
+        void StartMatchNow();
         static bool IsPlayerReady(Player const* player);
         static void ApplyTeamAura(Player* player);          // team marker aura, also the "ready" flag during preparation
         bool AreAllPlayersReady() const;
