@@ -38,6 +38,11 @@ void WorldSession::HandlePetAction(WorldPackets::Pet::PetAction const& packet)
     uint32 spellid = UNIT_ACTION_BUTTON_ACTION(packet.data);
     uint8 flag = UNIT_ACTION_BUTTON_TYPE(packet.data);             // delete = 0x07 CastSpell = C1
 
+    // An observer commands nothing. His own pet is put away when he becomes one, but this opcode also
+    // drives a charmed creature, which would let him act through it.
+    if (_player->IsArenaSpectator())
+        return;
+
     // used also for charmed creature/player
     Unit* pCharmedUnit = _player->GetMap()->GetUnit(packet.petGuid);
     if (!pCharmedUnit)

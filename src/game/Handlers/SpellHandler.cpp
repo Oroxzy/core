@@ -157,6 +157,14 @@ void WorldSession::HandleOpenItemOpcode(WorldPackets::Spell::OpenItem const& pac
     if (!pUser->IsSelfMover())
         return;
 
+    // opening is a second way to set an item's spell off - a wrapped item or a lockbox does it here,
+    // not through the use handler
+    if (pUser->IsArenaSpectator())
+    {
+        pUser->SendEquipError(EQUIP_ERR_CANT_DO_RIGHT_NOW, nullptr, nullptr);
+        return;
+    }
+
     Item *pItem = pUser->GetItemByPos(packet.bagIndex, packet.slot);
     if (!pItem)
     {
