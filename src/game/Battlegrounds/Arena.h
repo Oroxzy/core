@@ -127,7 +127,10 @@ enum ArenaCreatures
     NPC_ARENA_TORNADO                       = 19922,
     NPC_ARENA_WATER_SPOUT                   = 28567,
     NPC_ARENA_ANNOUNCER                     = 600044,   // optional npc next to the arena orb, yells queue joins
-    NPC_ARENA_WATCHER                       = 800100,
+    NPC_ARENA_WATCHER                       = 800100,   // fallback template; the spawns use 800110..800121,
+                                                        // one entry per arena side so every arena gets its
+                                                        // own pair of models. They are reached through the
+                                                        // ARENA_EVENT_WATCHER_* guids, never by entry.
 };
 
 enum ArenaGameObjects

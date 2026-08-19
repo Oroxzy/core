@@ -62,6 +62,14 @@ Tol'Viron.
   26879/26878), Shadow Sight in the two side alcoves, watcher npcs in both start boxes. Gate and orb
   positions are Blizzard's own, taken from TDB 1200.26021 map 980; the rear gates that seal the start
   boxes are doodads of the arena building itself and need no spawn. Uldum's desert ambience.
+* Arena watchers: each arena has its own pair, entries 800110..800121, two per map and never the same
+  two in different arenas - Nagrand a brute and an ogre mage, Blade's Edge two red fel orcs, Lordaeron
+  a deathguard and an armoured skeleton, Dalaran two Kirin Tor casters, The Tiger's Peak two pandaren
+  (the second one dark furred, since the client holds only one adult pandaren model), Tol'Viron two
+  tol'vir in red and obsidian. Whoever came without a weapon of his own carries a two hander, staff or
+  polearm from `creature_equip_template`. Display ids 30001..30012 and models 9001..9010 come from the
+  client patch; 800100 stays as the plain fallback template. The core never addresses them by entry,
+  only through the `ARENA_EVENT_WATCHER_*` spawn events, so the split costs nothing.
 * Weather: `Arena.RandomWeather` rolls the weather per match, but only from what suits the place -
   the sandstorm belongs to Uldum, snow to The Tiger's Peak, rain to the three outdoor arenas, and
   the Dalaran sewers stay clear because there is no sky to see it in. With the option off The
