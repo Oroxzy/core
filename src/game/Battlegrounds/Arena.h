@@ -86,8 +86,9 @@ enum ArenaSpells
     SPELL_ARENA_PREPARATION                 = 32727,    // no power costs during the preparation, removed when the gates open
     // Retail arena teams are Gold and Green, not Alliance and Horde (a Horde player can end up on the
     // "alliance side" of a match). Blizzard's mapping (MoP WorldStateFrame.lua): faction 0 = Green,
-    // faction 1 = Gold. The auras carry the team banner on the player's back and double as the "ready"
-    // flag during the preparation.
+    // faction 1 = Gold. The auras carry the team banner on the player's back and go on the moment he
+    // enters, not when he reports ready - readiness is a flag of its own on ArenaScore. The watcher in
+    // each start box wears the same banner, so a team can see at a glance which colour it is playing.
     SPELL_ARENA_TEAM_GOLD                   = 32724,    // alliance side, visual 8378/8379 -> SPELLS\GoldArenaflag_spell
     SPELL_ARENA_TEAM_GREEN                  = 32725,    // horde side, visual 8380/8381 -> SPELLS\GreenArenaflag_spell
     SPELL_ARENA_SHADOW_SIGHT                = 34709,
@@ -191,11 +192,15 @@ enum ArenaTimers
 class ArenaScore : public BattleGroundScore
 {
     public:
-        ArenaScore() : damageDone(0), healingDone(0) {}
+        ArenaScore() : damageDone(0), healingDone(0), ready(false) {}
         virtual ~ArenaScore() {}
 
         uint32 damageDone;
         uint32 healingDone;
+        // Told the arena watcher he is ready. This used to be read off the team aura, which forced the
+        // aura to wait for the ready check - the players stood in their box without their colours until
+        // they spoke to the watcher. The two are separate now: the colours go on when you enter.
+        bool ready;
 };
 
 /*
@@ -274,8 +279,11 @@ class Arena : public BattleGround
         // Testing aid: ends the preparation immediately, whatever the countdown says. Same path the
         // ready check takes, only without waiting for anybody to be ready.
         void StartMatchNow();
-        static bool IsPlayerReady(Player const* player);
-        static void ApplyTeamAura(Player* player);          // team marker aura, also the "ready" flag during preparation
+        bool IsPlayerReady(ObjectGuid guid) const;
+        void SetPlayerReady(Player* player);
+        static void ApplyTeamAura(Player* player);          // the team's colours, worn from the moment he enters
+        // Puts the same colours on the two watchers, each taking the team whose start box he stands in.
+        void ApplyWatcherTeamColours();
         bool AreAllPlayersReady() const;
         // Removes visitors (players that spectate through the arena orb and are not participants).
         void RemoveSpectators();

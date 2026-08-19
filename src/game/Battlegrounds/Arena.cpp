@@ -369,6 +369,11 @@ void Arena::UpdatePreparation(uint32 diff)
     if (!(m_events & BG_STARTING_EVENT_1))
         return;
 
+    // The watchers are spawned with the map rather than by a call of ours, so this waits for them to
+    // appear. It runs every tick on purpose: two creatures and an aura check each is nothing, and it
+    // puts the colours back should they ever fall off.
+    ApplyWatcherTeamColours();
+
     // ready check: as soon as everybody told the arena watcher that he is ready, the gates open early
     if (!m_playersReady && AreAllPlayersReady())
     {
@@ -707,6 +712,12 @@ void Arena::AddPlayer(Player* player)
     else
         player->AddAura(SPELL_ARENA_PREPARATION);
 
+    // The colours belong to the player from the moment he stands in his box, not from the moment he
+    // reports ready - waiting for the ready check left both teams standing there unmarked. Visitors
+    // watching through the orb belong to no team and stay unmarked.
+    if (!player->IsArenaSpectator())
+        ApplyTeamAura(player);
+
     PSendMessageToAll(LANG_ARENA_PLAYER_JOINED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, player->GetName(), player->GetBGTeam() == HORDE ? "Green Team" : "Gold Team");
 
     UpdateWorldStates();
@@ -849,9 +860,40 @@ void Arena::ApplyTeamAura(Player* player)
         player->AddAura(spellId);
 }
 
-bool Arena::IsPlayerReady(Player const* player)
+bool Arena::IsPlayerReady(ObjectGuid guid) const
 {
-    return player->HasAura(SPELL_ARENA_TEAM_GOLD) || player->HasAura(SPELL_ARENA_TEAM_GREEN);
+    auto const itr = m_playerScores.find(guid);
+    return itr != m_playerScores.end() && static_cast<ArenaScore*>(itr->second)->ready;
+}
+
+void Arena::SetPlayerReady(Player* player)
+{
+    auto const itr = m_playerScores.find(player->GetObjectGuid());
+    if (itr != m_playerScores.end())
+        static_cast<ArenaScore*>(itr->second)->ready = true;
+}
+
+void Arena::ApplyWatcherTeamColours()
+{
+    // Which watcher belongs to which team is decided by where he stands rather than by his spawn
+    // event, so this holds for every arena without a table of its own.
+    float ax, ay, az, ao, hx, hy, hz, ho;
+    GetTeamStartLoc(ALLIANCE, ax, ay, az, ao);
+    GetTeamStartLoc(HORDE, hx, hy, hz, ho);
+    for (uint8 const event : { ARENA_EVENT_WATCHER_1, ARENA_EVENT_WATCHER_2 })
+    {
+        for (ObjectGuid const& guid : m_eventObjects[MAKE_PAIR32(event, 0)].creatures)
+        {
+            Creature* watcher = GetBgMap()->GetCreature(guid);
+            if (!watcher)
+                continue;
+
+            uint32 const spellId = watcher->GetDistance2d(hx, hy) < watcher->GetDistance2d(ax, ay)
+                                 ? SPELL_ARENA_TEAM_GREEN : SPELL_ARENA_TEAM_GOLD;
+            if (!watcher->HasAura(spellId))
+                watcher->AddAura(spellId);
+        }
+    }
 }
 
 bool Arena::AreAllPlayersReady() const
@@ -861,8 +903,7 @@ bool Arena::AreAllPlayersReady() const
 
     for (const auto& itr : m_players)
     {
-        Player const* player = sObjectMgr.GetPlayer(itr.first);
-        if (!player || !IsPlayerReady(player))
+        if (!IsPlayerReady(itr.first))
             return false;
     }
     return true;

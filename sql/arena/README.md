@@ -42,7 +42,12 @@ Tol'Viron.
   power refilled. During the match armor can not be swapped (`Arena.AllowItemSwap`,
   `Arena.AllowTrinketSwap`).
 * Ready check: talk to the Arena Watcher npc in the starting room; when everybody is ready the gates
-  open after `Arena.ReadyStartDelaySeconds`, otherwise after one minute.
+  open after `Arena.ReadyStartDelaySeconds`, otherwise after one minute. Being ready is a flag of its
+  own - it used to be read back off the team aura, which meant a player wore no colours until he had
+  reported in.
+* Team colours: gold and green go on the moment a player enters the arena, and the watcher in each
+  start box wears the same banner, so a team sees at a glance which colour it plays. Which watcher
+  takes which colour is decided by the start location he stands closer to, so it needs no table.
 * Dead players can not be resurrected or reclaim their corpse; after releasing they watch the rest of
   the match as invisible spectators. A team wins when the other team has no alive players left, or,
   after `Arena.TimeLimitMinutes`, by damage done.

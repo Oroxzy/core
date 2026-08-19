@@ -892,7 +892,7 @@ bool GossipHello_ArenaWatcher(Player* player, Creature* creature)
     if (!bg || !bg->IsArena() || player->IsArenaSpectator())
         return false;
 
-    if (bg->GetStatus() == STATUS_WAIT_JOIN && !Arena::IsPlayerReady(player))
+    if (bg->GetStatus() == STATUS_WAIT_JOIN && !static_cast<Arena*>(bg)->IsPlayerReady(player->GetObjectGuid()))
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, "I'm ready!", GOSSIP_SENDER_MAIN, WATCHER_ACTION_READY);
     player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "I want to leave the arena.", GOSSIP_SENDER_MAIN, WATCHER_ACTION_LEAVE);
     if (player->GetSession()->GetSecurity() >= SEC_ADMINISTRATOR)
@@ -970,14 +970,16 @@ bool GossipSelect_ArenaWatcher(Player* player, Creature* creature, uint32 /*send
             if (bg->GetStatus() != STATUS_WAIT_JOIN)
                 break;
 
-            Arena::ApplyTeamAura(player);
+            // The team colours are already on him - he wears them from the moment he enters. Being
+            // ready is now its own flag on the arena, not something read back off the aura.
+            Arena* readyArena = static_cast<Arena*>(bg);
+            readyArena->SetPlayerReady(player);
             player->PlayDirectSound(SOUND_ARENA_READY_CHECK, player);
 
             uint32 readyAlliance = 0, readyHorde = 0;
             for (const auto& itr : bg->GetPlayers())
             {
-                Player* participant = sObjectMgr.GetPlayer(itr.first);
-                if (!participant || !Arena::IsPlayerReady(participant))
+                if (!readyArena->IsPlayerReady(itr.first))
                     continue;
                 if (itr.second.playerTeam == HORDE)
                     ++readyHorde;
