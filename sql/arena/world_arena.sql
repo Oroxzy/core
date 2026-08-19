@@ -682,11 +682,28 @@
 
 -- 18. creature_display_info_addon
 
-    DELETE FROM `creature_display_info_addon` WHERE `display_id` IN (21153, 20856);
+--    Every display id a creature_template uses needs a row here. Without one the core does not just
+--    warn, it refuses the creature outright ("has no display id data defined in table
+--    `creature_display_info_addon`, can't load"), and the npc never spawns.
+
+    DELETE FROM `creature_display_info_addon` WHERE `display_id` IN (21153, 20856) OR `display_id` BETWEEN 30001 AND 30012;
 
     INSERT INTO `creature_display_info_addon` VALUES
-        (21153, 0, 2, 3, 0, 0, 2, 0),
-        (20856, 0, 2, 3, 0, 0, 2, 0);
+        (21153, 0, 2, 3, 1, 1.14286, 2, 0),
+        (20856, 0, 2, 3, 1, 1.14286, 2, 0),
+    -- the per arena watchers; radius and reach follow the model, so nobody blocks his own alcove
+        (30001, 0, 1.2, 2.5, 1, 1.14286, 2, 0),      -- Nagrand ogre
+        (30002, 0, 1.2, 2.5, 1, 1.14286, 2, 0),      -- Nagrand ogre mage
+        (30003, 0, 0.4, 1.5, 1, 1.14286, 2, 0),      -- Blade's Edge fel orc
+        (30004, 0, 0.4, 1.5, 1, 1.14286, 2, 0),      -- Blade's Edge fel orc axe warrior
+        (30005, 0, 0.35, 1.5, 1, 1.14286, 2, 0),     -- Lordaeron deathguard
+        (30006, 0, 0.35, 1.5, 1, 1.14286, 2, 0),     -- Lordaeron skeleton
+        (30007, 0, 0.35, 1.5, 1, 1.14286, 2, 0),     -- Dalaran mage
+        (30008, 0, 0.35, 1.5, 1, 1.14286, 2, 0),     -- Dalaran mage
+        (30009, 0, 0.5, 1.8, 1, 1.14286, 2, 0),      -- Tiger's Peak pandaren
+        (30010, 0, 0.5, 1.8, 1, 1.14286, 2, 0),      -- Tiger's Peak pandaren, dark fur
+        (30011, 0, 0.5, 2.0, 1, 1.14286, 2, 0),      -- Tol'Viron tol'vir
+        (30012, 0, 0.5, 2.0, 1, 1.14286, 2, 0);      -- Tol'Viron tol'vir, obsidian
 
 -- 19. disabled_arena_spells
 
