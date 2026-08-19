@@ -529,7 +529,11 @@ void Arena::CheckPlayersUnderMap()
     for (const auto& itr : m_players)
     {
         Player* player = sObjectMgr.GetPlayer(itr.first);
-        if (!player || !player->IsAlive() || player->IsArenaSpectator() || player->GetMap() != GetBgMap())
+        // Ghosts are rescued too. A player who died is an ordinary ghost now, and one that slipped
+        // through the floor would lie under the map for the rest of the match, out of reach of the
+        // team mate who is supposed to resurrect him. Visitors are left alone - they fly about the
+        // arena on purpose and are not part of the match.
+        if (!player || player->IsArenaSpectator() || player->GetMap() != GetBgMap())
             continue;
 
         if (player->GetPositionZ() < minZ)

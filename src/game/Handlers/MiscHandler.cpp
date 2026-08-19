@@ -617,16 +617,11 @@ void WorldSession::HandleResurrectResponseOpcode(WorldPackets::Misc::ResurrectRe
     if (!GetPlayer()->IsRessurectRequestedBy(packet.resurrectorGuid))
         return;
 
-    // no resurrections during a running arena match (dead players are out)
-    if (BattleGround const* bg = GetPlayer()->GetBattleGround())
-    {
-        if (bg->IsArena() && bg->GetStatus() == STATUS_IN_PROGRESS)
-        {
-            GetPlayer()->ClearResurrectRequestData();
-            return;
-        }
-    }
-
+    // A team mate's resurrection is the ONE way back for a player who died in an arena, so it is not
+    // refused here. This used to throw the accept away, which fitted the old design where a dead
+    // fighter turned into an invisible spectator and was out for good. He is an ordinary ghost now.
+    // Getting up by himself is still impossible - Arena::HandleKillPlayer clears his self-resurrection
+    // spell and HandleReclaimCorpseOpcode refuses the corpse - so this cannot be used to self-revive.
     GetPlayer()->ResurrectUsingRequestData();     // will call SpawnCorpseBones
 }
 

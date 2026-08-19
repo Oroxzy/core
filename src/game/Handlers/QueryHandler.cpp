@@ -156,6 +156,13 @@ void WorldSession::HandleCorpseQueryOpcode(NullClientPacket const& /*packet*/)
 {
     Corpse* corpse = GetPlayer()->GetCorpse();
 
+    // An arena ghost is not told where his own corpse is. The client draws the corpse arrow and the
+    // "resurrect here" prompt from this answer, and reclaiming a corpse is refused for arenas
+    // (HandleReclaimCorpseOpcode) - he would be looking at a button that does nothing. The corpse
+    // object itself stays where it is, so a team mate's resurrection, which targets the corpse, works.
+    if (corpse && GetPlayer()->InArena())
+        corpse = nullptr;
+
     if (!corpse)
     {
         WorldPacket data(MSG_CORPSE_QUERY, 1);

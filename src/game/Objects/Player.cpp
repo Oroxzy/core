@@ -2738,16 +2738,10 @@ void Player::SetArenaSpectator(bool on, bool visitor)
 
     if (on)
     {
-        // dead participants: back on their feet, the corpse is not needed anymore (their auras are gone
-        // already). Living visitors keep their buffs - a spectator is invisible, immune and can not act,
-        // and he may not share a group with a fighter (SpectateArena), so nothing can leak into the match.
-        if (!IsAlive())
-        {
-            ResurrectPlayer(1.0f);
-            SpawnCorpseBones();
-            RemoveAllAurasOnDeath();
-        }
-        RemoveAurasDueToSpell(2584);                        // Waiting to Resurrect
+        // Only a living visitor becomes an observer these days - a fighter who dies stays an ordinary
+        // ghost and keeps playing his part in the match. He keeps his buffs, having never fought: an
+        // observer is invisible, immune and cannot act, and SpectateArena refuses him if he shares a
+        // group with a fighter, so nothing of his can leak into the match.
         // A visitor keeps his buffs - he never fought - but not anything that is still working on
         // him: a bleed or a poison he walked in with would keep ticking and could kill him in there,
         // where he is supposed to be untouchable.
@@ -4766,8 +4760,11 @@ void Player::RemoveGhostForm()
 */
 void Player::BuildPlayerRepop()
 {
-    // Waiting to Resurrect (probably redundant cast, yet to check thoroughly)
-    if (InBattleGround())
+    // Waiting to Resurrect (probably redundant cast, yet to check thoroughly).
+    // Not in an arena: the aura has an infinite duration and survives death, and it is normally taken
+    // off by the spirit healer or by leaving the battleground. An arena has no spirit healer, so it
+    // would sit on the ghost for the rest of the match and stay on him after a team mate rezzes him.
+    if (InBattleGround() && !InArena())
         CastSpell(this, 2584, true);
 
     //this is spirit release confirm?

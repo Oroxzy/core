@@ -259,6 +259,14 @@ bool Corpse::LoadFromDB(uint32 lowguid, Field* fields)
 
 bool Corpse::IsVisibleForInState(WorldObject const* pDetector, WorldObject const* viewPoint, bool inVisibleList) const
 {
+    // An arena ghost does not see his own corpse. The client offers the resurrect prompt whenever the
+    // owner is near it, and reclaiming is refused for arenas, so the prompt could only disappoint him.
+    // Everybody else keeps seeing it: a team mate's resurrection targets the corpse, and that is the
+    // one way back for him.
+    if (Player const* looker = pDetector->ToPlayer())
+        if (looker->InArena() && looker->GetObjectGuid() == GetOwnerGuid())
+            return false;
+
     return IsInWorld() && pDetector->IsInWorld() && IsWithinDist(viewPoint, std::max(pDetector->GetMap()->GetVisibilityDistance() + (inVisibleList ? World::GetVisibleObjectGreyDistance() : 0.0f), GetVisibilityModifier()), false);
 }
 
