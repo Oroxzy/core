@@ -541,6 +541,27 @@ void WorldSession::HandleLeaveBattlefieldOpcode(WorldPackets::Battleground::Leav
 
 void WorldSession::HandleBattlefieldStatusOpcode(NullClientPacket const& /*packet*/)
 {
+    // An arena visitor watching through the orb is inside a battleground without ever having queued
+    // for it. The loop below walks his queue slots to work out what to report, finds nothing, and
+    // answers with no active battleground - so the client shows no battlefield button on the minimap
+    // and he has no "Leave Battleground" to right click. The status sent once before the teleport
+    // does not survive the map change, which is why this has to be answered here as well.
+    if (_player->IsArenaVisitor())
+    {
+        if (BattleGround* arena = _player->GetBattleGround())
+        {
+            for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+            {
+                if (_player->GetBattleGroundQueueTypeId(i))
+                    continue;
+
+                SendPacket(sBattleGroundMgr.BuildBattleGroundStatusPacket(arena, i, STATUS_IN_PROGRESS, arena->GetEndTime(), arena->GetStartTime()));
+                break;
+            }
+        }
+        return;
+    }
+
     // empty opcode
     // we must update all queues here
     BattleGround *bg = nullptr;

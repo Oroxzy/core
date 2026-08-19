@@ -4816,10 +4816,15 @@ void Player::BuildPlayerRepop()
     m_deathTimer = 0;
     SetDeathState(DEAD);
 
-    // arena: dead participants watch the rest of the match as invisible spectators
-    if (BattleGround* bg = GetBattleGround())
-        if (bg->IsArena() && bg->GetStatus() == STATUS_IN_PROGRESS)
-            SetArenaSpectator(true);
+    // A player who dies in an arena is dead in the ordinary way: he releases and stands there as a
+    // ghost. Arena::GetClosestGraveYard returns nothing, and RepopAtGraveyard leaves a dead player
+    // where he is when there is no grave, so he keeps the spot he fell on and no spirit healer is
+    // shown. He used to be turned into an invisible spectator here, which also gave him double run
+    // speed and cut him off from his team.
+    //
+    // The one thing he may not do is get up by himself: reclaiming the corpse is refused for arenas
+    // in WorldSession::HandleReclaimCorpseOpcode, and Arena::HandleKillPlayer already cleared his
+    // self-resurrection spell. Only a team mate can bring him back.
 }
 
 void Player::ResurrectPlayer(float restore_percent, bool applySickness)
