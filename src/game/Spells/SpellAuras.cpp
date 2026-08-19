@@ -618,6 +618,10 @@ void AreaAura::Update(uint32 diff)
                         for (GroupReference* itr = pGroup->GetFirstMember(); itr != nullptr; itr = itr->next())
                         {
                             Player* Target = itr->getSource();
+                            // an arena observer takes no aura from the fight: this is the one
+                            // application path that never passes Spell::CheckTarget
+                            if (Target && Target->IsArenaSpectator())
+                                continue;
                             if (Target && Target->IsAlive() && Target->GetSubGroup() == subgroup &&
                                (!Target->m_duel || owner == Target) && caster->IsFriendlyTo(Target) &&
                                (caster->IsPvP() || !Target->IsPvP())) // auras dont affect pvp flagged targets if caster is not flagged

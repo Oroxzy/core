@@ -2732,6 +2732,7 @@ void Player::SetArenaSpectator(bool on, bool visitor)
     if (m_arenaSpectator == on)
         return;
 
+    bool const wasVisitor = m_arenaVisitor;
     m_arenaSpectator = on;
     m_arenaVisitor = on && visitor;
 
@@ -2747,6 +2748,12 @@ void Player::SetArenaSpectator(bool on, bool visitor)
             RemoveAllAurasOnDeath();
         }
         RemoveAurasDueToSpell(2584);                        // Waiting to Resurrect
+        // A visitor keeps his buffs - he never fought - but not anything that is still working on
+        // him: a bleed or a poison he walked in with would keep ticking and could kill him in there,
+        // where he is supposed to be untouchable.
+        RemoveSpellsCausingAura(SPELL_AURA_PERIODIC_DAMAGE);
+        RemoveSpellsCausingAura(SPELL_AURA_PERIODIC_DAMAGE_PERCENT);
+        RemoveSpellsCausingAura(SPELL_AURA_PERIODIC_LEECH);
         InterruptNonMeleeSpells(true);
         CombatStopWithPets(true);
         GetHostileRefManager().deleteReferences();
@@ -2805,8 +2812,14 @@ void Player::SetArenaSpectator(bool on, bool visitor)
         GetHostileRefManager().setOnlineOfflineState(true);
         UpdateSpeed(MOVE_RUN, true);
 
-        SetHealthPercent(100.0f);
-        SetPower(POWER_MANA, GetMaxPower(POWER_MANA));
+        // Only a fighter gets patched up - he was resurrected into this state and leaves the match
+        // whole. Doing it for a visitor as well turned the orb into a free full heal and mana refill:
+        // watch a match for a second, leave, and walk away topped up.
+        if (!wasVisitor)
+        {
+            SetHealthPercent(100.0f);
+            SetPower(POWER_MANA, GetMaxPower(POWER_MANA));
+        }
     }
 
     m_camera.UpdateVisibilityForOwner();
