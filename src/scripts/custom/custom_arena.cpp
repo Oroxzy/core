@@ -86,15 +86,13 @@ namespace
         WATCHER_ACTION_READY            = 1,
         WATCHER_ACTION_LEAVE            = 2,
         WATCHER_ACTION_CONFIRM_LEAVE    = 3,
-        // WEATHER_SET and BUY are bases: the handler adds a WeatherType resp. a stock index on top,
-        // so 10..13 and 100 upwards are taken. Everything else is a single value.
+        // WEATHER_SET is a base: the handler adds a WeatherType on top, so 10..13 are taken.
+        // Everything else is a single value.
         WATCHER_ACTION_WEATHER_MENU     = 4,                 // admin: weather of this running match
         WATCHER_ACTION_WEATHER_TOGGLE   = 5,                 // admin: flip Arena.RandomWeather
         WATCHER_ACTION_START_NOW        = 6,                 // admin: end the preparation immediately
         WATCHER_ACTION_BACK             = 7,                 // out of a submenu, back to the watcher's own menu
         WATCHER_ACTION_WEATHER_SET      = 10,                // admin: + WeatherType, sets it right away
-        WATCHER_ACTION_SUPPLIES         = 20,                // the watcher's stock, during the preparation
-        WATCHER_ACTION_BUY              = 100,               // + index into s_arenaSupplies
         WATCHER_NPC_TEXT_HELLO          = 800100,
         WATCHER_NPC_TEXT_LEAVE_CONFIRM  = 800101,
         ORB_NPC_TEXT_HELLO              = 800102,
@@ -1002,91 +1000,6 @@ bool GossipSelectWithCode_ArenaOrb(Player* player, GameObject* orb, uint32 sende
 /***                   ARENA WATCHER                   ***/
 /*********************************************************/
 
-// What the watcher keeps in his box. Consumables only - nothing that is worn, so nobody can gear up
-// at the door. The list is a curated one rather than "everything the rules allow", because the rules
-// are a ban list: anything not named in disabled_arena_spells is allowed, which is most of the game.
-// Every entry is still checked against the rules for the running bracket before it is offered, so the
-// stock can never come to offer something forbidden, and against the player's level so a level twenty
-// bracket is not sold level sixty potions.
-struct ArenaSupply
-{
-    uint32 itemId;
-    uint32 count;
-};
-
-static ArenaSupply const s_arenaSupplies[] =
-{
-    { 2455,  5 },   // Minor Mana Potion
-    { 3385,  5 },   // Lesser Mana Potion
-    { 3827,  5 },   // Mana Potion
-    { 6149,  5 },   // Greater Mana Potion
-    { 13443, 5 },   // Superior Mana Potion
-    { 13444, 5 },   // Major Mana Potion
-    { 1251,  10 },  // Linen Bandage
-    { 2581,  10 },  // Heavy Linen Bandage
-    { 3530,  10 },  // Wool Bandage
-    { 3531,  10 },  // Heavy Wool Bandage
-    { 6450,  10 },  // Silk Bandage
-    { 6451,  10 },  // Heavy Silk Bandage
-    { 8544,  10 },  // Mageweave Bandage
-    { 8545,  10 },  // Heavy Mageweave Bandage
-    { 14529, 10 },  // Runecloth Bandage
-    { 14530, 10 },  // Heavy Runecloth Bandage
-};
-
-// Price of one purchase, or 0 when the item has no vendor price.
-static uint32 GetSupplyPrice(ItemPrototype const* proto, uint32 count)
-{
-    return proto->BuyPrice * count;
-}
-
-// Whether this entry may be offered to this player in this match at all.
-static bool SupplyAvailable(Player* player, ArenaSupply const& supply, ItemPrototype const*& proto)
-{
-    proto = sObjectMgr.GetItemPrototype(supply.itemId);
-    if (!proto || !proto->BuyPrice)
-        return false;
-
-    // Nothing that can be worn - the watcher is not an armourer. Testing the inventory type rather
-    // than the item class is what actually says that: bandages are class 5 in this data, not class 0,
-    // so a consumable-class check would have quietly refused to stock a single one of them.
-    if (proto->InventoryType != INVTYPE_NON_EQUIP)
-        return false;
-
-    if (proto->RequiredLevel > player->GetLevel())
-        return false;
-
-    return !sArenaMgr.IsItemForbidden(proto, player->GetArenaType());
-}
-
-static bool ShowWatcherSupplies(Player* player, Creature* creature)
-{
-    player->PlayerTalkClass->ClearMenus();
-
-    uint32 offered = 0;
-    for (uint32 i = 0; i < sizeof(s_arenaSupplies) / sizeof(s_arenaSupplies[0]); ++i)
-    {
-        ItemPrototype const* proto = nullptr;
-        if (!SupplyAvailable(player, s_arenaSupplies[i], proto))
-            continue;
-
-        std::ostringstream ss;
-        ss << proto->Name1 << " x" << s_arenaSupplies[i].count << " - "
-           << (GetSupplyPrice(proto, s_arenaSupplies[i].count) / GOLD) << "g "
-           << ((GetSupplyPrice(proto, s_arenaSupplies[i].count) % GOLD) / SILVER) << "s";
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_MONEY_BAG, ss.str().c_str(), GOSSIP_SENDER_MAIN, WATCHER_ACTION_BUY + i);
-        ++offered;
-    }
-
-    if (!offered)
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Nothing here suits this arena.", GOSSIP_SENDER_MAIN, WATCHER_ACTION_SUPPLIES);
-
-    // Not GOSSIP_ACTION_INFO_DEF: that is 1000 and would land in the buy range below, where an
-    // invalid stock index closes the window - so "Back" shut the menu instead of going back.
-    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TALK, "Back", GOSSIP_SENDER_MAIN, WATCHER_ACTION_BACK);
-    player->SEND_GOSSIP_MENU(WATCHER_NPC_TEXT_HELLO, creature->GetObjectGuid());
-    return true;
-}
 
 bool GossipHello_ArenaWatcher(Player* player, Creature* creature)
 {
@@ -1096,9 +1009,6 @@ bool GossipHello_ArenaWatcher(Player* player, Creature* creature)
 
     if (bg->GetStatus() == STATUS_WAIT_JOIN && !static_cast<Arena*>(bg)->IsPlayerReady(player->GetObjectGuid()))
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, "I'm ready!", GOSSIP_SENDER_MAIN, WATCHER_ACTION_READY);
-    // only while the gates are shut: this is for stocking up, not for resupplying mid fight
-    if (bg->GetStatus() == STATUS_WAIT_JOIN)
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_MONEY_BAG, "What do you have for me?", GOSSIP_SENDER_MAIN, WATCHER_ACTION_SUPPLIES);
     player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "I want to leave the arena.", GOSSIP_SENDER_MAIN, WATCHER_ACTION_LEAVE);
     if (player->GetSession()->GetSecurity() >= SEC_ADMINISTRATOR)
     {
@@ -1172,57 +1082,8 @@ bool GossipSelect_ArenaWatcher(Player* player, Creature* creature, uint32 /*send
         return ShowWatcherWeatherMenu(player, creature, arena);
     }
 
-    // Buying: the action carries the index, so everything is checked again here. The client can send
-    // a gossip action it never saw a menu for, and the gates may have opened since the list was built.
-    // The upper bound matters as much as the lower one - without it this branch swallows every action
-    // above the stock, and any future menu entry numbered up there would silently land in the shop.
-    if (action >= WATCHER_ACTION_BUY && action < WATCHER_ACTION_BUY + sizeof(s_arenaSupplies) / sizeof(s_arenaSupplies[0]))
-    {
-        uint32 const index = action - WATCHER_ACTION_BUY;
-        if (bg->GetStatus() != STATUS_WAIT_JOIN)
-        {
-            player->CLOSE_GOSSIP_MENU();
-            return true;
-        }
-
-        ArenaSupply const& supply = s_arenaSupplies[index];
-        ItemPrototype const* proto = nullptr;
-        if (!SupplyAvailable(player, supply, proto))
-        {
-            player->GetSession()->SendNotification("The watcher has nothing like that.");
-            player->CLOSE_GOSSIP_MENU();
-            return true;
-        }
-
-        uint32 const price = GetSupplyPrice(proto, supply.count);
-        if (player->GetMoney() < price)
-        {
-            player->GetSession()->SendNotification("You can not afford that.");
-            return ShowWatcherSupplies(player, creature);
-        }
-
-        ItemPosCountVec dest;
-        if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, supply.itemId, supply.count) != EQUIP_ERR_OK)
-        {
-            player->GetSession()->SendNotification("You have no room for that.");
-            return ShowWatcherSupplies(player, creature);
-        }
-
-        player->ModifyMoney(-int32(price));
-        if (Item* item = player->StoreNewItem(dest, supply.itemId, true))
-            player->SendNewItem(item, supply.count, true, false);
-
-        return ShowWatcherSupplies(player, creature);
-    }
-
     switch (action)
     {
-        case WATCHER_ACTION_SUPPLIES:
-        {
-            if (bg->GetStatus() != STATUS_WAIT_JOIN)
-                break;
-            return ShowWatcherSupplies(player, creature);
-        }
         case WATCHER_ACTION_BACK:
             return GossipHello_ArenaWatcher(player, creature);
         case WATCHER_ACTION_READY:

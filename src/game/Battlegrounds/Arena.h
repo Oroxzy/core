@@ -96,6 +96,7 @@ enum ArenaMangosStrings
     LANG_ARENA_TIME_LIMIT_REACHED           = 11103,    // "The time limit was reached! The team with the most damage done wins."
     LANG_ARENA_RATED_MATCH                  = 11104,    // "This match is rated."
     LANG_ARENA_RATING_RESULT                = 11105,    // "Arena rating %s: %u (%+d), matchmaking rating %u."
+    LANG_ARENA_NOT_RATED                    = 11106,    // "This match is not rated: %s."
 };
 
 enum ArenaSpells

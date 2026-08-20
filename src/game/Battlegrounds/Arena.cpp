@@ -1450,18 +1450,34 @@ void Arena::DetermineRated()
     m_ratedSettled = false;
     m_ratedRoster.clear();
 
+    /*
+     * Whichever way this goes, the players are told. An unrated match used to look exactly like a
+     * rated one until the result came in with no numbers on it, and "why did that not count" is not
+     * a question anybody should have to ask twice.
+     */
     ArenaType const type = GetArenaType();
     if (!sArenaRatingMgr.IsRatedBracket(type))
+    {
+        PSendMessageToAll(LANG_ARENA_NOT_RATED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr,
+                          sArenaRatingMgr.IsAvailable() ? "the rating is switched off" : "the rating table is missing");
         return;
+    }
 
     // Both sides complete, or nothing. A rating taken off an uneven match says nothing about
     // anybody, and .debug bg matches (which may run one-sided) have no business in a ladder.
     if (GetPlayersCountByTeam(ALLIANCE) != uint32(type) || GetPlayersCountByTeam(HORDE) != uint32(type))
+    {
+        PSendMessageToAll(LANG_ARENA_NOT_RATED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, "the sides are not both full");
         return;
+    }
 
     if (sWorld.getConfig(CONFIG_UINT32_ARENA_RATED_MODE) == ARENA_RATED_PREMADE &&
         !(IsSidePremade(ALLIANCE) && IsSidePremade(HORDE)))
+    {
+        PSendMessageToAll(LANG_ARENA_NOT_RATED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr,
+                          "each side has to be one party for that");
         return;
+    }
 
     for (const auto& itr : m_players)
     {

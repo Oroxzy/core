@@ -83,7 +83,7 @@
 
 -- 4. mangos_string (see ArenaMangosStrings in src/game/Battlegrounds/Arena.h)
 
-    DELETE FROM `mangos_string` WHERE `entry` BETWEEN 11100 AND 11105;
+    DELETE FROM `mangos_string` WHERE `entry` BETWEEN 11100 AND 11106;
 
     INSERT INTO `mangos_string` (`entry`, `content_default`, `content_loc1`, `content_loc2`, `content_loc3`, `content_loc4`, `content_loc5`, `content_loc6`, `content_loc7`, `content_loc8`) VALUES
         (11100, '%u seconds until the Arena battle begins!', NULL, 'Le combat commence dans %u secondes !', 'Noch %u Sekunden bis der Arenakampf beginnt!', NULL, NULL, NULL, NULL, NULL),
@@ -91,7 +91,8 @@
         (11102, '%s left the Arena.', NULL, '%s a quitté l\'arène.', '%s hat die Arena verlassen.', NULL, NULL, NULL, NULL, NULL),
         (11103, 'The time limit was reached! The team with the most damage done wins.', NULL, 'Temps écoulé ! L\'équipe avec le plus de dégâts gagne.', 'Das Zeitlimit ist erreicht! Das Team mit dem meisten Schaden gewinnt.', NULL, NULL, NULL, NULL, NULL),
         (11104, 'This match is rated.', NULL, 'Ce combat est classé.', 'Dieser Kampf wird gewertet.', NULL, NULL, NULL, NULL, NULL),
-        (11105, 'Arena rating %s: %u (%+d), matchmaking rating %u.', NULL, 'Classement d\'arène %s : %u (%+d), classement de matchmaking %u.', 'Arenawertung %s: %u (%+d), Matchmaking-Wertung %u.', NULL, NULL, NULL, NULL, NULL);
+        (11105, 'Arena rating %s: %u (%+d), matchmaking rating %u.', NULL, 'Classement d\'arène %s : %u (%+d), classement de matchmaking %u.', 'Arenawertung %s: %u (%+d), Matchmaking-Wertung %u.', NULL, NULL, NULL, NULL, NULL),
+        (11106, 'This match is not rated: %s.', NULL, 'Ce combat n\'est pas classé : %s.', 'Dieser Kampf wird nicht gewertet: %s.', NULL, NULL, NULL, NULL, NULL);
 
 -- 5. battleground_template
 
