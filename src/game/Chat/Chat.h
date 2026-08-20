@@ -403,6 +403,8 @@ class ChatHandler
         bool HandleArenaUnbanCommand(char *args);
         bool HandleArenaListCommand(char *args);
         bool HandleArenaPanelCommand(char *args);
+        bool HandleArenaSpectatorsCommand(char *args);
+        bool HandleArenaKickSpectatorsCommand(char *args);
         // Spell
         bool HandleSpellEffectsCommand(char *args);
         bool HandleSpellInfosCommand(char *args);

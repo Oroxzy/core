@@ -43,6 +43,8 @@ GM commands, all hardcoded so no row in the `command` table is needed:
 .arena setrating <bracket> <rating> [mmr] [$name]
 .arena setmmr <bracket> <mmr> [$name]        the matchmaking rating on its own
 .arena resetratings [bracket]                wipe a ladder
+.arena spectators                            who is watching which match
+.arena kickspectators [instanceId]           send the watchers home
 .arena panel <what>                          the same data in one line per record, for the addon
 ```
 

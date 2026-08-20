@@ -2325,6 +2325,93 @@ bool ChatHandler::HandleArenaListCommand(char* /*args*/)
     return true;
 }
 
+namespace
+{
+
+// Everybody watching a match without fighting in it. Visitors are known to the map, not to the
+// battleground - the arena's own player list holds the fighters only.
+void CollectArenaSpectators(BattleGround* bg, std::vector<Player*>& out)
+{
+    if (!bg->GetBgMap())
+        return;
+
+    Map::PlayerList const& players = bg->GetBgMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+    {
+        Player* player = itr->getSource();
+        if (!player || !player->IsArenaSpectator())
+            continue;
+        if (bg->GetPlayers().find(player->GetObjectGuid()) != bg->GetPlayers().end())
+            continue;                                   // a dead fighter is a ghost, not a visitor
+
+        out.push_back(player);
+    }
+}
+
+} // namespace
+
+// .arena spectators - who is watching which match
+bool ChatHandler::HandleArenaSpectatorsCommand(char* /*args*/)
+{
+    uint32 shown = 0;
+    for (uint32 bgTypeId = BATTLEGROUND_ARENA_FIRST; bgTypeId <= BATTLEGROUND_ARENA_LAST; ++bgTypeId)
+    {
+        for (BattleGroundSet::const_iterator itr = sBattleGroundMgr.GetBattleGroundsBegin(BattleGroundTypeId(bgTypeId));
+             itr != sBattleGroundMgr.GetBattleGroundsEnd(BattleGroundTypeId(bgTypeId)); ++itr)
+        {
+            if (!itr->first)
+                continue;
+
+            std::vector<Player*> spectators;
+            CollectArenaSpectators(itr->second, spectators);
+            if (spectators.empty())
+                continue;
+
+            std::ostringstream names;
+            for (Player* player : spectators)
+                names << (names.str().empty() ? "" : ", ") << player->GetName();
+
+            PSendSysMessage("  #%u %s: %s", itr->second->GetInstanceID(), itr->second->GetName(), names.str().c_str());
+            ++shown;
+        }
+    }
+
+    if (!shown)
+        SendSysMessage("Nobody is spectating.");
+    return true;
+}
+
+/*
+ * .arena kickspectators [$instanceId] - sends the watchers of one match, or of all of them, home.
+ *
+ * Safe from here: gamemaster commands run on the world thread, and the world thread does not run
+ * while the maps update - which is the whole reason commands are deferred onto it.
+ */
+bool ChatHandler::HandleArenaKickSpectatorsCommand(char* args)
+{
+    uint32 instanceId = 0;
+    ExtractOptUInt32(&args, instanceId, 0);
+
+    uint32 kicked = 0;
+    for (uint32 bgTypeId = BATTLEGROUND_ARENA_FIRST; bgTypeId <= BATTLEGROUND_ARENA_LAST; ++bgTypeId)
+    {
+        for (BattleGroundSet::const_iterator itr = sBattleGroundMgr.GetBattleGroundsBegin(BattleGroundTypeId(bgTypeId));
+             itr != sBattleGroundMgr.GetBattleGroundsEnd(BattleGroundTypeId(bgTypeId)); ++itr)
+        {
+            if (!itr->first || (instanceId && itr->second->GetInstanceID() != instanceId))
+                continue;
+
+            std::vector<Player*> spectators;
+            CollectArenaSpectators(itr->second, spectators);
+            kicked += uint32(spectators.size());
+            static_cast<Arena*>(itr->second)->RemoveSpectators();
+        }
+    }
+
+    PSendSysMessage("%u spectator%s sent home.", kicked, kicked == 1 ? "" : "s");
+    return true;
+}
+
 /*
  * .arena panel $what [$argument] - the same data, in one line per record, for the admin addon.
  *
@@ -2370,9 +2457,12 @@ bool ChatHandler::HandleArenaPanelCommand(char* args)
                         names << (names.str().empty() ? "" : ", ") << name;
                 }
 
-                PSendSysMessage("ARENA|match|%u|%s|%s|%u|%u|%s", bg->GetInstanceID(), bg->GetName(),
+                std::vector<Player*> spectators;
+                CollectArenaSpectators(bg, spectators);
+
+                PSendSysMessage("ARENA|match|%u|%s|%s|%u|%u|%u|%s", bg->GetInstanceID(), bg->GetName(),
                                 GetArenaTypeName(arena->GetArenaType()), uint32(bg->GetStatus()),
-                                arena->IsRated() ? 1 : 0, names.str().c_str());
+                                arena->IsRated() ? 1 : 0, uint32(spectators.size()), names.str().c_str());
             }
         }
         PSendSysMessage("ARENA|done|matches");
