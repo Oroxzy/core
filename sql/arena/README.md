@@ -58,9 +58,12 @@ Tol'Viron.
   spells exist (32724/32725 alliance, 35774/35775 horde) and the client patch already carries the
   models and textures for them. The watcher takes the crest of the faction standing in his box,
   majority decides on a mixed side.
-* Dead players can not be resurrected or reclaim their corpse; after releasing they watch the rest of
-  the match as invisible spectators. A team wins when the other team has no alive players left, or,
-  after `Arena.TimeLimitMinutes`, by damage done.
+* A player who dies is dead in the ordinary way: he releases and stands where he fell as a plain
+  ghost, since the arena has no graveyard and a dead player without one stays put. He can not get up
+  by himself - the self-resurrection spell is cleared on death, reclaiming the corpse is refused, and
+  his own corpse is hidden from him so the client stops offering a button that does nothing. Only a
+  team mate's resurrection brings him back, and that is the intended way. A team wins when the other
+  team has no alive players left, or, after `Arena.TimeLimitMinutes`, by damage done.
 * Kills inside arenas give no honor. Losing a match costs nothing either, but walking out of a
   *running* one does: participants get the Deserter debuff for `Arena.LeaveLockoutMinutes` (default
   10, 0 turns it off), including on logout and on teleporting out. Leaving during the preparation is
