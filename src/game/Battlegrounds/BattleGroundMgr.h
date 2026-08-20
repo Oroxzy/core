@@ -44,6 +44,12 @@ constexpr uint32 BG_UNREGISTERED_GUID = static_cast<uint32>(-1);
 
 #define COUNT_OF_PLAYERS_TO_AVERAGE_WAIT_TIME 10
 #define OFFLINE_BG_QUEUE_TIME                 60*1000 // in ms
+// How often a waiting arena queue is looked at again although nothing happened to it (see
+// BattleGroundMgr::Update). Only runs while the rating window is in use.
+#define ARENA_QUEUE_RECHECK_INTERVAL          5*1000 // in ms
+// How many groups may be tried as the one a match is built around before giving up for this update
+// (see BattleGroundQueue::CheckArenaMatch). Only relevant with the rating window on.
+#define ARENA_MATCH_ANCHOR_TRIES              8
 
 struct GroupQueueInfo;                                      // type predefinition
 struct PlayerQueueInfo                                      // stores information for players in queue
@@ -64,6 +70,11 @@ struct GroupQueueInfo                                       // stores informatio
     uint32  removeInviteTime;                               // time when we will remove invite for players in group
     uint32  isInvitedToBgInstanceGuid;                      // was invited to certain BG
     uint32  desiredInstanceId;                              // queued for this instance specifically
+    // arenas only: the matchmaking rating this group carries into the queue (the average of its
+    // members in this bracket) and whether it fills a whole side by itself, which is what a rated
+    // match needs. A lone player queueing 1v1 does.
+    uint32  arenaMmr;
+    bool    arenaRatedEligible;
 };
 
 enum BattleGroundQueueGroupTypes
@@ -91,6 +102,9 @@ class BattleGroundQueue
         ~BattleGroundQueue();
 
         void Update(BattleGroundTypeId bgTypeId, BattleGroundBracketId bracketId);
+
+        // (re)computes the arena matchmaking rating and the premade eligibility of a queued group
+        static void StampArenaRating(GroupQueueInfo* ginfo);
 
         void FillPlayersToBg(BattleGround* bg, BattleGroundBracketId bracketId);
         bool CheckPremadeMatch(BattleGroundBracketId bracketId, uint32 minPlayersPerTeam, uint32 maxPlayersPerTeam);
@@ -128,7 +142,7 @@ class BattleGroundQueue
 
         // Arena: fills both selection pools from the mixed queue, balancing the teams. If start is set the
         // pools are filled up to minPlayersPerTeam (new match), otherwise up to the free slots of bg.
-        void FillArenaSelectionPools(BattleGround* bg, BattleGroundBracketId bracketId, bool start);
+        void FillArenaSelectionPools(BattleGround* bg, BattleGroundBracketId bracketId, bool start, uint32 anchorSkip = 0);
         bool CheckArenaMatch(BattleGroundBracketId bracketId, BattleGround* bgTemplate, uint32 minPlayersPerTeam);
 
         // we need constant add to begin and constant remove / add from the end, therefore deque suits our problem well
@@ -342,6 +356,12 @@ class BattleGroundMgr
         void PlayerLoggedIn(Player* player);
         void PlayerLoggedOut(Player* player);
     private:
+        // Heartbeat for the arena queues. Everything else in this queue system is event driven, but
+        // the rating window opens with time (Arena.Rated.RatingDiscardMinutes) and nothing would ever
+        // come back to look. See BattleGroundMgr::Update.
+        void ScheduleWaitingArenaQueues();
+        uint32 m_arenaQueueRecheckTimer = 0;
+
         ArenaMapType m_forcedArenaMap = ArenaMapType(ARENA_MAPS_COUNT); // ARENA_MAPS_COUNT = pick a map normally
         std::mutex m_schedulerLock;                                    // m_queueUpdateScheduler is filled from map threads (BG leave, orb, level up)
         BattleMastersMap    m_battleMastersMap;

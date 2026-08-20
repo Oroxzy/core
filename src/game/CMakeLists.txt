@@ -69,6 +69,7 @@ set (game_SRCS
     AuctionHouse/AuctionHouseBotMgr.cpp
     AuctionHouse/AuctionHouseMgr.cpp
     Battlegrounds/Arena.cpp
+    Battlegrounds/ArenaRating.cpp
     Battlegrounds/BattleGround.cpp
     Battlegrounds/BattleGroundAB.cpp
     Battlegrounds/BattleGroundAV.cpp
@@ -331,6 +332,7 @@ set (game_SRCS
     AuctionHouse/AuctionHouseBotMgr.h
     AuctionHouse/AuctionHouseMgr.h
     Battlegrounds/Arena.h
+    Battlegrounds/ArenaRating.h
     Battlegrounds/BattleGround.h
     Battlegrounds/BattleGroundAB.h
     Battlegrounds/BattleGroundAV.h

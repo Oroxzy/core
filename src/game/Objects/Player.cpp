@@ -4653,6 +4653,10 @@ void Player::DeleteFromDB(ObjectGuid playerGuid, uint32 accountId, bool updateRe
             CharacterDatabase.PExecute("DELETE FROM `mail_items` WHERE `receiver_guid` = '%u'", lowGuid);
             CharacterDatabase.PExecute("DELETE FROM `character_pet` WHERE `owner_guid` = '%u'", lowGuid);
             CharacterDatabase.PExecute("DELETE FROM `guild_eventlog` WHERE `player_guid1` = '%u' OR `player_guid2` = '%u'", lowGuid, lowGuid);
+            // Arena rating. Character guids are handed out again, so leaving the rows behind would
+            // give the next character with this guid a stranger's ladder position - in the cache as
+            // much as in the table, which is why this does not simply delete the rows here.
+            sArenaRatingMgr.Remove(playerGuid);
             CharacterDatabase.CommitTransaction();
             break;
         }

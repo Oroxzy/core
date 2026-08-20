@@ -53,8 +53,11 @@ namespace
         SENDER_ADMIN_MAP_MENU       = 303,                  // open the map picker
         SENDER_ADMIN_MAP_PICK       = 304,                  // action = ArenaMapType, lists that map's brackets
         SENDER_ADMIN_MAP_QUEUE      = 305,                  // action = map * ARENA_TYPES_COUNT + arena type index
+        SENDER_RATING               = 306,                  // open the rating submenu (also the "back" of the ladder)
+        SENDER_RATING_LADDER        = 307,                  // action = arena type index, that bracket's ladder
 
         ARENA_SPECTATE_LIST_MAX     = 20,                   // gossip menus hold 32 buttons
+        ARENA_LADDER_LIST_MAX       = 15,                   // same limit, and a longer list is unreadable anyway
 
         // admin actions
         ACTION_ADMIN_MAX_ITEM_LEVEL     = 1,
@@ -101,6 +104,7 @@ namespace
         WATCHER_ACTION_WEATHER_MENU     = 4,                 // admin: weather of this running match
         WATCHER_ACTION_WEATHER_TOGGLE   = 5,                 // admin: flip Arena.RandomWeather
         WATCHER_ACTION_START_NOW        = 6,                 // admin: end the preparation immediately
+        WATCHER_ACTION_BACK             = 7,                 // out of a submenu, back to the watcher's own menu
         WATCHER_ACTION_WEATHER_SET      = 10,                // admin: + WeatherType, sets it right away
         WATCHER_ACTION_SUPPLIES         = 20,                // the watcher's stock, during the preparation
         WATCHER_ACTION_BUY              = 100,               // + index into s_arenaSupplies
@@ -649,6 +653,77 @@ static bool ShowArenaMapBracketMenu(Player* player, GameObject* orb, ArenaMapTyp
     return true;
 }
 
+/*
+ * The player's own rating, one line per bracket, each of them opening that bracket's ladder.
+ *
+ * The 1.12 client has no arena interface of any kind - no rating in the pvp tab, nothing in the
+ * queue dialog - so the orb is where a player can look his numbers up. The matchmaking rating is
+ * deliberately not shown: it is a matchmaking tool, and showing it invites people to play it
+ * instead of the game.
+ */
+static bool ShowArenaRatingMenu(Player* player, GameObject* orb)
+{
+    player->PlayerTalkClass->ClearMenus();
+
+    for (uint8 index = 0; index < ARENA_TYPES_COUNT; ++index)
+    {
+        ArenaType const type = GetArenaTypeByIndex(index);
+        if (!GetArenaTemplate(type))
+            continue;
+
+        ArenaRatingEntry const entry = sArenaRatingMgr.Get(player->GetObjectGuid(), type);
+
+        std::ostringstream ss;
+        ss << GetArenaTypeName(type) << ": ";
+        if (entry.games)
+            ss << entry.rating << " (best " << entry.bestRating << ") - "
+               << entry.games << (entry.games == 1 ? " match, " : " matches, ") << entry.wins << " won";
+        else
+            ss << "no rated match yet";
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, ss.str().c_str(), SENDER_RATING_LADDER, index);
+    }
+
+    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Back", SENDER_NOOP, 0);
+    player->SEND_GOSSIP_MENU(ORB_NPC_TEXT_HELLO, orb->GetObjectGuid());
+    return true;
+}
+
+// The best players of one bracket (world thread)
+static bool ShowArenaLadderMenu(Player* player, GameObject* orb, ArenaType type)
+{
+    player->PlayerTalkClass->ClearMenus();
+
+    uint32 const minGames = sWorld.getConfig(CONFIG_UINT32_ARENA_RATED_LADDER_MIN_GAMES);
+
+    std::vector<ArenaLadderRow> ladder;
+    sArenaRatingMgr.GetLadder(type, ARENA_LADDER_LIST_MAX, minGames, ladder);
+
+    if (ladder.empty())
+    {
+        std::ostringstream ss;
+        if (minGames > 1)
+            ss << "Nobody has played " << minGames << " rated " << GetArenaTypeName(type) << " matches yet.";
+        else
+            ss << "Nobody has played a rated " << GetArenaTypeName(type) << " match yet.";
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, ss.str().c_str(), SENDER_RATING, 0);
+    }
+
+    uint32 rank = 0;
+    for (auto const& row : ladder)
+    {
+        std::ostringstream ss;
+        ss << ++rank << ". " << row.name << " - " << row.rating
+           << " (" << row.games << (row.games == 1 ? " match, " : " matches, ") << row.wins << " won)";
+        // every line leads back into the rating menu, an unhandled action would fall out to the main one
+        player->ADD_GOSSIP_ITEM(row.guid == player->GetObjectGuid() ? GOSSIP_ICON_BATTLE : GOSSIP_ICON_CHAT,
+                                ss.str().c_str(), SENDER_RATING, 0);
+    }
+
+    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Back", SENDER_RATING, 0);
+    player->SEND_GOSSIP_MENU(ORB_NPC_TEXT_HELLO, orb->GetObjectGuid());
+    return true;
+}
+
 // main menu (world thread)
 static bool ShowArenaOrbMenu(Player* player, GameObject* orb)
 {
@@ -682,8 +757,19 @@ static bool ShowArenaOrbMenu(Player* player, GameObject* orb)
         return true;
     }
 
+    // The gates decide who may QUEUE. Looking your own rating up is not queueing, and the orb is
+    // the only place in a 1.12 client where it can be looked up at all - so a player who is in
+    // combat, under level, or sitting out a deserter debuff still gets that one entry.
     if (!PassesOrbGates(player, orb, anyTemplate))
+    {
+        if (sArenaRatingMgr.IsRatingEnabled())
+        {
+            player->PlayerTalkClass->ClearMenus();          // Refuse() closed the window, open it again with just this
+            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TALK, "Your arena rating", SENDER_RATING, 0);
+            player->SEND_GOSSIP_MENU(ORB_NPC_TEXT_HELLO, orb->GetObjectGuid());
+        }
         return true;
+    }
 
     Group* group = player->GetGroup();
     if (group && group->GetLeaderGuid() != player->GetObjectGuid())
@@ -730,6 +816,9 @@ static bool ShowArenaOrbMenu(Player* player, GameObject* orb)
     if (anyMatch && sWorld.getConfig(CONFIG_BOOL_ARENA_SPECTATE))
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Spectate a match", SENDER_SPECTATE_LIST, 0);
 
+    if (sArenaRatingMgr.IsRatingEnabled())
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TALK, "Your arena rating", SENDER_RATING, 0);
+
     // admins can adjust the gear rules (own submenu, see ShowArenaAdminMenu)
     if (admin)
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "<Admin> Arena settings", SENDER_ADMIN_MENU, 0);
@@ -768,7 +857,7 @@ static bool HandleArenaOrbSelect(Player* player, GameObject* orb, uint32 sender,
                         continue;
 
                     std::ostringstream ss;
-                    ss << bg->GetName() << ":";
+                    ss << bg->GetName() << (static_cast<Arena*>(bg)->IsRated() ? " (rated):" : ":");
                     uint32 shown = 0;
                     for (const auto& playerItr : bg->GetPlayers())
                     {
@@ -797,6 +886,18 @@ static bool HandleArenaOrbSelect(Player* player, GameObject* orb, uint32 sender,
             player->CLOSE_GOSSIP_MENU();
             SpectateArena(player, orb, action);
             return true;
+        }
+        case SENDER_RATING:
+        {
+            if (!sArenaRatingMgr.IsRatingEnabled())
+                break;
+            return ShowArenaRatingMenu(player, orb);
+        }
+        case SENDER_RATING_LADDER:
+        {
+            if (!sArenaRatingMgr.IsRatingEnabled() || action >= ARENA_TYPES_COUNT)
+                break;
+            return ShowArenaLadderMenu(player, orb, GetArenaTypeByIndex(uint8(action)));
         }
         case SENDER_ADMIN_MENU:
         {
@@ -993,7 +1094,9 @@ static bool ShowWatcherSupplies(Player* player, Creature* creature)
     if (!offered)
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Nothing here suits this arena.", GOSSIP_SENDER_MAIN, WATCHER_ACTION_SUPPLIES);
 
-    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TALK, "Back", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF);
+    // Not GOSSIP_ACTION_INFO_DEF: that is 1000 and would land in the buy range below, where an
+    // invalid stock index closes the window - so "Back" shut the menu instead of going back.
+    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TALK, "Back", GOSSIP_SENDER_MAIN, WATCHER_ACTION_BACK);
     player->SEND_GOSSIP_MENU(WATCHER_NPC_TEXT_HELLO, creature->GetObjectGuid());
     return true;
 }
@@ -1084,10 +1187,12 @@ bool GossipSelect_ArenaWatcher(Player* player, Creature* creature, uint32 /*send
 
     // Buying: the action carries the index, so everything is checked again here. The client can send
     // a gossip action it never saw a menu for, and the gates may have opened since the list was built.
-    if (action >= WATCHER_ACTION_BUY)
+    // The upper bound matters as much as the lower one - without it this branch swallows every action
+    // above the stock, and any future menu entry numbered up there would silently land in the shop.
+    if (action >= WATCHER_ACTION_BUY && action < WATCHER_ACTION_BUY + sizeof(s_arenaSupplies) / sizeof(s_arenaSupplies[0]))
     {
         uint32 const index = action - WATCHER_ACTION_BUY;
-        if (bg->GetStatus() != STATUS_WAIT_JOIN || index >= sizeof(s_arenaSupplies) / sizeof(s_arenaSupplies[0]))
+        if (bg->GetStatus() != STATUS_WAIT_JOIN)
         {
             player->CLOSE_GOSSIP_MENU();
             return true;
@@ -1131,6 +1236,8 @@ bool GossipSelect_ArenaWatcher(Player* player, Creature* creature, uint32 /*send
                 break;
             return ShowWatcherSupplies(player, creature);
         }
+        case WATCHER_ACTION_BACK:
+            return GossipHello_ArenaWatcher(player, creature);
         case WATCHER_ACTION_READY:
         {
             if (bg->GetStatus() != STATUS_WAIT_JOIN)

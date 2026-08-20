@@ -3317,7 +3317,8 @@ DynamicRespawn.PlayersThreshold = 0
 DynamicRespawn.PlayersMaxLevelDiff = 0
 
 ###################################################################################################
-# ARENA SETTINGS (custom, requires the client patch and sql/arena/world_arena.sql)
+# ARENA SETTINGS (custom, requires the client patch and sql/arena/world_arena.sql; the rating also
+#                 needs sql/arena/characters_arena.sql in the character database)
 #
 #    Arena.Enable
 #        Enable the custom arenas (Nagrand, Blade's Edge, Ruins of Lordaeron, Dalaran Sewers, Tiger's Peak,
@@ -3416,6 +3417,57 @@ DynamicRespawn.PlayersMaxLevelDiff = 0
 #        Default: 10
 #                 0 (disabled)
 #
+#    Arena.Rated.Mode
+#        Whether matches count for a rating. There are no arena teams: every character carries his
+#        own rating and his own matchmaking rating, separately for 1v1, 2v2, 3v3 and 5v5 (this is
+#        what retail itself ended up with in patch 5.4).
+#        Needs `character_arena_stats` in the CHARACTER database (sql/arena/characters_arena.sql).
+#        Without that table nothing is rated whatever this says, and the server says so on startup.
+#        Default: 1 (a match counts when one party fills each side - for 1v1 that is every single
+#                    match, so the 1v1 ladder works without anybody forming a group)
+#                 0 (nothing is rated, nothing is written)
+#                 2 (every full match counts, however the queue put the sides together)
+#
+#    Arena.Rated.StartRating
+#    Arena.Rated.StartMatchmakerRating
+#        Where a character starts in a bracket he has never played. Starting them apart is the whole
+#        point: the rating climbs towards the matchmaking rating (the gain below 1300 is inflated for
+#        exactly that), so a new character walks up the ladder instead of appearing in the middle of
+#        it. Set both to the same number and the two are identical forever and the matchmaking rating
+#        stops meaning anything. Raise the start rating to shorten the climb on a small server.
+#        Default: 0 / 1500
+#
+#    Arena.Rated.WinModifierLow
+#    Arena.Rated.WinModifier
+#    Arena.Rated.LoseModifier
+#    Arena.Rated.MatchmakerModifier
+#        How far one match can move the numbers. A win below rating 1000 uses WinModifierLow, from
+#        1300 upwards WinModifier, and in between it fades from one to the other. How much of that is
+#        actually applied depends on how likely the result was: beating somebody far above you moves
+#        the rating a lot, beating somebody far below you barely moves it.
+#        Default: 48 / 24 / 24 / 24
+#
+#    Arena.Rated.DrawRatingLoss
+#        What a draw costs both sides. The matchmaking rating is left alone - nobody proved anything.
+#        Default: 16
+#
+#    Arena.Rated.MaxRatingDifference
+#        How far apart two sides may be in matchmaking rating to be paired. The longest waiting group
+#        is never held back by this, only its possible opponents are.
+#        Default: 150
+#                 0 (pair whoever is waiting, ignore the rating)
+#
+#    Arena.Rated.RatingDiscardMinutes
+#        After this long in the queue the rating window is ignored for that group - a match matters
+#        more than a fair one. On a small server keep this short.
+#        Default: 3
+#                 0 (never widen the window)
+#
+#    Arena.Rated.LadderMinGames
+#        How many rated matches a character needs before he appears in the ladder at the arena orb.
+#        Default: 5
+#                 0 (everybody who played once)
+#
 ###################################################################################################
 
 Arena.Enable = 0
@@ -3439,3 +3491,14 @@ Arena.1v1.BlockHealerSpecs = 0
 Arena.LeaveQueuesOnLogout = 1
 Arena.ResetAllCooldowns = 0
 Arena.LeaveLockoutMinutes = 10
+Arena.Rated.Mode = 1
+Arena.Rated.StartRating = 0
+Arena.Rated.StartMatchmakerRating = 1500
+Arena.Rated.WinModifierLow = 48
+Arena.Rated.WinModifier = 24
+Arena.Rated.LoseModifier = 24
+Arena.Rated.MatchmakerModifier = 24
+Arena.Rated.DrawRatingLoss = 16
+Arena.Rated.MaxRatingDifference = 150
+Arena.Rated.RatingDiscardMinutes = 3
+Arena.Rated.LadderMinGames = 5

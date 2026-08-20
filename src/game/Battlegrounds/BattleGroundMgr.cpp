@@ -143,6 +143,34 @@ bool BattleGroundQueue::SelectionPool::AddGroup(GroupQueueInfo* ginfo, uint32 de
 /***               BATTLEGROUND QUEUES                 ***/
 /*********************************************************/
 
+/*
+ * What an arena group is worth in the queue: the matchmaking rating it carries (the average of the
+ * members waiting in it) and whether it fills a whole side by itself, which is what a rated match
+ * needs - a lone player queueing 1v1 does.
+ *
+ * Has to be redone whenever the membership changes, not only when the group is created: a member
+ * can leave the queue on his own (the orb's leave entry, logging out with Arena.LeaveQueuesOnLogout,
+ * or the offline timeout), and the rest of the group would otherwise keep advertising an average of
+ * people who are no longer in it and a full side it can no longer fill.
+ */
+void BattleGroundQueue::StampArenaRating(GroupQueueInfo* ginfo)
+{
+    ginfo->arenaMmr = 0;
+    ginfo->arenaRatedEligible = false;
+
+    if (!IsArenaBattleGroundTypeId(ginfo->bgTypeId) || ginfo->players.empty())
+        return;
+
+    ArenaType const arenaType = GetArenaTypeForBattleGroundTypeId(ginfo->bgTypeId);
+    std::vector<ObjectGuid> guids;
+    guids.reserve(ginfo->players.size());
+    for (auto const& itr : ginfo->players)
+        guids.push_back(itr.first);
+
+    ginfo->arenaMmr = sArenaRatingMgr.GetAverageMatchmakerRating(guids, arenaType);
+    ginfo->arenaRatedEligible = guids.size() == uint32(arenaType);
+}
+
 // add group or player (grp == nullptr) to bg queue with the given leader and bg specifications
 GroupQueueInfo* BattleGroundQueue::AddGroup(Player* leader, Group* grp, BattleGroundTypeId bgTypeId, BattleGroundBracketId bracketId, bool isPremade, uint32 instanceId, std::vector<uint32>* excludedMembers)
 {
@@ -155,6 +183,8 @@ GroupQueueInfo* BattleGroundQueue::AddGroup(Player* leader, Group* grp, BattleGr
     ginfo->removeInviteTime          = 0;
     ginfo->groupTeam                 = leader->GetTeam();
     ginfo->desiredInstanceId         = instanceId;
+    ginfo->arenaMmr                  = 0;
+    ginfo->arenaRatedEligible        = false;
     ginfo->players.clear();
 
     //compute index (if group is premade or joined a rated match) to queues
@@ -218,6 +248,10 @@ GroupQueueInfo* BattleGroundQueue::AddGroup(Player* leader, Group* grp, BattleGr
                      leader->GetGUIDLow(), leader->GetSession()->GetAccountId(), leader->GetSession()->GetRemoteAddress().c_str(),
                      bgTypeId);
         }
+
+        // arena: what this group is worth in the queue, so the pairing does not have to look every
+        // waiting player up again on every queue update
+        StampArenaRating(ginfo);
 
         //add groupInfo to m_queuedGroups
         if (!ginfo->players.empty())
@@ -397,6 +431,8 @@ void BattleGroundQueue::RemovePlayer(ObjectGuid guid, bool decreaseInvitedCount)
         m_queuedGroups[bracketId][index].erase(groupItr);
         delete group;
     }
+    else
+        StampArenaRating(group);                            // what is left of it is worth something else
 }
 
 //returns true when player playerGuid is in queue and is invited to bgInstanceGuid
@@ -674,7 +710,7 @@ Arenas: both factions wait in the mixed queue. Groups are sorted into the two te
 always into the team with more free slots, so matches are balanced and cross faction as well as
 same faction matches are possible. The battleground team of a player is set when he is invited.
 */
-void BattleGroundQueue::FillArenaSelectionPools(BattleGround* bg, BattleGroundBracketId bracketId, bool start)
+void BattleGroundQueue::FillArenaSelectionPools(BattleGround* bg, BattleGroundBracketId bracketId, bool start, uint32 anchorSkip)
 {
     m_selectionPools[BG_TEAM_ALLIANCE].Init();
     m_selectionPools[BG_TEAM_HORDE].Init();
@@ -686,9 +722,59 @@ void BattleGroundQueue::FillArenaSelectionPools(BattleGround* bg, BattleGroundBr
     };
     uint32 const instanceId = start ? 0 : bg->GetClientInstanceID();
 
+    /*
+     * Rating window. Only for a new match: a match that is already standing there missing a man
+     * needs a body, not the right body.
+     *
+     * The longest waiting group is the anchor and always plays - queue order still decides who gets
+     * a match, the rating only decides who he gets it against. Anybody whose matchmaking rating is
+     * too far from the anchor's is passed over, until one of the two has waited longer than
+     * Arena.Rated.RatingDiscardMinutes: at that point a match matters more than a fair one.
+     *
+     * Groups that could not form a rated match anyway are never filtered - in the default mode a
+     * pair of solo players is going to fight an unrated match and there is nothing to protect.
+     */
+    bool const ratingOn = sArenaRatingMgr.IsRatingEnabled();
+    uint32 const ratingWindow = start ? sWorld.getConfig(CONFIG_UINT32_ARENA_RATED_MAX_MMR_DIFFERENCE) : 0;
+    uint32 const discardTime = sWorld.getConfig(CONFIG_UINT32_ARENA_RATED_MMR_DISCARD_MINUTES) * MINUTE * IN_MILLISECONDS;
+    bool const filterEverybody = sWorld.getConfig(CONFIG_UINT32_ARENA_RATED_MODE) == ARENA_RATED_ALL;
+
+    auto ratingApplies = [&](GroupQueueInfo const* ginfo)
+    {
+        return ratingOn && (filterEverybody || ginfo->arenaRatedEligible);
+    };
+    auto waitedLongEnough = [&](GroupQueueInfo const* ginfo)
+    {
+        return discardTime && WorldTimer::getMSTimeDiffToNow(ginfo->joinTime) >= discardTime;
+    };
+    auto ratingGap = [](uint32 a, uint32 b) { return a > b ? a - b : b - a; };
+
+    // The anchor: normally the longest waiting group, but CheckArenaMatch may ask for the next one
+    // along when nothing in the queue was close enough to the first.
+    GroupQueueInfo const* anchor = nullptr;
+    {
+        uint32 seen = 0;
+        for (GroupQueueInfo const* ginfo : m_queuedGroups[bracketId][BG_QUEUE_MIXED])
+        {
+            if (ginfo->isInvitedToBgInstanceGuid)
+                continue;
+            if (seen++ == anchorSkip)
+            {
+                anchor = ginfo;
+                break;
+            }
+        }
+    }
+
     for (GroupQueueInfo* ginfo : m_queuedGroups[bracketId][BG_QUEUE_MIXED])
     {
         if (ginfo->isInvitedToBgInstanceGuid)
+            continue;
+
+        // the anchor plays whatever his rating, everybody else has to be within reach of it
+        if (ginfo != anchor && ratingWindow && anchor && ratingApplies(anchor) && ratingApplies(ginfo) &&
+            ratingGap(ginfo->arenaMmr, anchor->arenaMmr) > ratingWindow &&
+            !waitedLongEnough(ginfo) && !waitedLongEnough(anchor))
             continue;
 
         int32 const groupSize = int32(ginfo->players.size());
@@ -721,13 +807,38 @@ void BattleGroundQueue::FillArenaSelectionPools(BattleGround* bg, BattleGroundBr
 // this method tries to create an arena match with minPlayersPerTeam against minPlayersPerTeam from the mixed queue
 bool BattleGroundQueue::CheckArenaMatch(BattleGroundBracketId bracketId, BattleGround* bgTemplate, uint32 minPlayersPerTeam)
 {
-    FillArenaSelectionPools(bgTemplate, bracketId, true);
+    /*
+     * The pools are built around one group, the one that has waited longest, and with the rating
+     * window on, everybody too far from him is passed over. If nobody in the queue is close enough
+     * to that one group, we try the next one along instead of going home empty handed - otherwise a
+     * single player with an unusual rating would sit at the head of the queue and keep everybody
+     * behind him from playing at all, which is worse for him than for anyone.
+     */
+    uint32 tries = 1;
+    if (sArenaRatingMgr.IsRatingEnabled() && sWorld.getConfig(CONFIG_UINT32_ARENA_RATED_MAX_MMR_DIFFERENCE))
+    {
+        uint32 candidates = 0;
+        for (GroupQueueInfo const* ginfo : m_queuedGroups[bracketId][BG_QUEUE_MIXED])
+            if (!ginfo->isInvitedToBgInstanceGuid)
+                ++candidates;
 
-    //allow 1v0 if debug bg
-    if (sBattleGroundMgr.isTesting() && (m_selectionPools[BG_TEAM_ALLIANCE].GetPlayerCount() || m_selectionPools[BG_TEAM_HORDE].GetPlayerCount()))
-        return true;
+        tries = std::min(candidates, uint32(ARENA_MATCH_ANCHOR_TRIES));
+    }
 
-    return m_selectionPools[BG_TEAM_ALLIANCE].GetPlayerCount() >= minPlayersPerTeam && m_selectionPools[BG_TEAM_HORDE].GetPlayerCount() >= minPlayersPerTeam;
+    for (uint32 anchorSkip = 0; anchorSkip < tries; ++anchorSkip)
+    {
+        FillArenaSelectionPools(bgTemplate, bracketId, true, anchorSkip);
+
+        //allow 1v0 if debug bg
+        if (sBattleGroundMgr.isTesting() && (m_selectionPools[BG_TEAM_ALLIANCE].GetPlayerCount() || m_selectionPools[BG_TEAM_HORDE].GetPlayerCount()))
+            return true;
+
+        if (m_selectionPools[BG_TEAM_ALLIANCE].GetPlayerCount() >= minPlayersPerTeam &&
+            m_selectionPools[BG_TEAM_HORDE].GetPlayerCount() >= minPlayersPerTeam)
+            return true;
+    }
+
+    return false;
 }
 
 uint32 BattleGroundQueue::GetWaitingArenaPlayersCount(BattleGroundBracketId bracketId) const
@@ -1191,6 +1302,42 @@ void BattleGroundMgr::Update(uint32 diff)
             m_battleGroundQueues[bgQueueTypeId].Update(bgTypeId, bracketId);
         }
     }
+
+    /*
+     * The queues are not polled - one only runs when something happens to it: somebody joins,
+     * leaves, ports in, levels up, or a match ends. That is enough while pairing is pure queue
+     * order, because the answer can not change on its own.
+     *
+     * With the arena rating window it can: two players too far apart to be matched are supposed to
+     * be paired anyway once one of them has waited Arena.Rated.RatingDiscardMinutes, and nothing
+     * would ever come back to look. They would sit in the queue until an unrelated third player
+     * happened to join. So the arena queues get a heartbeat of their own, and only while somebody
+     * is actually waiting in one.
+     */
+    if (m_arenaQueueRecheckTimer <= diff)
+    {
+        m_arenaQueueRecheckTimer = ARENA_QUEUE_RECHECK_INTERVAL;
+        ScheduleWaitingArenaQueues();
+    }
+    else
+        m_arenaQueueRecheckTimer -= diff;
+}
+
+void BattleGroundMgr::ScheduleWaitingArenaQueues()
+{
+    // nothing here widens over time unless the rating window is in use
+    if (!sWorld.getConfig(CONFIG_BOOL_ARENA_ENABLED) || !sArenaRatingMgr.IsRatingEnabled() ||
+        !sWorld.getConfig(CONFIG_UINT32_ARENA_RATED_MAX_MMR_DIFFERENCE) ||
+        !sWorld.getConfig(CONFIG_UINT32_ARENA_RATED_MMR_DISCARD_MINUTES))
+        return;
+
+    for (uint32 bgTypeId = BATTLEGROUND_ARENA_FIRST; bgTypeId <= BATTLEGROUND_ARENA_LAST; ++bgTypeId)
+    {
+        BattleGroundQueueTypeId const bgQueueTypeId = BgQueueTypeId(BattleGroundTypeId(bgTypeId));
+        for (uint8 bracket = 0; bracket < MAX_BATTLEGROUND_BRACKETS; ++bracket)
+            if (m_battleGroundQueues[bgQueueTypeId].GetWaitingArenaPlayersCount(BattleGroundBracketId(bracket)))
+                ScheduleQueueUpdate(bgQueueTypeId, BattleGroundTypeId(bgTypeId), BattleGroundBracketId(bracket));
+    }
 }
 
 std::unique_ptr<ServerPacket> BattleGroundMgr::BuildBattleGroundStatusPacket(BattleGround *bg, uint8 queueSlot, uint8 statusId, uint32 time1, uint32 time2)
@@ -1288,6 +1435,17 @@ std::unique_ptr<ServerPacket> BattleGroundMgr::BuildPvpLogDataPacket(BattleGroun
                     auto arenaScore = static_cast<ArenaScore const*>(score);
                     entry.extraFields.push_back(arenaScore->damageDone);
                     entry.extraFields.push_back(arenaScore->healingDone);
+
+                    // The rating and what this match changed it by. Always sent, even for an unrated
+                    // match and even with the rating turned off: the client does not take its columns
+                    // from this packet, it takes them from WorldStateUI.dbc by map id, where the
+                    // client patch defines four of them. Sending fewer would leave the last columns
+                    // reading a value that is not there. Unrated simply means a change of zero.
+                    //
+                    // The change is negative more often than not and travels as the bit pattern of an
+                    // int32, which is what the client reads it back as.
+                    entry.extraFields.push_back(arenaScore->newRating);
+                    entry.extraFields.push_back(uint32(arenaScore->ratingChange));
 
                     // The arena team, for the ArenaTeamColors addon (0 = green side, 1 = gold side).
                     // MSG_PVP_LOG_DATA has no team field and the client derives the "faction" of a

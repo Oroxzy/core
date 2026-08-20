@@ -1898,7 +1898,12 @@ void BattleGround::StopBattleGround()
     if (IsArena())
     {
         if (GetStatus() < STATUS_WAIT_LEAVE)
+        {
+            // A gamemaster pulling the plug is not a draw. Without this the whole roster would be
+            // booked as one, rating loss and a played match each, for something none of them did.
+            static_cast<Arena*>(this)->CancelRated();
             EndBattleGround(TEAM_NONE);
+        }
         return;
     }
 

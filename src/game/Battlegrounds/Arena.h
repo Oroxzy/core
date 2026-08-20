@@ -29,12 +29,23 @@
 
 #include "Common.h"
 #include "BattleGround.h"
+#include "ArenaRating.h"
 #include "Policies/Singleton.h"
 
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 struct ItemPrototype;
+
+// A fighter of a rated match, as he stood when the gates opened.
+struct ArenaRatedParticipant
+{
+    ObjectGuid guid;
+    Team team;
+    uint32 rating;                                          // before the match
+    uint32 mmr;                                             // before the match
+};
 
 // Sound ids used by the arenas. Most of them are TBC / WotLK sounds and are shipped with the client patch.
 enum ArenaSounds
@@ -83,6 +94,8 @@ enum ArenaMangosStrings
     LANG_ARENA_PLAYER_JOINED                = 11101,    // "%s joined the Arena for the %s!"
     LANG_ARENA_PLAYER_LEFT                  = 11102,    // "%s left the Arena."
     LANG_ARENA_TIME_LIMIT_REACHED           = 11103,    // "The time limit was reached! The team with the most damage done wins."
+    LANG_ARENA_RATED_MATCH                  = 11104,    // "This match is rated."
+    LANG_ARENA_RATING_RESULT                = 11105,    // "Arena rating %s: %u (%+d), matchmaking rating %u."
 };
 
 enum ArenaSpells
@@ -205,11 +218,17 @@ enum ArenaTimers
 class ArenaScore : public BattleGroundScore
 {
     public:
-        ArenaScore() : damageDone(0), healingDone(0), ready(false) {}
+        ArenaScore() : damageDone(0), healingDone(0), ready(false), newRating(0), ratingChange(0) {}
         virtual ~ArenaScore() {}
 
         uint32 damageDone;
         uint32 healingDone;
+        // Shown as two more scoreboard columns. The rating is filled when the player enters, so the
+        // column means something during the match too, and overwritten at the end of a rated one.
+        // Both are always sent: the 1.12 client takes its columns from WorldStateUI.dbc by map id,
+        // not from the packet, and the client patch defines four of them for every arena map.
+        uint32 newRating;
+        int32 ratingChange;
         // Told the arena watcher he is ready. This used to be read off the team aura, which forced the
         // aura to wait for the ready check - the players stood in their box without their colours until
         // they spoke to the watcher. The two are separate now: the colours go on when you enter.
@@ -296,6 +315,14 @@ class Arena : public BattleGround
         void SetArenaWeather(WeatherType type, float grade);
         bool IsTolvironArena() const { return GetArenaMapType() == ARENA_MAP_TOLVIRON; }
 
+        // Whether this match counts for the rating. Decided once, when the gates open (see
+        // DetermineRated) - not when the match is created, because until the last man has actually
+        // arrived we do not know who is standing in the boxes.
+        bool IsRated() const { return m_rated; }
+        // Takes the match out of the rating again, for an end that is nobody's fault: a gamemaster
+        // stopping it would otherwise be booked as a draw, with the loss that carries.
+        void CancelRated() { m_rated = false; m_ratedRoster.clear(); }
+
         uint32 GetTeamDamageDone(Team team) const;
         uint32 GetRemainingTime() const;                    // ms until the time limit is reached
         // Testing aid: ends the preparation immediately, whatever the countdown says. Same path the
@@ -331,6 +358,18 @@ class Arena : public BattleGround
         static void ResetArenaCooldowns(Player* player);
         bool m_leaverIsParticipant;                         // set by RemovePlayerAtLeave for RemovePlayer (the base erased the player list already)
         bool m_spectatorsRemoved;                           // RemoveSpectators ran after the end
+
+        // rating (see ArenaRating.h)
+        void DetermineRated();                              // at the gates: does this match count, and who is in it
+        bool IsSidePremade(Team team) const;                // one party fills the whole side (a side of one always does)
+        void ApplyRatedResult(Team winner);                 // books the result, fills the scoreboard columns, tells the players
+        bool m_rated;                                       // stays set after the end - the scoreboard packet asks
+        bool m_ratedSettled;                                // the result was booked, never do it twice
+        // Who fought, and where he stood before the match. The roster is taken when the gates open and
+        // kept, because the players are gone by the time we need it: leaving deletes the score row and
+        // the entry in m_players, and reading the rating off the survivors would hand everybody who
+        // walks out of a lost match a free pass.
+        std::vector<ArenaRatedParticipant> m_ratedRoster;
 
         // Nagrand Arena
         bool SummonTornado();

@@ -1187,6 +1187,14 @@ ChatCommand * ChatHandler::getCommandTable()
         { nullptr,          0,                  false, nullptr,                                        "", nullptr }
     };
 
+    static ChatCommand arenaCommandTable[] =
+    {
+        { "rating",         SEC_GAMEMASTER,     true,  &ChatHandler::HandleArenaRatingCommand,         "", nullptr },
+        { "setrating",      SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleArenaSetRatingCommand,      "", nullptr },
+        { "resetratings",   SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleArenaResetRatingsCommand,   "", nullptr },
+        { nullptr,          0,                  false, nullptr,                                        "", nullptr }
+    };
+
     static ChatCommand spellCommandTable[] =
     {
         { "effects",        SEC_GAMEMASTER,     true, &ChatHandler::HandleSpellEffectsCommand,         "", nullptr },
@@ -1360,6 +1368,7 @@ ChatCommand * ChatHandler::getCommandTable()
         { "cinematic",      SEC_DEVELOPER,      false, nullptr,                                        "", cinematicCommandTable},
         { "escort",         SEC_TICKETMASTER,   false, nullptr,                                        "", escortCommandTable   },
         { "bg",             SEC_GAMEMASTER,     false, nullptr,                                        "", bgCommandTable       },
+        { "arena",          SEC_GAMEMASTER,     true,  nullptr,                                        "", arenaCommandTable    },
         { "spell",          SEC_GAMEMASTER,     true, nullptr,                                         "", spellCommandTable    },
         { "pvp",            SEC_GAMEMASTER,     false, &ChatHandler::HandlePvPCommand,                 "", nullptr },
         { "variable",       SEC_DEVELOPER,      true,  &ChatHandler::HandleVariableCommand,            "", nullptr},

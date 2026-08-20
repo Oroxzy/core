@@ -1331,6 +1331,24 @@ void World::LoadConfigSettings(bool reload)
     setConfig(CONFIG_BOOL_ARENA_LEAVE_QUEUES_ON_LOGOUT, "Arena.LeaveQueuesOnLogout", true);
     setConfig(CONFIG_BOOL_ARENA_RESET_ALL_COOLDOWNS, "Arena.ResetAllCooldowns", false);
 
+    // Rating, per player and per bracket - there are no arena teams here (see ArenaRating.h).
+    // Mode 1 rates a match only when both sides came as one full group, which for 1v1 is every
+    // single match; mode 2 rates anything the queue put together.
+    setConfigMinMax(CONFIG_UINT32_ARENA_RATED_MODE, "Arena.Rated.Mode", ARENA_RATED_PREMADE, ARENA_RATED_OFF, ARENA_RATED_ALL);
+    // Starting them apart is the point: the rating climbs towards the matchmaking rating and the
+    // gain below 1300 is inflated for exactly that. Equal starting values make the two identical
+    // forever and the matchmaking rating pointless.
+    setConfigMinMax(CONFIG_UINT32_ARENA_RATED_START_RATING, "Arena.Rated.StartRating", 0, 0, 5000);
+    setConfigMinMax(CONFIG_UINT32_ARENA_RATED_START_MMR, "Arena.Rated.StartMatchmakerRating", 1500, 1, 5000);
+    setConfigMinMax(CONFIG_UINT32_ARENA_RATED_WIN_MODIFIER_LOW, "Arena.Rated.WinModifierLow", 48, 1, 1000);
+    setConfigMinMax(CONFIG_UINT32_ARENA_RATED_WIN_MODIFIER, "Arena.Rated.WinModifier", 24, 1, 1000);
+    setConfigMinMax(CONFIG_UINT32_ARENA_RATED_LOSE_MODIFIER, "Arena.Rated.LoseModifier", 24, 1, 1000);
+    setConfigMinMax(CONFIG_UINT32_ARENA_RATED_MMR_MODIFIER, "Arena.Rated.MatchmakerModifier", 24, 1, 1000);
+    setConfigMinMax(CONFIG_UINT32_ARENA_RATED_DRAW_LOSS, "Arena.Rated.DrawRatingLoss", 16, 0, 1000);
+    setConfigMinMax(CONFIG_UINT32_ARENA_RATED_MAX_MMR_DIFFERENCE, "Arena.Rated.MaxRatingDifference", 150, 0, 5000);
+    setConfigMinMax(CONFIG_UINT32_ARENA_RATED_MMR_DISCARD_MINUTES, "Arena.Rated.RatingDiscardMinutes", 3, 0, 60);
+    setConfigMinMax(CONFIG_UINT32_ARENA_RATED_LADDER_MIN_GAMES, "Arena.Rated.LadderMinGames", 5, 0, 1000);
+
     // Smartlog data
     sLog.InitSmartlogEntries(sConfig.GetStringDefault("Smartlog.ExtraEntries", ""));
     sLog.InitSmartlogGuids(sConfig.GetStringDefault("Smartlog.ExtraGuids", ""));
@@ -1903,6 +1921,7 @@ void World::SetInitialWorldSettings()
     // Custom arenas: disabled spells / item restrictions (only loaded when Arena.Enable is set).
     sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "Loading arena data ...");
     sArenaMgr.LoadFromDB();
+    sArenaRatingMgr.LoadFromDB();
 
     sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "Starting ZoneScripts");
     sZoneScriptMgr.InitZoneScripts();

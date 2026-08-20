@@ -317,6 +317,9 @@ Arena::Arena()
     m_underMapCheckTimer = 0;
     m_leaverIsParticipant = false;
     m_spectatorsRemoved = false;
+    m_rated = false;
+    m_ratedSettled = false;
+    m_ratedRoster.clear();
 }
 
 Arena::~Arena()
@@ -364,6 +367,9 @@ void Arena::Reset()
     m_underMapCheckTimer = 0;
     m_leaverIsParticipant = false;
     m_spectatorsRemoved = false;
+    m_rated = false;
+    m_ratedSettled = false;
+    m_ratedRoster.clear();
 }
 
 /*********************************************************/
@@ -749,6 +755,9 @@ void Arena::StartingEventOpenDoors()
         return;
     }
 
+    // who is actually standing in the boxes decides whether this counts for the rating
+    DetermineRated();
+
     for (const auto& itr : m_players)
         if (Player* player = sObjectMgr.GetPlayer(itr.first))
             ResetPlayerForFight(player);
@@ -782,7 +791,12 @@ void Arena::AddPlayer(Player* player)
 {
     BattleGround::AddPlayer(player);
 
-    m_playerScores[player->GetObjectGuid()] = new ArenaScore;
+    ArenaScore* score = new ArenaScore;
+    // His rating as he walks in, so the column shows something sensible for the whole match instead
+    // of a zero that turns into a number at the very end. Read once, here: the scoreboard packet is
+    // rebuilt on every frame the client has the score window open and must not look anything up.
+    score->newRating = sArenaRatingMgr.GetRating(player->GetObjectGuid(), GetArenaType());
+    m_playerScores[player->GetObjectGuid()] = score;
 
     // (the other arena queues were already left in HandleBattleFieldPortOpcode - world thread; the map
     // thread we run in here must not touch the queue containers of other maps)
@@ -1231,10 +1245,174 @@ void Arena::CheckWinConditions()
     }
 }
 
+/*********************************************************/
+/***                      RATING                       ***/
+/*********************************************************/
+
+/*
+ * One party fills this whole side. A side of one is a premade by definition - that is what makes
+ * every 1v1 a rated match without anybody having to form a group first.
+ *
+ * The party in question is the one he had OUTSIDE. Inside a battleground GetGroup() is the team's
+ * own raid group, which BattleGround::AddOrSetPlayerToCorrectBgGroup puts every member of a side
+ * into - asking that would have answered "yes, one party" for any side of any origin, and mode 1
+ * would have rated everything just like mode 2. The real party is parked in the original group
+ * (Player::SetBattleGroundRaid), and a player who queued alone has none.
+ */
+bool Arena::IsSidePremade(Team team) const
+{
+    Group* common = nullptr;
+    uint32 count = 0;
+
+    for (const auto& itr : m_players)
+    {
+        if (itr.second.playerTeam != team)
+            continue;
+
+        Player* player = sObjectMgr.GetPlayer(itr.first);
+        if (!player)                                        // gone already: can not prove he came with the others
+            return false;
+
+        Group* party = player->GetOriginalGroup();
+        ++count;
+        if (count == 1)
+            common = party;
+        else if (!party || party != common)
+            return false;
+    }
+
+    if (count == 1)
+        return true;
+    return count > 1 && common != nullptr;
+}
+
+/*
+ * Does this match count, and who is in it. Asked once, when the gates open: at that point the
+ * boxes hold exactly the people who are going to fight, which is not true any earlier - the queue
+ * can still be sending a replacement during the preparation.
+ */
+void Arena::DetermineRated()
+{
+    m_rated = false;
+    m_ratedSettled = false;
+    m_ratedRoster.clear();
+
+    ArenaType const type = GetArenaType();
+    if (!sArenaRatingMgr.IsRatedBracket(type))
+        return;
+
+    // Both sides complete, or nothing. A rating taken off an uneven match says nothing about
+    // anybody, and .debug bg matches (which may run one-sided) have no business in a ladder.
+    if (GetPlayersCountByTeam(ALLIANCE) != uint32(type) || GetPlayersCountByTeam(HORDE) != uint32(type))
+        return;
+
+    if (sWorld.getConfig(CONFIG_UINT32_ARENA_RATED_MODE) == ARENA_RATED_PREMADE &&
+        !(IsSidePremade(ALLIANCE) && IsSidePremade(HORDE)))
+        return;
+
+    for (const auto& itr : m_players)
+    {
+        ArenaRatingEntry const entry = sArenaRatingMgr.Get(itr.first, type);
+
+        ArenaRatedParticipant participant;
+        participant.guid = itr.first;
+        participant.team = itr.second.playerTeam;
+        participant.rating = entry.rating;
+        participant.mmr = entry.mmr;
+        m_ratedRoster.push_back(participant);
+    }
+
+    m_rated = true;
+    PSendMessageToAll(LANG_ARENA_RATED_MATCH, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr);
+}
+
+/*
+ * Books the result. Called before the base class builds the final scoreboard packet, because the
+ * new rating and the change travel in it as two more columns.
+ *
+ * Everybody on the roster is settled, including whoever walked out or logged off in between: the
+ * alternative is a free pass for leaving a lost match, and the deserter debuff alone has never
+ * stopped anyone.
+ */
+void Arena::ApplyRatedResult(Team winner)
+{
+    if (!m_rated || m_ratedSettled)
+        return;
+
+    // m_rated itself stays set - the match WAS rated, and the scoreboard still standing open for
+    // the next two minutes should not start claiming otherwise. Only the booking happens once.
+    m_ratedSettled = true;
+    ArenaType const type = GetArenaType();
+
+    uint32 mmrSum[BG_TEAMS_COUNT] = { 0, 0 };
+    uint32 headCount[BG_TEAMS_COUNT] = { 0, 0 };
+    for (auto const& participant : m_ratedRoster)
+    {
+        BattleGroundTeamIndex const idx = GetTeamIndexByTeamId(participant.team);
+        mmrSum[idx] += participant.mmr;
+        ++headCount[idx];
+    }
+
+    if (!headCount[BG_TEAM_ALLIANCE] || !headCount[BG_TEAM_HORDE])
+        return;
+
+    // The side's matchmaking rating is the average of its members, exactly as on retail: a player
+    // is matched by what his side is worth, not by what he alone is worth.
+    uint32 const teamMmr[BG_TEAMS_COUNT] =
+    {
+        mmrSum[BG_TEAM_ALLIANCE] / headCount[BG_TEAM_ALLIANCE],
+        mmrSum[BG_TEAM_HORDE] / headCount[BG_TEAM_HORDE]
+    };
+
+    for (auto const& participant : m_ratedRoster)
+    {
+        BattleGroundTeamIndex const own = GetTeamIndexByTeamId(participant.team);
+        BattleGroundTeamIndex const other = GetOtherTeamIndex(own);
+        bool const won = winner != TEAM_NONE && participant.team == winner;
+
+        int32 ratingChange;
+        int32 mmrChange;
+        if (winner == TEAM_NONE)
+        {
+            // A draw costs both sides the same and leaves the matchmaking rating untouched: nobody
+            // proved anything, so the queue should keep pairing them the way it did.
+            ratingChange = -int32(sWorld.getConfig(CONFIG_UINT32_ARENA_RATED_DRAW_LOSS));
+            mmrChange = 0;
+        }
+        else
+        {
+            ratingChange = ArenaRatingMgr::GetRatingMod(participant.rating, teamMmr[other], won);
+            mmrChange = ArenaRatingMgr::GetMatchmakerRatingMod(teamMmr[own], teamMmr[other], won);
+        }
+
+        ArenaRatingEntry const result = sArenaRatingMgr.Apply(participant.guid, type, ratingChange, mmrChange, won);
+
+        // the scoreboard columns - only for whoever is still in the match, a leaver has no score row
+        BattleGroundScoreMap::const_iterator score = m_playerScores.find(participant.guid);
+        if (score != m_playerScores.end())
+        {
+            ArenaScore* arenaScore = static_cast<ArenaScore*>(score->second);
+            arenaScore->newRating = result.rating;
+            // what he really gained, after the floor at zero clipped the loss
+            arenaScore->ratingChange = int32(result.rating) - int32(participant.rating);
+        }
+
+        // and in words, because the scoreboard closes and the chat log does not
+        if (Player* player = sObjectMgr.GetPlayer(participant.guid))
+            ChatHandler(player).PSendSysMessage(LANG_ARENA_RATING_RESULT, GetArenaTypeName(type),
+                                                result.rating, int32(result.rating) - int32(participant.rating), result.mmr);
+    }
+
+    m_ratedRoster.clear();
+}
+
 void Arena::EndBattleGround(Team winner)
 {
     if (GetStatus() == STATUS_WAIT_LEAVE)
         return;
+
+    // before the base class: it builds the final scoreboard packet, which carries the new rating
+    ApplyRatedResult(winner);
 
     for (const auto& itr : m_players)
         if (Player* player = sObjectMgr.GetPlayer(itr.first))

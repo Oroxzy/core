@@ -393,6 +393,10 @@ class ChatHandler
         bool HandleBGStartCommand(char *args);
         bool HandleBGStopCommand(char *args);
         bool HandleBGCustomCommand(char *args);
+        // arena
+        bool HandleArenaRatingCommand(char *args);
+        bool HandleArenaSetRatingCommand(char *args);
+        bool HandleArenaResetRatingsCommand(char *args);
         // Spell
         bool HandleSpellEffectsCommand(char *args);
         bool HandleSpellInfosCommand(char *args);

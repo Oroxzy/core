@@ -25,11 +25,16 @@ Tol'Viron.
    that has the patch installed (WorldSafeLocs.dbc must contain the arena start locations
    929, 936, 939, 940, 1258, 1259, 1362, 1363, 1450, 1451). If the dbc lacks them, the core falls
    back to the `arena_start_location` table (section 20/21 of the SQL).
-3. World database: apply `sql/arena/world_arena.sql`.
+3. World database: apply `sql/arena/world_arena.sql`. Character database: apply
+   `sql/arena/characters_arena.sql` (the rating table; without it nothing rated can be stored).
 4. `mangosd.conf`: set `Arena.Enable = 1` (see the ARENA SETTINGS block for the other options).
 5. Place an Arena Orb (`.gobj add 187078`) and optionally an Arena Announcer (`.npc add 600044`)
    next to it. The orb offers queueing (solo / group), leaving queues, spectating and, for
    administrators, the gear rules.
+
+GM commands: `.arena rating [$name]` shows a character's four brackets, `.arena setrating $bracket
+$rating [$mmr] [$name]` sets one (bracket is the team size: 1, 2, 3 or 5) and `.arena resetratings
+[$bracket]` wipes a ladder. They are hardcoded, so no row in the `command` table is needed.
 
 ## Rules implemented in the core
 
@@ -69,6 +74,21 @@ Tol'Viron.
   10, 0 turns it off), including on logout and on teleporting out. Leaving during the preparation is
   free - the free repair and the cooldown reset are handed out when the gates open, so before that
   there is nothing to farm and nothing to punish.
+* Rating, per player and per bracket - there are no arena teams. Every character carries a rating
+  and a hidden matchmaking rating for 1v1, 2v2, 3v3 and 5v5 (`character_arena_stats`); retail itself
+  ended up here in patch 5.4, and it is the only thing that fits a queue that assembles both sides
+  when the match is created. The arithmetic is TrinityCore's (`ArenaTeam.cpp`) minus the team half:
+  the rating change is computed from the player's own rating against the opponent side's matchmaking
+  rating, which is what TrinityCore already does per member. `Arena.Rated.Mode` decides what counts -
+  by default one party has to fill each side, which for 1v1 is every single match, so that ladder
+  works without anybody forming a group. The party meant is the one from outside: inside a
+  battleground every side shares one raid group of its own, so asking for that would have called
+  every match a premade. Whoever was standing in the boxes when
+  the gates opened is settled at the end, including anybody who walked out in between: leaving a lost
+  match is not a way out of the loss. The queue pairs by matchmaking rating within
+  `Arena.Rated.MaxRatingDifference`, never holding back the longest waiting group, and gives up on the
+  window after `Arena.Rated.RatingDiscardMinutes`. The orb shows a player his own numbers and the
+  ladder of each bracket; the scoreboard shows the new rating and the change in two more columns.
 * Damage done and healing done are tracked and shown on the scoreboard (client patch). The teams are
   Gold and Green as on retail, not Alliance and Horde - the team travels in the bonus honor field so
   the scoreboard tells same faction matches apart (see the ArenaTeamColors addon in the client patch).
@@ -99,5 +119,7 @@ Tol'Viron.
 ## Tables added / used
 
 `disabled_arena_spells` (entry, 1v1, 2v2, 3v3, 5v5, description) - spells and item on-use spells that
-are not allowed per arena size. Everything else lives in the standard world tables (see the section
-list at the top of `world_arena.sql`).
+are not allowed per arena size. `character_arena_stats` (guid, bracket, rating, mmr, games, wins,
+best_rating, last_played) in the CHARACTER database holds the rating; a character who never played a
+rated match has no row. Everything else lives in the standard world tables (see the section list at
+the top of `world_arena.sql`).

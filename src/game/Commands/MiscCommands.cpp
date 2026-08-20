@@ -33,6 +33,7 @@
 #include "InstanceData.h"
 #include "MapManager.h"
 #include "BattleGroundMgr.h"
+#include "ArenaRating.h"
 
 bool ChatHandler::HandleHelpCommand(char* args)
 {
@@ -1894,6 +1895,115 @@ bool ChatHandler::HandleLinkGraveCommand(char* args)
     else
         PSendSysMessage(LANG_COMMAND_GRAVEYARDALRLINKED, g_id, zoneId);
 
+    return true;
+}
+
+/*
+ * .arena rating [$playername] - the arena rating of a character, all four brackets.
+ *
+ * There is no interface for this in 1.12 outside the arena orb, and the orb only ever shows the
+ * player his own numbers.
+ */
+bool ChatHandler::HandleArenaRatingCommand(char* args)
+{
+    Player* target;
+    ObjectGuid targetGuid;
+    std::string targetName;
+    if (!ExtractPlayerTarget(&args, &target, &targetGuid, &targetName))
+        return false;
+
+    ObjectGuid const guid = target ? target->GetObjectGuid() : targetGuid;
+
+    PSendSysMessage("Arena rating of %s:", targetName.c_str());
+    for (uint8 index = 0; index < ARENA_TYPES_COUNT; ++index)
+    {
+        ArenaType const type = GetArenaTypeByIndex(index);
+        ArenaRatingEntry const entry = sArenaRatingMgr.Get(guid, type);
+
+        if (!sArenaRatingMgr.HasPlayed(guid, type))
+        {
+            PSendSysMessage("  %s: never played (would start at %u, mmr %u)", GetArenaTypeName(type), entry.rating, entry.mmr);
+            continue;
+        }
+
+        PSendSysMessage("  %s: rating %u (best %u), mmr %u, %u played, %u won",
+                        GetArenaTypeName(type), entry.rating, entry.bestRating, entry.mmr, entry.games, entry.wins);
+    }
+
+    return true;
+}
+
+/*
+ * .arena setrating $bracket $rating [$mmr] - sets a character's rating, for testing and for
+ * putting somebody back where he belongs after a mishap. Bracket is the team size: 1, 2, 3 or 5.
+ */
+bool ChatHandler::HandleArenaSetRatingCommand(char* args)
+{
+    if (!*args)
+        return false;
+
+    if (!sArenaRatingMgr.IsAvailable())
+    {
+        SendSysMessage("Table `character_arena_stats` is missing - apply sql/arena/characters_arena.sql.");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    uint32 bracket = 0;
+    uint32 rating = 0;
+    if (!ExtractUInt32(&args, bracket) || !ExtractUInt32(&args, rating))
+        return false;
+
+    ArenaType const type = ArenaType(bracket);
+    if (type != ARENA_TYPE_1V1 && type != ARENA_TYPE_2V2 && type != ARENA_TYPE_3V3 && type != ARENA_TYPE_5V5)
+    {
+        SendSysMessage("Bracket must be the team size: 1, 2, 3 or 5.");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    uint32 mmr = 0;
+    bool const mmrGiven = ExtractOptUInt32(&args, mmr, 0);
+
+    Player* target;
+    ObjectGuid targetGuid;
+    std::string targetName;
+    if (!ExtractPlayerTarget(&args, &target, &targetGuid, &targetName))
+        return false;
+
+    ObjectGuid const guid = target ? target->GetObjectGuid() : targetGuid;
+    if (!mmrGiven || !mmr)
+        mmr = sArenaRatingMgr.Get(guid, type).mmr;          // leave the matchmaking rating where it is
+
+    sArenaRatingMgr.Set(guid, type, rating, mmr);
+    PSendSysMessage("%s: %s rating set to %u, mmr %u.", targetName.c_str(), GetArenaTypeName(type), rating, mmr);
+    return true;
+}
+
+// .arena resetratings [$bracket] - wipes a ladder, or all four of them
+bool ChatHandler::HandleArenaResetRatingsCommand(char* args)
+{
+    ArenaType type = ARENA_TYPE_NONE;
+    if (*args)
+    {
+        uint32 bracket = 0;
+        if (!ExtractUInt32(&args, bracket))
+            return false;
+
+        type = ArenaType(bracket);
+        if (type != ARENA_TYPE_1V1 && type != ARENA_TYPE_2V2 && type != ARENA_TYPE_3V3 && type != ARENA_TYPE_5V5)
+        {
+            SendSysMessage("Bracket must be the team size: 1, 2, 3 or 5.");
+            SetSentErrorMessage(true);
+            return false;
+        }
+    }
+
+    uint32 const removed = sArenaRatingMgr.Reset(type);
+    if (type == ARENA_TYPE_NONE)
+        PSendSysMessage("All arena ratings dropped (%u rows).", removed);
+    else
+        PSendSysMessage("%s arena ratings dropped (%u rows).", GetArenaTypeName(type), removed);
     return true;
 }
 
