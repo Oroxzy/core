@@ -324,6 +324,7 @@ class ChatHandler
         bool HandleReloadMapLootDisabledCommand(char *args);
         // Autres reload
         bool HandleReloadCharacterPetCommand(char *args);
+        bool HandleReloadDisabledArenaSpellsCommand(char *args);
         bool HandleReloadSpellGroupCommand(char *args);
         bool HandleReloadSpellGroupStackRulesCommand(char *args);
         bool HandleGroupAddSpellCommand(char *args);

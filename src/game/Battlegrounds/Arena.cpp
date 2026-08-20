@@ -95,8 +95,10 @@ void ArenaMgr::LoadFromDB()
     // The patch in which an item was introduced. item_template holds one row per patch in which the
     // item changed, so the lowest patch is the one we want. Items available since 1.2 (patch 0) are not stored.
     {
-        std::unique_ptr<QueryResult> result(WorldDatabase.Query("SELECT `entry`, MIN(`patch`) FROM `item_template` GROUP BY `entry`"));
-        uint32 count = 0;
+        // HAVING drops the items introduced in 1.2, which is most of them: 17707 grouped rows come
+        // back without it and only about 4500 are kept, so three quarters of the fetch and of the
+        // progress bar were wasted.
+        std::unique_ptr<QueryResult> result(WorldDatabase.Query("SELECT `entry`, MIN(`patch`) FROM `item_template` GROUP BY `entry` HAVING MIN(`patch`) > 0"));
         if (result)
         {
             BarGoLink bar(result->GetRowCount());
@@ -104,9 +106,7 @@ void ArenaMgr::LoadFromDB()
             {
                 bar.step();
                 Field* fields = result->Fetch();
-                if (uint8 patch = fields[1].GetUInt8())
-                    m_itemMinPatch[fields[0].GetUInt32()] = patch;
-                ++count;
+                m_itemMinPatch[fields[0].GetUInt32()] = fields[1].GetUInt8();
             }
             while (result->NextRow());
         }
@@ -115,7 +115,7 @@ void ArenaMgr::LoadFromDB()
             BarGoLink bar(1);
             bar.step();
         }
-        sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, ">> Loaded arena item patch data for %u items (" SIZEFMTD " added after patch 1.2)", count, m_itemMinPatch.size());
+        sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, ">> Loaded arena item patch data for " SIZEFMTD " items added after patch 1.2", m_itemMinPatch.size());
     }
 }
 
@@ -790,6 +790,18 @@ void Arena::PrepareArenaPlayer(Player* player)
     if (!player->IsGMVisible())
         player->SetGMVisible(true);
     player->SetCheatGod(false);
+
+    // The cheat switches survived into the match, and one of them turned every other rule off:
+    // Spell::CheckCast returns SPELL_CAST_OK on its very first line for PLAYER_CHEAT_NO_CHECK_CAST,
+    // so the whole disabled_arena_spells list was skipped for anybody who had it on. The rest are
+    // just as decisive in a fight. Only the pure debug switches are left alone.
+    for (uint16 const cheat : { PLAYER_CHEAT_FLY, PLAYER_CHEAT_NO_COOLDOWN, PLAYER_CHEAT_NO_CAST_TIME,
+                                PLAYER_CHEAT_NO_POWER, PLAYER_CHEAT_DEBUFF_IMMUNITY, PLAYER_CHEAT_ALWAYS_CRIT,
+                                PLAYER_CHEAT_NO_CHECK_CAST, PLAYER_CHEAT_ALWAYS_PROC })
+    {
+        if (player->HasCheatOption(PlayerCheatOptions(cheat)))
+            player->RemoveCheatOption(PlayerCheatOptions(cheat));
+    }
 
     player->UnequipForbiddenArenaItems(type);
     player->Unmount();

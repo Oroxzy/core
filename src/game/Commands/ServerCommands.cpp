@@ -34,6 +34,7 @@
 #include "Anticheat.h"
 #include "GameEventMgr.h"
 #include "BattleGroundMgr.h"
+#include "Arena.h"
 #include "CreatureEventAIMgr.h"
 #include "CharacterDatabaseCache.h"
 #include "AuraRemovalMgr.h"
@@ -724,6 +725,15 @@ bool ChatHandler::HandleGroupSetRuleCommand(char *args)
     ExtractUInt32(&args, ruleId);
     WorldDatabase.PExecute("REPLACE INTO `spell_group_stack_rules` SET group_id=%u, stack_rule=%u", groupId, ruleId);
     PSendSysMessage("Group %u : rule %u.", groupId, ruleId);
+    return true;
+}
+
+bool ChatHandler::HandleReloadDisabledArenaSpellsCommand(char*)
+{
+    // Reloads the item patch map along with it - that is the other half of the arena gear rules. Both
+    // are read once at startup, so until now a change to the table needed a server restart.
+    sArenaMgr.LoadFromDB();
+    SendSysMessage("Table `disabled_arena_spells` reloaded.");
     return true;
 }
 
