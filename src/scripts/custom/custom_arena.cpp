@@ -96,11 +96,13 @@ namespace
         WATCHER_ACTION_READY            = 1,
         WATCHER_ACTION_LEAVE            = 2,
         WATCHER_ACTION_CONFIRM_LEAVE    = 3,
+        // WEATHER_SET and BUY are bases: the handler adds a WeatherType resp. a stock index on top,
+        // so 10..13 and 100 upwards are taken. Everything else is a single value.
         WATCHER_ACTION_WEATHER_MENU     = 4,                 // admin: weather of this running match
         WATCHER_ACTION_WEATHER_TOGGLE   = 5,                 // admin: flip Arena.RandomWeather
-        WATCHER_ACTION_WEATHER_SET      = 10,                // admin: + WeatherType, sets it right away
         WATCHER_ACTION_START_NOW        = 6,                 // admin: end the preparation immediately
-        WATCHER_ACTION_SUPPLIES         = 7,                 // the watcher's stock, during the preparation
+        WATCHER_ACTION_WEATHER_SET      = 10,                // admin: + WeatherType, sets it right away
+        WATCHER_ACTION_SUPPLIES         = 20,                // the watcher's stock, during the preparation
         WATCHER_ACTION_BUY              = 100,               // + index into s_arenaSupplies
         WATCHER_NPC_TEXT_HELLO          = 800100,
         WATCHER_NPC_TEXT_LEAVE_CONFIRM  = 800101,
@@ -1050,7 +1052,11 @@ bool GossipSelect_ArenaWatcher(Player* player, Creature* creature, uint32 /*send
         return true;
     }
 
-    if (action >= WATCHER_ACTION_WEATHER_MENU && action <= WATCHER_ACTION_WEATHER_SET + WEATHER_TYPE_STORM)
+    // Named exactly rather than as one range from the menu to the last weather type. As a range it
+    // also swallowed everything numbered in between - "start the match now" only worked because it
+    // happens to be handled above, and the supplies entry did not work at all.
+    if (action == WATCHER_ACTION_WEATHER_MENU || action == WATCHER_ACTION_WEATHER_TOGGLE
+        || (action >= WATCHER_ACTION_WEATHER_SET && action <= WATCHER_ACTION_WEATHER_SET + WEATHER_TYPE_STORM))
     {
         if (player->GetSession()->GetSecurity() < SEC_ADMINISTRATOR)
             return false;
