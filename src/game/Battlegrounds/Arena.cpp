@@ -28,6 +28,7 @@
 #include "Creature.h"
 #include "GameObject.h"
 #include "ObjectMgr.h"
+#include "Chat.h"
 #include "SpellMgr.h"
 #include "World.h"
 #include "Map.h"
@@ -51,6 +52,7 @@ void ArenaMgr::LoadFromDB()
 {
     m_disabledSpells.clear();
     m_itemMinPatch.clear();
+    m_tempEnchantSpells.clear();
 
     if (!sWorld.getConfig(CONFIG_BOOL_ARENA_ENABLED))
     {
@@ -71,7 +73,8 @@ void ArenaMgr::LoadFromDB()
                 Field* fields = result->Fetch();
 
                 uint32 spellId = fields[0].GetUInt32();
-                if (!sSpellMgr.GetSpellEntry(spellId))
+                SpellEntry const* spell = sSpellMgr.GetSpellEntry(spellId);
+                if (!spell)
                 {
                     sLog.Out(LOG_DBERROR, LOG_LVL_MINIMAL, "Table `disabled_arena_spells` has nonexistent spell %u, skipped.", spellId);
                     continue;
@@ -81,6 +84,21 @@ void ArenaMgr::LoadFromDB()
                 for (uint8 i = 0; i < ARENA_TYPES_COUNT; ++i)
                     data.disabledForType[i] = fields[1 + i].GetUInt8() != 0;
                 ++count;
+
+                // A weapon oil or a sharpening stone is used OUTSIDE and leaves a temporary
+                // enchantment behind, so refusing the spell inside the arena does nothing - the buff
+                // walked in on the weapon. Remember which enchantment each forbidden spell applies,
+                // so PrepareArenaPlayer can take it off at the door.
+                //
+                // Rogue poisons are applied the same way and are deliberately never collected here:
+                // they are part of the class, not a consumable buff. None of them is in the table
+                // today, and this keeps it that way even if one is added by mistake.
+                if (spell->SpellFamilyName != SPELLFAMILY_ROGUE)
+                {
+                    for (uint8 i = 0; i < MAX_EFFECT_INDEX; ++i)
+                        if (spell->Effect[i] == SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY && spell->EffectMiscValue[i] > 0)
+                            m_tempEnchantSpells[uint32(spell->EffectMiscValue[i])] = spellId;
+                }
             }
             while (result->NextRow());
         }
@@ -135,6 +153,15 @@ uint8 ArenaMgr::GetItemMinPatch(uint32 itemId) const
 {
     auto itr = m_itemMinPatch.find(itemId);
     return itr != m_itemMinPatch.end() ? itr->second : 0;
+}
+
+uint32 ArenaMgr::GetForbiddenTempEnchantSpell(uint32 enchantId, ArenaType type) const
+{
+    auto itr = m_tempEnchantSpells.find(enchantId);
+    if (itr == m_tempEnchantSpells.end())
+        return 0;
+
+    return IsSpellDisabled(itr->second, type) ? itr->second : 0;
 }
 
 char const* ArenaMgr::GetPatchName(uint8 patch)
@@ -804,6 +831,7 @@ void Arena::PrepareArenaPlayer(Player* player)
     }
 
     player->UnequipForbiddenArenaItems(type);
+    RemoveForbiddenTempEnchants(player, type);
     player->Unmount();
 
     // fresh start: no buffs (the preparation aura is applied by AddPlayer). The free repair and the
@@ -818,6 +846,37 @@ void Arena::PrepareArenaPlayer(Player* player)
         pet->SetPower(POWER_MANA, pet->GetMaxPower(POWER_MANA));
         if (pet->GetPetType() == HUNTER_PET)
             pet->SetPower(POWER_HAPPINESS, pet->GetMaxPower(POWER_HAPPINESS));
+    }
+}
+
+void Arena::RemoveForbiddenTempEnchants(Player* player, ArenaType type)
+{
+    // A weapon oil, a sharpening stone or a weightstone is applied at the vendor and rides in on the
+    // weapon, so listing its spell in disabled_arena_spells only stops it being applied INSIDE - the
+    // buff itself was already on. Anything the table forbids comes off here instead.
+    //
+    // Rogue poisons are never in this map (ArenaMgr::LoadFromDB skips the rogue spell family), so a
+    // rogue keeps his poisons whatever the table says. They are class equipment, not a consumable.
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!item)
+            continue;
+
+        uint32 const enchantId = item->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT);
+        if (!enchantId)
+            continue;
+
+        uint32 const spellId = sArenaMgr.GetForbiddenTempEnchantSpell(enchantId, type);
+        if (!spellId)
+            continue;
+
+        player->ApplyEnchantment(item, TEMP_ENCHANTMENT_SLOT, false);
+        item->ClearEnchantment(TEMP_ENCHANTMENT_SLOT, true);
+
+        if (SpellEntry const* spell = sSpellMgr.GetSpellEntry(spellId))
+            ChatHandler(player).PSendSysMessage("|cffffffff|Hspell:%u|h[%s]|h|r was removed from your %s: it is not allowed in %s arenas.",
+                                                spellId, spell->SpellName[0].c_str(), item->GetProto()->Name1, GetArenaTypeName(type));
     }
 }
 

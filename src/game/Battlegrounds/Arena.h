@@ -228,6 +228,8 @@ class ArenaMgr
 
         bool IsSpellDisabled(uint32 spellId, ArenaType type) const;
         uint8 GetItemMinPatch(uint32 itemId) const;
+        // 0 when this enchantment may stay, otherwise the forbidden spell that applied it
+        uint32 GetForbiddenTempEnchantSpell(uint32 enchantId, ArenaType type) const;
 
         // Item level / patch / disabled item spell checks. If reason is given it receives a chat-ready explanation.
         bool IsItemForbidden(ItemPrototype const* proto, ArenaType type, std::string* reason = nullptr) const;
@@ -241,6 +243,9 @@ class ArenaMgr
         };
         std::unordered_map<uint32, DisabledSpell> m_disabledSpells;
         std::unordered_map<uint32, uint8> m_itemMinPatch;
+        // enchantment id -> the forbidden spell that applies it, for the temporary enchants a player can
+        // walk in with (weapon oils, sharpening and weight stones). Rogue poisons are never in here.
+        std::unordered_map<uint32, uint32> m_tempEnchantSpells;
 };
 
 #define sArenaMgr MaNGOS::Singleton<ArenaMgr>::Instance()
@@ -314,6 +319,9 @@ class Arena : public BattleGround
 
         // player handling
         void PrepareArenaPlayer(Player* player);            // on join: strip buffs, forbidden gear (the preparation aura is applied by AddPlayer)
+        // Takes off the temporary weapon enchants the table forbids - they are applied outside and
+        // would otherwise ride into the match on the weapon. Never touches rogue poisons.
+        static void RemoveForbiddenTempEnchants(Player* player, ArenaType type);
         void ResetPlayerForFight(Player* player);           // on gate opening: short buffs, cooldowns, repair, health and power
         void RestorePlayer(Player* player, bool participant);   // on leave / end (visitors keep their buffs)
         static void ResetArenaCooldowns(Player* player);
