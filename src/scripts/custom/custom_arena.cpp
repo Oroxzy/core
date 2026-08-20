@@ -291,6 +291,15 @@ namespace
             return false;
         }
 
+        // Refused here rather than on arrival: which piece to take off is the player's choice, so the
+        // only place this can be told to him without stranding him inside is before he queues.
+        if (ArenaMgr::HasExcessResistance(player, &reason))
+        {
+            player->PSendSysMessage("%s", reason.c_str());
+            Refuse(player, orb, "You are wearing too much resistance for the arena.");
+            return false;
+        }
+
         if (type == ARENA_TYPE_1V1 && sWorld.getConfig(CONFIG_BOOL_ARENA_1V1_BLOCK_HEALER_SPECS) && IsHealerSpec(player))
         {
             Refuse(player, orb, "Healer specs can not queue for 1v1 arenas.");

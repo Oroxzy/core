@@ -1319,6 +1319,13 @@ void World::LoadConfigSettings(bool reload)
     setConfigMinMax(CONFIG_UINT32_ARENA_INVITE_ACCEPT_TIME_SECONDS, "Arena.InviteAcceptTimeSeconds", 30, 10, 80);
     setConfigMinMax(CONFIG_UINT32_ARENA_MIN_LEVEL, "Arena.MinLevel", 19, 1, PLAYER_MAX_LEVEL);
     setConfigMinMax(CONFIG_UINT32_ARENA_LEAVE_LOCKOUT_MINUTES, "Arena.LeaveLockoutMinutes", 10, 0, 24 * 60);
+    // How much resistance a player may bring in on his gear, per school (0 = no limit). The defaults
+    // are the caps the Classic Duelers League runs with: shadow 200, every other school 100.
+    setConfig(CONFIG_UINT32_ARENA_MAX_RES_FIRE,   "Arena.MaxResistance.Fire",   100);
+    setConfig(CONFIG_UINT32_ARENA_MAX_RES_NATURE, "Arena.MaxResistance.Nature", 100);
+    setConfig(CONFIG_UINT32_ARENA_MAX_RES_FROST,  "Arena.MaxResistance.Frost",  100);
+    setConfig(CONFIG_UINT32_ARENA_MAX_RES_SHADOW, "Arena.MaxResistance.Shadow", 200);
+    setConfig(CONFIG_UINT32_ARENA_MAX_RES_ARCANE, "Arena.MaxResistance.Arcane", 100);
     setConfig(CONFIG_BOOL_ARENA_ANNOUNCE_QUEUE, "Arena.AnnounceQueue", true);
     setConfig(CONFIG_BOOL_ARENA_1V1_BLOCK_HEALER_SPECS, "Arena.1v1.BlockHealerSpecs", false);
     setConfig(CONFIG_BOOL_ARENA_LEAVE_QUEUES_ON_LOGOUT, "Arena.LeaveQueuesOnLogout", true);

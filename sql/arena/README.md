@@ -45,6 +45,11 @@ Tol'Viron.
   open after `Arena.ReadyStartDelaySeconds`, otherwise after one minute. Being ready is a flag of its
   own - it used to be read back off the team aura, which meant a player wore no colours until he had
   reported in.
+* Resistance: `Arena.MaxResistance.Fire` / `.Nature` / `.Frost` / `.Shadow` / `.Arcane` cap what a player
+  may bring in on his gear (0 = no limit). Queueing at the orb is refused above it - which piece to
+  take off is his choice, so telling him after he is inside would strand him. Counted from the
+  equipped items rather than his current resistance, because buffs at the orb are stripped on
+  entering anyway. The defaults are the Classic Duelers League caps: shadow 200, the rest 100.
 * Team colours: gold and green go on the moment a player enters the arena, and the watcher in each
   start box wears the same banner, so a team sees at a glance which colour it plays. Which watcher
   takes which colour is decided by the start location he stands closer to, so it needs no table.

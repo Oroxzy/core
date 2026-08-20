@@ -155,6 +155,55 @@ uint8 ArenaMgr::GetItemMinPatch(uint32 itemId) const
     return itr != m_itemMinPatch.end() ? itr->second : 0;
 }
 
+bool ArenaMgr::HasExcessResistance(Player const* player, std::string* reason)
+{
+    // Counted from the equipped items rather than from the player's current resistance, on purpose:
+    // at the arena orb he is still standing in the world with whatever buffs he happens to carry, and
+    // those are stripped on entering anyway. What he actually brings into the match is his gear.
+    struct SchoolCap
+    {
+        char const* name;
+        eConfigUInt32Values config;
+        int32 ItemPrototype::* field;
+    };
+
+    static SchoolCap const schools[] =
+    {
+        { "Fire",   CONFIG_UINT32_ARENA_MAX_RES_FIRE,   &ItemPrototype::FireRes   },
+        { "Nature", CONFIG_UINT32_ARENA_MAX_RES_NATURE, &ItemPrototype::NatureRes },
+        { "Frost",  CONFIG_UINT32_ARENA_MAX_RES_FROST,  &ItemPrototype::FrostRes  },
+        { "Shadow", CONFIG_UINT32_ARENA_MAX_RES_SHADOW, &ItemPrototype::ShadowRes },
+        { "Arcane", CONFIG_UINT32_ARENA_MAX_RES_ARCANE, &ItemPrototype::ArcaneRes },
+    };
+
+    for (auto const& school : schools)
+    {
+        uint32 const cap = sWorld.getConfig(school.config);
+        if (!cap)
+            continue;
+
+        int32 total = 0;
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+            if (Item const* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                if (ItemPrototype const* proto = item->GetProto())
+                    total += proto->*school.field;
+
+        if (total > int32(cap))
+        {
+            if (reason)
+            {
+                std::ostringstream ss;
+                ss << "Your gear has |cffff726f" << total << "|r " << school.name
+                   << " Resistance, the arena allows |cff71d5ff" << cap << "|r.";
+                *reason = ss.str();
+            }
+            return true;
+        }
+    }
+
+    return false;
+}
+
 uint32 ArenaMgr::GetForbiddenTempEnchantSpell(uint32 enchantId, ArenaType type) const
 {
     auto itr = m_tempEnchantSpells.find(enchantId);

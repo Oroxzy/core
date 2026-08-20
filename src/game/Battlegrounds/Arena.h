@@ -233,6 +233,10 @@ class ArenaMgr
 
         // Item level / patch / disabled item spell checks. If reason is given it receives a chat-ready explanation.
         bool IsItemForbidden(ItemPrototype const* proto, ArenaType type, std::string* reason = nullptr) const;
+        // Resistance a player carries in on his gear, against the Arena.MaxResistance.* caps.
+        // Read from the items, not from his current stats - buffs at the orb would distort it and are
+        // stripped on entering anyway.
+        static bool HasExcessResistance(Player const* player, std::string* reason = nullptr);
 
         static char const* GetPatchName(uint8 patch);
 

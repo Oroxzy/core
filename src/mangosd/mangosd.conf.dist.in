@@ -3341,6 +3341,17 @@ DynamicRespawn.PlayersMaxLevelDiff = 0
 #        nothing in the Dalaran sewers where the sky is not visible. Off, The Tiger's Peak still snows.
 #        Default: 0 (disabled)
 #
+#    Arena.MaxResistance.Fire / .Nature / .Frost / .Shadow / .Arcane
+#        How much resistance a player may bring into an arena on his gear, per school. Queueing at the
+#        orb is refused above it, naming the school and the two numbers, because which piece to take
+#        off is his choice and telling him after he is already inside would strand him.
+#        Counted from the equipped items, not from his current resistance: at the orb he still carries
+#        whatever buffs he happens to have, and those are stripped on entering anyway.
+#        Defaults are the caps the Classic Duelers League runs with.
+#        Default: 100 (Fire, Nature, Frost, Arcane)
+#                 200 (Shadow)
+#                 0   (no limit for that school)
+#
 #    Arena.Spectate
 #        Offer the arena orb's spectate menu, which lets anybody watch a running match as an invisible
 #        observer. A spectator can not be seen, targeted, damaged, healed, buffed or spoken to, and
@@ -3412,6 +3423,11 @@ Arena.MaxItemLevel = 92
 Arena.MaxItemPatch = 10
 Arena.AllowItemSwap = 0
 Arena.RandomWeather = 0
+Arena.MaxResistance.Fire = 100
+Arena.MaxResistance.Nature = 100
+Arena.MaxResistance.Frost = 100
+Arena.MaxResistance.Shadow = 200
+Arena.MaxResistance.Arcane = 100
 Arena.Spectate = 1
 Arena.AllowTrinketSwap = 1
 Arena.TimeLimitMinutes = 25
