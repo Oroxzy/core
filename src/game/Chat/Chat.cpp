@@ -1192,6 +1192,12 @@ ChatCommand * ChatHandler::getCommandTable()
         { "rating",         SEC_GAMEMASTER,     true,  &ChatHandler::HandleArenaRatingCommand,         "", nullptr },
         { "setrating",      SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleArenaSetRatingCommand,      "", nullptr },
         { "resetratings",   SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleArenaResetRatingsCommand,   "", nullptr },
+        { "setmmr",         SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleArenaSetMatchmakerRatingCommand, "", nullptr },
+        { "set",            SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleArenaSetCommand,            "", nullptr },
+        { "ban",            SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleArenaBanCommand,            "", nullptr },
+        { "unban",          SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleArenaUnbanCommand,          "", nullptr },
+        { "list",           SEC_GAMEMASTER,     true,  &ChatHandler::HandleArenaListCommand,           "", nullptr },
+        { "panel",          SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleArenaPanelCommand,          "", nullptr },
         { nullptr,          0,                  false, nullptr,                                        "", nullptr }
     };
 

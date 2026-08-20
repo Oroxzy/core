@@ -33,6 +33,7 @@
 #include "InstanceData.h"
 #include "MapManager.h"
 #include "BattleGroundMgr.h"
+#include "Arena.h"
 #include "ArenaRating.h"
 
 bool ChatHandler::HandleHelpCommand(char* args)
@@ -2004,6 +2005,430 @@ bool ChatHandler::HandleArenaResetRatingsCommand(char* args)
         PSendSysMessage("All arena ratings dropped (%u rows).", removed);
     else
         PSendSysMessage("%s arena ratings dropped (%u rows).", GetArenaTypeName(type), removed);
+    return true;
+}
+
+/*
+ * .arena setmmr $bracket $mmr [$playername] - the matchmaking rating on its own.
+ *
+ * It decides who a player is matched against and is the number worth correcting after a rating was
+ * moved by hand; .arena setrating needs the visible rating as well, which is not always what one
+ * wants to touch.
+ */
+bool ChatHandler::HandleArenaSetMatchmakerRatingCommand(char* args)
+{
+    if (!*args)
+        return false;
+
+    if (!sArenaRatingMgr.IsAvailable())
+    {
+        SendSysMessage("Table `character_arena_stats` is missing - apply sql/arena/characters_arena.sql.");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    uint32 bracket = 0;
+    uint32 mmr = 0;
+    if (!ExtractUInt32(&args, bracket) || !ExtractUInt32(&args, mmr))
+        return false;
+
+    ArenaType const type = ArenaType(bracket);
+    if (type != ARENA_TYPE_1V1 && type != ARENA_TYPE_2V2 && type != ARENA_TYPE_3V3 && type != ARENA_TYPE_5V5)
+    {
+        SendSysMessage("Bracket must be the team size: 1, 2, 3 or 5.");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    Player* target;
+    ObjectGuid targetGuid;
+    std::string targetName;
+    if (!ExtractPlayerTarget(&args, &target, &targetGuid, &targetName))
+        return false;
+
+    ObjectGuid const guid = target ? target->GetObjectGuid() : targetGuid;
+    ArenaRatingEntry const entry = sArenaRatingMgr.Get(guid, type);
+
+    sArenaRatingMgr.Set(guid, type, entry.rating, mmr);
+    PSendSysMessage("%s: %s matchmaking rating set to %u (rating stays %u).",
+                    targetName.c_str(), GetArenaTypeName(type), mmr, entry.rating);
+    return true;
+}
+
+/*********************************************************/
+/***                 ARENA ADMIN PANEL                 ***/
+/*********************************************************/
+
+namespace
+{
+
+// A bracket list as an admin types it: "all", "none", or any mix of 1v1 / 2v2 / 3v3 / 5v5 (also
+// written 1, 2, 3, 5), separated by commas or spaces.
+bool ParseArenaBrackets(char const* text, bool out[ARENA_TYPES_COUNT])
+{
+    for (uint8 i = 0; i < ARENA_TYPES_COUNT; ++i)
+        out[i] = false;
+
+    if (!text || !*text)
+    {
+        for (uint8 i = 0; i < ARENA_TYPES_COUNT; ++i)
+            out[i] = true;                              // no list given means every bracket
+        return true;
+    }
+
+    std::string const list(text);
+    if (list.find("all") != std::string::npos)
+    {
+        for (uint8 i = 0; i < ARENA_TYPES_COUNT; ++i)
+            out[i] = true;
+        return true;
+    }
+    if (list.find("none") != std::string::npos)
+        return true;
+
+    bool any = false;
+    for (uint8 i = 0; i < ARENA_TYPES_COUNT; ++i)
+    {
+        ArenaType const type = GetArenaTypeByIndex(i);
+        if (list.find(GetArenaTypeName(type)) != std::string::npos)
+        {
+            out[i] = true;
+            any = true;
+        }
+    }
+
+    if (!any)                                           // plain numbers: "1 2 3 5"
+    {
+        for (size_t pos = 0; pos < list.length(); ++pos)
+        {
+            switch (list[pos])
+            {
+                case '1': out[0] = true; any = true; break;
+                case '2': out[1] = true; any = true; break;
+                case '3': out[2] = true; any = true; break;
+                case '5': out[3] = true; any = true; break;
+                default: break;
+            }
+        }
+    }
+
+    return any;
+}
+
+// The settings the panel and .arena set may change while the server runs. Arena.Enable is not among
+// them on purpose: the battleground templates are built once at startup.
+struct ArenaBoolOption { char const* name; eConfigBoolValues config; };
+struct ArenaUInt32Option { char const* name; eConfigUInt32Values config; uint32 min; uint32 max; };
+
+ArenaBoolOption const s_arenaBoolOptions[] =
+{
+    { "AllowItemSwap",        CONFIG_BOOL_ARENA_ALLOW_ITEM_SWAP },
+    { "AllowTrinketSwap",     CONFIG_BOOL_ARENA_ALLOW_TRINKET_SWAP },
+    { "RandomWeather",        CONFIG_BOOL_ARENA_RANDOM_WEATHER },
+    { "Spectate",             CONFIG_BOOL_ARENA_SPECTATE },
+    { "ResetAllCooldowns",    CONFIG_BOOL_ARENA_RESET_ALL_COOLDOWNS },
+    { "AnnounceQueue",        CONFIG_BOOL_ARENA_ANNOUNCE_QUEUE },
+    { "LeaveQueuesOnLogout",  CONFIG_BOOL_ARENA_LEAVE_QUEUES_ON_LOGOUT },
+    { "1v1.BlockHealerSpecs", CONFIG_BOOL_ARENA_1V1_BLOCK_HEALER_SPECS },
+};
+
+ArenaUInt32Option const s_arenaUInt32Options[] =
+{
+    { "MaxItemLevel",                CONFIG_UINT32_ARENA_MAX_ITEM_LEVEL,             1, 999 },
+    { "MaxItemPatch",                CONFIG_UINT32_ARENA_MAX_ITEM_PATCH,             0, 10 },
+    { "TimeLimitMinutes",            CONFIG_UINT32_ARENA_TIME_LIMIT_MINUTES,         1, 120 },
+    { "ReadyStartDelaySeconds",      CONFIG_UINT32_ARENA_READY_START_DELAY_SECONDS,  3, 60 },
+    { "InviteAcceptTimeSeconds",     CONFIG_UINT32_ARENA_INVITE_ACCEPT_TIME_SECONDS, 10, 80 },
+    { "MinLevel",                    CONFIG_UINT32_ARENA_MIN_LEVEL,                  1, PLAYER_MAX_LEVEL },
+    { "LeaveLockoutMinutes",         CONFIG_UINT32_ARENA_LEAVE_LOCKOUT_MINUTES,      0, 24 * 60 },
+    { "MaxResistance.Fire",          CONFIG_UINT32_ARENA_MAX_RES_FIRE,               0, 10000 },
+    { "MaxResistance.Nature",        CONFIG_UINT32_ARENA_MAX_RES_NATURE,             0, 10000 },
+    { "MaxResistance.Frost",         CONFIG_UINT32_ARENA_MAX_RES_FROST,              0, 10000 },
+    { "MaxResistance.Shadow",        CONFIG_UINT32_ARENA_MAX_RES_SHADOW,             0, 10000 },
+    { "MaxResistance.Arcane",        CONFIG_UINT32_ARENA_MAX_RES_ARCANE,             0, 10000 },
+    { "Rated.Mode",                  CONFIG_UINT32_ARENA_RATED_MODE,                 0, 2 },
+    { "Rated.StartRating",           CONFIG_UINT32_ARENA_RATED_START_RATING,         0, 5000 },
+    { "Rated.StartMatchmakerRating", CONFIG_UINT32_ARENA_RATED_START_MMR,            1, 5000 },
+    { "Rated.WinModifierLow",        CONFIG_UINT32_ARENA_RATED_WIN_MODIFIER_LOW,     1, 1000 },
+    { "Rated.WinModifier",           CONFIG_UINT32_ARENA_RATED_WIN_MODIFIER,         1, 1000 },
+    { "Rated.LoseModifier",          CONFIG_UINT32_ARENA_RATED_LOSE_MODIFIER,        1, 1000 },
+    { "Rated.MatchmakerModifier",    CONFIG_UINT32_ARENA_RATED_MMR_MODIFIER,         1, 1000 },
+    { "Rated.DrawRatingLoss",        CONFIG_UINT32_ARENA_RATED_DRAW_LOSS,            0, 1000 },
+    { "Rated.MaxRatingDifference",   CONFIG_UINT32_ARENA_RATED_MAX_MMR_DIFFERENCE,   0, 5000 },
+    { "Rated.RatingDiscardMinutes",  CONFIG_UINT32_ARENA_RATED_MMR_DISCARD_MINUTES,  0, 60 },
+    { "Rated.LadderMinGames",        CONFIG_UINT32_ARENA_RATED_LADDER_MIN_GAMES,     0, 1000 },
+};
+
+// How many ban list rows one panel request answers with. The table holds several hundred entries and
+// every row is a chat packet of its own - the panel asks for the next page instead.
+uint32 const ARENA_PANEL_PAGE = 50;
+
+} // namespace
+
+// .arena set [$option [$value]] - lists or changes a setting for as long as the server runs
+bool ChatHandler::HandleArenaSetCommand(char* args)
+{
+    char* option = ExtractLiteralArg(&args);
+    if (!option)
+    {
+        SendSysMessage("Arena settings (runtime only - put them in mangosd.conf to keep them):");
+        for (auto const& entry : s_arenaBoolOptions)
+            PSendSysMessage("  Arena.%s = %s", entry.name, sWorld.getConfig(entry.config) ? "1" : "0");
+        for (auto const& entry : s_arenaUInt32Options)
+            PSendSysMessage("  Arena.%s = %u", entry.name, sWorld.getConfig(entry.config));
+        return true;
+    }
+
+    // "Arena.MaxItemLevel" and "MaxItemLevel" both work
+    std::string name(option);
+    if (name.compare(0, 6, "Arena.") == 0)
+        name = name.substr(6);
+
+    for (auto const& entry : s_arenaBoolOptions)
+    {
+        if (name != entry.name)
+            continue;
+
+        uint32 value = 0;
+        if (!ExtractUInt32(&args, value))
+        {
+            PSendSysMessage("Arena.%s = %s", entry.name, sWorld.getConfig(entry.config) ? "1" : "0");
+            return true;
+        }
+
+        sWorld.setConfig(entry.config, value != 0);
+        PSendSysMessage("Arena.%s set to %s.", entry.name, value ? "1" : "0");
+        return true;
+    }
+
+    for (auto const& entry : s_arenaUInt32Options)
+    {
+        if (name != entry.name)
+            continue;
+
+        uint32 value = 0;
+        if (!ExtractUInt32(&args, value))
+        {
+            PSendSysMessage("Arena.%s = %u", entry.name, sWorld.getConfig(entry.config));
+            return true;
+        }
+
+        if (value < entry.min || value > entry.max)
+        {
+            PSendSysMessage("Arena.%s takes %u to %u.", entry.name, entry.min, entry.max);
+            SetSentErrorMessage(true);
+            return false;
+        }
+
+        sWorld.setConfig(entry.config, value);
+        PSendSysMessage("Arena.%s set to %u.", entry.name, value);
+        return true;
+    }
+
+    PSendSysMessage("There is no arena setting called %s. Use .arena set without arguments for the list.", option);
+    SetSentErrorMessage(true);
+    return false;
+}
+
+// .arena ban $spellId [$brackets] - forbids a spell (or an item's on-use spell) in the arena
+bool ChatHandler::HandleArenaBanCommand(char* args)
+{
+    if (!*args)
+        return false;
+
+    uint32 spellId = 0;
+    if (!ExtractUInt32(&args, spellId))
+        return false;
+
+    bool brackets[ARENA_TYPES_COUNT];
+    if (!ParseArenaBrackets(args, brackets))
+    {
+        SendSysMessage("Brackets: all, or any of 1v1 2v2 3v3 5v5.");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    if (!sArenaMgr.SetSpellDisabled(spellId, brackets))
+    {
+        PSendSysMessage("There is no spell %u.", spellId);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    SpellEntry const* spell = sSpellMgr.GetSpellEntry(spellId);
+    std::ostringstream where;
+    for (uint8 i = 0; i < ARENA_TYPES_COUNT; ++i)
+        if (brackets[i])
+            where << (where.str().empty() ? "" : ", ") << GetArenaTypeName(GetArenaTypeByIndex(i));
+
+    if (where.str().empty())
+        PSendSysMessage("|cffffffff|Hspell:%u|h[%s]|h|r is allowed in every arena again.", spellId, spell->SpellName[0].c_str());
+    else
+        PSendSysMessage("|cffffffff|Hspell:%u|h[%s]|h|r is banned in %s.", spellId, spell->SpellName[0].c_str(), where.str().c_str());
+    return true;
+}
+
+// .arena unban $spellId - the same thing with an empty bracket list
+bool ChatHandler::HandleArenaUnbanCommand(char* args)
+{
+    if (!*args)
+        return false;
+
+    uint32 spellId = 0;
+    if (!ExtractUInt32(&args, spellId))
+        return false;
+
+    bool const none[ARENA_TYPES_COUNT] = { false, false, false, false };
+    if (!sArenaMgr.SetSpellDisabled(spellId, none))
+    {
+        PSendSysMessage("There is no spell %u.", spellId);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    SpellEntry const* spell = sSpellMgr.GetSpellEntry(spellId);
+    PSendSysMessage("|cffffffff|Hspell:%u|h[%s]|h|r is allowed in every arena again.", spellId, spell->SpellName[0].c_str());
+    return true;
+}
+
+// .arena list - the matches that are running right now
+bool ChatHandler::HandleArenaListCommand(char* /*args*/)
+{
+    uint32 shown = 0;
+    for (uint32 bgTypeId = BATTLEGROUND_ARENA_FIRST; bgTypeId <= BATTLEGROUND_ARENA_LAST; ++bgTypeId)
+    {
+        for (BattleGroundSet::const_iterator itr = sBattleGroundMgr.GetBattleGroundsBegin(BattleGroundTypeId(bgTypeId));
+             itr != sBattleGroundMgr.GetBattleGroundsEnd(BattleGroundTypeId(bgTypeId)); ++itr)
+        {
+            BattleGround* bg = itr->second;
+            if (!itr->first || !bg->GetPlayersSize())   // 0 is the template, not a match
+                continue;
+
+            Arena* arena = static_cast<Arena*>(bg);
+            std::ostringstream names;
+            for (auto const& player : bg->GetPlayers())
+            {
+                std::string name;
+                if (sObjectMgr.GetPlayerNameByGUID(player.first, name))
+                    names << (names.str().empty() ? "" : ", ") << name;
+            }
+
+            PSendSysMessage("  #%u %s (%s%s) - %s", bg->GetInstanceID(), bg->GetName(),
+                            GetArenaTypeName(arena->GetArenaType()), arena->IsRated() ? ", rated" : "",
+                            names.str().c_str());
+            ++shown;
+        }
+    }
+
+    if (!shown)
+        SendSysMessage("No arena match is running.");
+    return true;
+}
+
+/*
+ * .arena panel $what [$argument] - the same data, in one line per record, for the admin addon.
+ *
+ * The 1.12 client can not ask the server anything an addon could read, so the panel sends these
+ * commands as chat and reads the answers back out of the system chat. Every line starts with
+ * ARENA| so the addon can recognise its own traffic and keep it out of the chat window.
+ */
+bool ChatHandler::HandleArenaPanelCommand(char* args)
+{
+    char* what = ExtractLiteralArg(&args);
+    if (!what)
+        return false;
+
+    std::string const query(what);
+
+    if (query == "config")
+    {
+        for (auto const& entry : s_arenaBoolOptions)
+            PSendSysMessage("ARENA|cfg|%s|%u|bool", entry.name, sWorld.getConfig(entry.config) ? 1 : 0);
+        for (auto const& entry : s_arenaUInt32Options)
+            PSendSysMessage("ARENA|cfg|%s|%u|%u|%u", entry.name, sWorld.getConfig(entry.config), entry.min, entry.max);
+        PSendSysMessage("ARENA|done|config");
+        return true;
+    }
+
+    if (query == "matches")
+    {
+        for (uint32 bgTypeId = BATTLEGROUND_ARENA_FIRST; bgTypeId <= BATTLEGROUND_ARENA_LAST; ++bgTypeId)
+        {
+            for (BattleGroundSet::const_iterator itr = sBattleGroundMgr.GetBattleGroundsBegin(BattleGroundTypeId(bgTypeId));
+                 itr != sBattleGroundMgr.GetBattleGroundsEnd(BattleGroundTypeId(bgTypeId)); ++itr)
+            {
+                BattleGround* bg = itr->second;
+                if (!itr->first || !bg->GetPlayersSize())
+                    continue;
+
+                Arena* arena = static_cast<Arena*>(bg);
+                std::ostringstream names;
+                for (auto const& player : bg->GetPlayers())
+                {
+                    std::string name;
+                    if (sObjectMgr.GetPlayerNameByGUID(player.first, name))
+                        names << (names.str().empty() ? "" : ", ") << name;
+                }
+
+                PSendSysMessage("ARENA|match|%u|%s|%s|%u|%u|%s", bg->GetInstanceID(), bg->GetName(),
+                                GetArenaTypeName(arena->GetArenaType()), uint32(bg->GetStatus()),
+                                arena->IsRated() ? 1 : 0, names.str().c_str());
+            }
+        }
+        PSendSysMessage("ARENA|done|matches");
+        return true;
+    }
+
+    if (query == "spells")
+    {
+        uint32 offset = 0;
+        ExtractOptUInt32(&args, offset, 0);
+
+        // the map has no order of its own; sorting keeps the pages stable between requests
+        std::vector<uint32> ids;
+        ids.reserve(sArenaMgr.GetDisabledSpells().size());
+        for (auto const& itr : sArenaMgr.GetDisabledSpells())
+            ids.push_back(itr.first);
+        std::sort(ids.begin(), ids.end());
+
+        uint32 sent = 0;
+        for (uint32 i = offset; i < ids.size() && sent < ARENA_PANEL_PAGE; ++i, ++sent)
+        {
+            auto const& data = sArenaMgr.GetDisabledSpells().find(ids[i])->second;
+            SpellEntry const* spell = sSpellMgr.GetSpellEntry(ids[i]);
+            PSendSysMessage("ARENA|spell|%u|%u%u%u%u|%s", ids[i],
+                            uint32(data.disabledForType[0]), uint32(data.disabledForType[1]),
+                            uint32(data.disabledForType[2]), uint32(data.disabledForType[3]),
+                            spell ? spell->SpellName[0].c_str() : "?");
+        }
+
+        uint32 const next = offset + sent;
+        PSendSysMessage("ARENA|done|spells|%u|%u", next < ids.size() ? next : 0, uint32(ids.size()));
+        return true;
+    }
+
+    if (query == "rating")
+    {
+        Player* target;
+        ObjectGuid targetGuid;
+        std::string targetName;
+        if (!ExtractPlayerTarget(&args, &target, &targetGuid, &targetName))
+            return false;
+
+        ObjectGuid const guid = target ? target->GetObjectGuid() : targetGuid;
+        for (uint8 index = 0; index < ARENA_TYPES_COUNT; ++index)
+        {
+            ArenaType const type = GetArenaTypeByIndex(index);
+            ArenaRatingEntry const entry = sArenaRatingMgr.Get(guid, type);
+            PSendSysMessage("ARENA|rating|%s|%s|%u|%u|%u|%u|%u|%u", targetName.c_str(), GetArenaTypeName(type),
+                            entry.rating, entry.mmr, entry.games, entry.wins, entry.bestRating,
+                            sArenaRatingMgr.HasPlayed(guid, type) ? 1 : 0);
+        }
+        PSendSysMessage("ARENA|done|rating");
+        return true;
+    }
+
+    PSendSysMessage("ARENA|done|unknown");
     return true;
 }
 

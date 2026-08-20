@@ -259,11 +259,19 @@ class ArenaMgr
 
         static char const* GetPatchName(uint8 patch);
 
-    private:
         struct DisabledSpell
         {
             bool disabledForType[ARENA_TYPES_COUNT] = { false, false, false, false };
         };
+
+        // The whole ban list, for the admin panel and the .arena commands.
+        std::unordered_map<uint32, DisabledSpell> const& GetDisabledSpells() const { return m_disabledSpells; }
+        // Bans or unbans a spell for the given brackets and writes the row through to the world
+        // database, so a change survives a restart the way one made in the table would. Passing four
+        // times false removes the row. Returns false only if the spell does not exist.
+        bool SetSpellDisabled(uint32 spellId, bool const perType[ARENA_TYPES_COUNT]);
+
+    private:
         std::unordered_map<uint32, DisabledSpell> m_disabledSpells;
         std::unordered_map<uint32, uint8> m_itemMinPatch;
         // enchantment id -> the forbidden spell that applies it, for the temporary enchants a player can

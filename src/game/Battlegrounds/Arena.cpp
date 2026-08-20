@@ -149,6 +149,58 @@ bool ArenaMgr::IsSpellDisabled(uint32 spellId, ArenaType type) const
     return itr->second.disabledForType[GetArenaTypeIndex(type)];
 }
 
+/*
+ * Bans or unbans one spell, in memory and in the table, so a change made from the admin panel is
+ * the same change somebody would have made in `disabled_arena_spells` by hand.
+ *
+ * The temporary enchantment map is kept in step here rather than by reloading everything: a ban is
+ * one row, and LoadFromDB would go through the whole item table for the patch data as well.
+ */
+bool ArenaMgr::SetSpellDisabled(uint32 spellId, bool const perType[ARENA_TYPES_COUNT])
+{
+    SpellEntry const* spell = sSpellMgr.GetSpellEntry(spellId);
+    if (!spell)
+        return false;
+
+    bool anyType = false;
+    for (uint8 i = 0; i < ARENA_TYPES_COUNT; ++i)
+        anyType = anyType || perType[i];
+
+    // the enchantments this spell applies, so a weapon oil can be taken off at the door
+    std::vector<uint32> enchants;
+    if (spell->SpellFamilyName != SPELLFAMILY_ROGUE)
+        for (uint8 i = 0; i < MAX_EFFECT_INDEX; ++i)
+            if (spell->Effect[i] == SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY && spell->EffectMiscValue[i] > 0)
+                enchants.push_back(uint32(spell->EffectMiscValue[i]));
+
+    if (anyType)
+    {
+        DisabledSpell& data = m_disabledSpells[spellId];
+        for (uint8 i = 0; i < ARENA_TYPES_COUNT; ++i)
+            data.disabledForType[i] = perType[i];
+
+        for (uint32 enchantId : enchants)
+            m_tempEnchantSpells[enchantId] = spellId;
+
+        std::string description = spell->SpellName[0];
+        WorldDatabase.escape_string(description);
+        WorldDatabase.PExecute("REPLACE INTO `disabled_arena_spells` (`entry`, `1v1`, `2v2`, `3v3`, `5v5`, `description`) "
+                               "VALUES (%u, %u, %u, %u, %u, '%s')",
+                               spellId, uint32(perType[0]), uint32(perType[1]), uint32(perType[2]), uint32(perType[3]),
+                               description.c_str());
+    }
+    else
+    {
+        m_disabledSpells.erase(spellId);
+        for (uint32 enchantId : enchants)
+            m_tempEnchantSpells.erase(enchantId);
+
+        WorldDatabase.PExecute("DELETE FROM `disabled_arena_spells` WHERE `entry` = %u", spellId);
+    }
+
+    return true;
+}
+
 uint8 ArenaMgr::GetItemMinPatch(uint32 itemId) const
 {
     auto itr = m_itemMinPatch.find(itemId);

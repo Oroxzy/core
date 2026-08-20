@@ -397,6 +397,12 @@ class ChatHandler
         bool HandleArenaRatingCommand(char *args);
         bool HandleArenaSetRatingCommand(char *args);
         bool HandleArenaResetRatingsCommand(char *args);
+        bool HandleArenaSetMatchmakerRatingCommand(char *args);
+        bool HandleArenaSetCommand(char *args);
+        bool HandleArenaBanCommand(char *args);
+        bool HandleArenaUnbanCommand(char *args);
+        bool HandleArenaListCommand(char *args);
+        bool HandleArenaPanelCommand(char *args);
         // Spell
         bool HandleSpellEffectsCommand(char *args);
         bool HandleSpellInfosCommand(char *args);

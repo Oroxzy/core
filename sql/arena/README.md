@@ -32,9 +32,22 @@ Tol'Viron.
    next to it. The orb offers queueing (solo / group), leaving queues, spectating and, for
    administrators, the gear rules.
 
-GM commands: `.arena rating [$name]` shows a character's four brackets, `.arena setrating $bracket
-$rating [$mmr] [$name]` sets one (bracket is the team size: 1, 2, 3 or 5) and `.arena resetratings
-[$bracket]` wipes a ladder. They are hardcoded, so no row in the `command` table is needed.
+GM commands, all hardcoded so no row in the `command` table is needed:
+
+```
+.arena list                                  the running matches
+.arena set [Option [Value]]                  list or change a setting while the server runs
+.arena ban <spellId> [1v1,2v2,3v3,5v5|all]   forbid a spell (or an item's on-use spell)
+.arena unban <spellId>                       and allow it again
+.arena rating [$name]                        all four brackets of a character
+.arena setrating <bracket> <rating> [mmr] [$name]
+.arena setmmr <bracket> <mmr> [$name]        the matchmaking rating on its own
+.arena resetratings [bracket]                wipe a ladder
+.arena panel <what>                          the same data in one line per record, for the addon
+```
+
+The `ArenaAdmin` addon in the client patch repository is a control panel built on those commands:
+running matches, every setting, the ban list with a checkbox per bracket, and the ratings.
 
 ## Rules implemented in the core
 
