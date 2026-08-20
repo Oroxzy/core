@@ -2184,6 +2184,48 @@ bool ChatHandler::HandleArenaSetCommand(char* args)
     if (name.compare(0, 6, "Arena.") == 0)
         name = name.substr(6);
 
+    // Not a config value but the same kind of switch: which arena the queue picks. The orb's admin
+    // menu can do this too; here it is reachable without walking to the orb.
+    if (name == "Map")
+    {
+        char* pick = ExtractLiteralArg(&args);
+        if (!pick)
+        {
+            ArenaMapType const forced = sBattleGroundMgr.GetForcedArenaMap();
+            PSendSysMessage("Arena.Map = %s", forced < ARENA_MAPS_COUNT ? GetArenaMapName(forced) : "any");
+            return true;
+        }
+
+        std::string wanted(pick);
+        if (wanted == "any" || wanted == "all")
+        {
+            sBattleGroundMgr.SetForcedArenaMap(ArenaMapType(ARENA_MAPS_COUNT));
+            SendSysMessage("The queue picks an arena as usual again.");
+            return true;
+        }
+
+        uint32 index = ARENA_MAPS_COUNT;
+        if (wanted.length() == 1 && wanted[0] >= '0' && wanted[0] <= '5')
+            index = uint32(wanted[0] - '0');
+        else
+            for (uint32 i = 0; i < ARENA_MAPS_COUNT; ++i)
+                if (strstr(GetArenaMapName(ArenaMapType(i)), pick))
+                    index = i;
+
+        if (index >= ARENA_MAPS_COUNT)
+        {
+            SendSysMessage("Arena.Map takes any, 0-5, or part of an arena's name:");
+            for (uint32 i = 0; i < ARENA_MAPS_COUNT; ++i)
+                PSendSysMessage("  %u = %s", i, GetArenaMapName(ArenaMapType(i)));
+            SetSentErrorMessage(true);
+            return false;
+        }
+
+        sBattleGroundMgr.SetForcedArenaMap(ArenaMapType(index));
+        PSendSysMessage("Every arena match is played in %s until this is released again.", GetArenaMapName(ArenaMapType(index)));
+        return true;
+    }
+
     for (auto const& entry : s_arenaBoolOptions)
     {
         if (name != entry.name)
@@ -2230,14 +2272,71 @@ bool ChatHandler::HandleArenaSetCommand(char* args)
     return false;
 }
 
-// .arena ban $spellId [$brackets] - forbids a spell (or an item's on-use spell) in the arena
+/*
+ * Reads either a spell id or "item <id>" / an item link. Items are what an admin actually wants to
+ * ban most of the time; the table can only hold spells, so an item is banned through the spells it
+ * casts. Returns false and explains itself if the item has no usable spell at all.
+ */
+bool ChatHandler::ExtractArenaBanTarget(char** args, std::vector<uint32>& spells, std::string& what)
+{
+    char* first = ExtractLiteralArg(args, "item");
+    if (first)
+    {
+        uint32 itemId = 0;
+        if (!ExtractUint32KeyFromLink(args, "Hitem", itemId) && !ExtractUInt32(args, itemId))
+            return false;
+
+        ItemPrototype const* proto = sObjectMgr.GetItemPrototype(itemId);
+        if (!proto)
+        {
+            PSendSysMessage("There is no item %u.", itemId);
+            SetSentErrorMessage(true);
+            return false;
+        }
+
+        ArenaMgr::GetItemSpells(proto, spells);
+        if (spells.empty())
+        {
+            PSendSysMessage("|cffffffff|Hitem:%u:0:0:0|h[%s]|h|r has no spell on it - there is nothing to ban.",
+                                     itemId, proto->Name1);
+            SetSentErrorMessage(true);
+            return false;
+        }
+
+        std::ostringstream ss;
+        ss << "|cffffffff|Hitem:" << itemId << ":0:0:0|h[" << proto->Name1 << "]|h|r";
+        what = ss.str();
+        return true;
+    }
+
+    uint32 spellId = 0;
+    if (!ExtractUint32KeyFromLink(args, "Hspell", spellId) && !ExtractUInt32(args, spellId))
+        return false;
+
+    SpellEntry const* spell = sSpellMgr.GetSpellEntry(spellId);
+    if (!spell)
+    {
+        PSendSysMessage("There is no spell %u.", spellId);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    spells.push_back(spellId);
+    std::ostringstream ss;
+    ss << "|cffffffff|Hspell:" << spellId << "|h[" << spell->SpellName[0] << "]|h|r";
+    what = ss.str();
+    return true;
+}
+
+// .arena ban <$spellId | item $itemId> [$brackets] - forbids it in the arena
 bool ChatHandler::HandleArenaBanCommand(char* args)
 {
     if (!*args)
         return false;
 
-    uint32 spellId = 0;
-    if (!ExtractUInt32(&args, spellId))
+    std::vector<uint32> spells;
+    std::string what;
+    if (!ExtractArenaBanTarget(&args, spells, what))
         return false;
 
     bool brackets[ARENA_TYPES_COUNT];
@@ -2248,46 +2347,38 @@ bool ChatHandler::HandleArenaBanCommand(char* args)
         return false;
     }
 
-    if (!sArenaMgr.SetSpellDisabled(spellId, brackets))
-    {
-        PSendSysMessage("There is no spell %u.", spellId);
-        SetSentErrorMessage(true);
-        return false;
-    }
+    for (uint32 spellId : spells)
+        sArenaMgr.SetSpellDisabled(spellId, brackets);
 
-    SpellEntry const* spell = sSpellMgr.GetSpellEntry(spellId);
     std::ostringstream where;
     for (uint8 i = 0; i < ARENA_TYPES_COUNT; ++i)
         if (brackets[i])
             where << (where.str().empty() ? "" : ", ") << GetArenaTypeName(GetArenaTypeByIndex(i));
 
     if (where.str().empty())
-        PSendSysMessage("|cffffffff|Hspell:%u|h[%s]|h|r is allowed in every arena again.", spellId, spell->SpellName[0].c_str());
+        PSendSysMessage("%s is allowed in every arena again.", what.c_str());
     else
-        PSendSysMessage("|cffffffff|Hspell:%u|h[%s]|h|r is banned in %s.", spellId, spell->SpellName[0].c_str(), where.str().c_str());
+        PSendSysMessage("%s is banned in %s (%u spell%s).", what.c_str(), where.str().c_str(),
+                        uint32(spells.size()), spells.size() == 1 ? "" : "s");
     return true;
 }
 
-// .arena unban $spellId - the same thing with an empty bracket list
+// .arena unban <$spellId | item $itemId> - the same thing with an empty bracket list
 bool ChatHandler::HandleArenaUnbanCommand(char* args)
 {
     if (!*args)
         return false;
 
-    uint32 spellId = 0;
-    if (!ExtractUInt32(&args, spellId))
+    std::vector<uint32> spells;
+    std::string what;
+    if (!ExtractArenaBanTarget(&args, spells, what))
         return false;
 
     bool const none[ARENA_TYPES_COUNT] = { false, false, false, false };
-    if (!sArenaMgr.SetSpellDisabled(spellId, none))
-    {
-        PSendSysMessage("There is no spell %u.", spellId);
-        SetSentErrorMessage(true);
-        return false;
-    }
+    for (uint32 spellId : spells)
+        sArenaMgr.SetSpellDisabled(spellId, none);
 
-    SpellEntry const* spell = sSpellMgr.GetSpellEntry(spellId);
-    PSendSysMessage("|cffffffff|Hspell:%u|h[%s]|h|r is allowed in every arena again.", spellId, spell->SpellName[0].c_str());
+    PSendSysMessage("%s is allowed in every arena again.", what.c_str());
     return true;
 }
 
@@ -2430,9 +2521,35 @@ bool ChatHandler::HandleArenaPanelCommand(char* args)
     if (query == "config")
     {
         for (auto const& entry : s_arenaBoolOptions)
-            PSendSysMessage("ARENA|cfg|%s|%u|bool", entry.name, sWorld.getConfig(entry.config) ? 1 : 0);
+            PSendSysMessage("ARENA|cfg|%s|%u|bool|", entry.name, sWorld.getConfig(entry.config) ? 1 : 0);
+
         for (auto const& entry : s_arenaUInt32Options)
-            PSendSysMessage("ARENA|cfg|%s|%u|%u|%u", entry.name, sWorld.getConfig(entry.config), entry.min, entry.max);
+        {
+            // a number that means something gets its meaning sent along, the way the orb shows it
+            std::string display;
+            if (!strcmp(entry.name, "MaxItemPatch"))
+                display = ArenaMgr::GetPatchName(uint8(sWorld.getConfig(entry.config)));
+            else if (!strcmp(entry.name, "Rated.Mode"))
+            {
+                switch (sWorld.getConfig(entry.config))
+                {
+                    case ARENA_RATED_OFF:     display = "nothing is rated"; break;
+                    case ARENA_RATED_PREMADE: display = "premade sides and every 1v1"; break;
+                    case ARENA_RATED_ALL:     display = "every full match"; break;
+                }
+            }
+
+            PSendSysMessage("ARENA|cfg|%s|%u|%u|%u|%s", entry.name, sWorld.getConfig(entry.config),
+                            entry.min, entry.max, display.c_str());
+        }
+
+        // which arena the queue picks, and the six it can pick from
+        ArenaMapType const forced = sBattleGroundMgr.GetForcedArenaMap();
+        std::ostringstream maps;
+        for (uint32 i = 0; i < ARENA_MAPS_COUNT; ++i)
+            maps << "|" << GetArenaMapName(ArenaMapType(i));
+        PSendSysMessage("ARENA|map|%u%s", uint32(forced), maps.str().c_str());
+
         PSendSysMessage("ARENA|done|config");
         return true;
     }
@@ -2486,10 +2603,15 @@ bool ChatHandler::HandleArenaPanelCommand(char* args)
         {
             auto const& data = sArenaMgr.GetDisabledSpells().find(ids[i])->second;
             SpellEntry const* spell = sSpellMgr.GetSpellEntry(ids[i]);
-            PSendSysMessage("ARENA|spell|%u|%u%u%u%u|%s", ids[i],
+
+            // most of the list is items - the row names the item it came from, if it is one
+            uint32 const itemId = sArenaMgr.GetItemForSpell(ids[i]);
+            ItemPrototype const* item = itemId ? sObjectMgr.GetItemPrototype(itemId) : nullptr;
+
+            PSendSysMessage("ARENA|spell|%u|%u%u%u%u|%u|%s|%s", ids[i],
                             uint32(data.disabledForType[0]), uint32(data.disabledForType[1]),
                             uint32(data.disabledForType[2]), uint32(data.disabledForType[3]),
-                            spell ? spell->SpellName[0].c_str() : "?");
+                            itemId, spell ? spell->SpellName[0].c_str() : "?", item ? item->Name1 : "");
         }
 
         uint32 const next = offset + sent;

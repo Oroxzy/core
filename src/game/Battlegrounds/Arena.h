@@ -218,11 +218,14 @@ enum ArenaTimers
 class ArenaScore : public BattleGroundScore
 {
     public:
-        ArenaScore() : damageDone(0), healingDone(0), ready(false), newRating(0), ratingChange(0) {}
+        ArenaScore() : damageDone(0), healingDone(0), ready(false), newRating(0), ratingChange(0), team(TEAM_NONE) {}
         virtual ~ArenaScore() {}
 
         uint32 damageDone;
         uint32 healingDone;
+        // Which side he fought on. Kept here rather than asked of the battleground, because a player
+        // who left has no team there any more - and his row outlives him on the scoreboard.
+        Team team;
         // Shown as two more scoreboard columns. The rating is filled when the player enters, so the
         // column means something during the match too, and overwritten at the end of a rated one.
         // Both are always sent: the 1.12 client takes its columns from WorldStateUI.dbc by map id,
@@ -266,6 +269,13 @@ class ArenaMgr
 
         // The whole ban list, for the admin panel and the .arena commands.
         std::unordered_map<uint32, DisabledSpell> const& GetDisabledSpells() const { return m_disabledSpells; }
+        // The item a banned spell belongs to, 0 for a spell a player casts himself. Most of the ban
+        // list is items - the table holds their on-use spell, because that is what has to be refused.
+        uint32 GetItemForSpell(uint32 spellId) const;
+        // Every spell an item can put on the arena floor: its on-use spells.
+        static void GetItemSpells(ItemPrototype const* proto, std::vector<uint32>& out);
+        // Rebuilds the banned spell -> item map. Called after the ban list changes.
+        void BuildSpellItemMap();
         // Bans or unbans a spell for the given brackets and writes the row through to the world
         // database, so a change survives a restart the way one made in the table would. Passing four
         // times false removes the row. Returns false only if the spell does not exist.
@@ -274,6 +284,8 @@ class ArenaMgr
     private:
         std::unordered_map<uint32, DisabledSpell> m_disabledSpells;
         std::unordered_map<uint32, uint8> m_itemMinPatch;
+        // banned spell -> the item it comes from, filled while the ban list is read
+        std::unordered_map<uint32, uint32> m_spellItem;
         // enchantment id -> the forbidden spell that applies it, for the temporary enchants a player can
         // walk in with (weapon oils, sharpening and weight stones). Rogue poisons are never in here.
         std::unordered_map<uint32, uint32> m_tempEnchantSpells;
@@ -365,6 +377,8 @@ class Arena : public BattleGround
         void RestorePlayer(Player* player, bool participant);   // on leave / end (visitors keep their buffs)
         static void ResetArenaCooldowns(Player* player);
         bool m_leaverIsParticipant;                         // set by RemovePlayerAtLeave for RemovePlayer (the base erased the player list already)
+        // the leaver's scoreboard row, in flight between the two of them (see RemovePlayerAtLeave)
+        ArenaScore* m_keptScore = nullptr;
         bool m_spectatorsRemoved;                           // RemoveSpectators ran after the end
 
         // rating (see ArenaRating.h)

@@ -67,20 +67,7 @@ namespace
         ACTION_ADMIN_MAP_ANY            = 5,                 // release the pinned map again
     };
 
-    // Arena names for the gamemaster's map picker, indexed by ArenaMapType.
-    char const* GetArenaMapName(ArenaMapType map)
-    {
-        switch (map)
-        {
-            case ARENA_MAP_NAGRAND:     return "Nagrand Arena";
-            case ARENA_MAP_BLADES_EDGE: return "Blade's Edge Arena";
-            case ARENA_MAP_LORDAERON:   return "Ruins of Lordaeron";
-            case ARENA_MAP_DALARAN:     return "Dalaran Sewers";
-            case ARENA_MAP_TIGERS_PEAK: return "The Tiger's Peak";
-            case ARENA_MAP_TOLVIRON:    return "Tol'Viron Arena";
-            default:                    return "Unknown";
-        }
-    }
+    // (the arena names live in SharedDefines.h now - the gamemaster commands need them too)
 
     char const* GetWeatherName(WeatherType type)
     {

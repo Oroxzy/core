@@ -405,6 +405,8 @@ class ChatHandler
         bool HandleArenaPanelCommand(char *args);
         bool HandleArenaSpectatorsCommand(char *args);
         bool HandleArenaKickSpectatorsCommand(char *args);
+        // reads a spell id or "item <id>" for .arena ban / unban
+        bool ExtractArenaBanTarget(char** args, std::vector<uint32>& spells, std::string& what);
         // Spell
         bool HandleSpellEffectsCommand(char *args);
         bool HandleSpellInfosCommand(char *args);

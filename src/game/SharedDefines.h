@@ -1790,6 +1790,22 @@ inline char const* GetArenaTypeName(ArenaType type)
     }
 }
 
+// The six arenas by name. Lives here rather than in the script file because the gamemaster commands
+// need it too.
+inline char const* GetArenaMapName(ArenaMapType map)
+{
+    switch (map)
+    {
+        case ARENA_MAP_NAGRAND:     return "Nagrand Arena";
+        case ARENA_MAP_BLADES_EDGE: return "Blade's Edge Arena";
+        case ARENA_MAP_LORDAERON:   return "Ruins of Lordaeron";
+        case ARENA_MAP_DALARAN:     return "Dalaran Sewers";
+        case ARENA_MAP_TIGERS_PEAK: return "The Tiger's Peak";
+        case ARENA_MAP_TOLVIRON:    return "Tol'Viron Arena";
+        default:                    return "Unknown";
+    }
+}
+
 inline BattleGroundTypeId GetBattleGroundTypeIdByMapId(uint32 mapId)
 {
     switch(mapId)

@@ -135,6 +135,9 @@ void ArenaMgr::LoadFromDB()
         }
         sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, ">> Loaded arena item patch data for " SIZEFMTD " items added after patch 1.2", m_itemMinPatch.size());
     }
+
+    // which item each banned spell belongs to, for the ban list in the admin panel
+    BuildSpellItemMap();
 }
 
 bool ArenaMgr::IsSpellDisabled(uint32 spellId, ArenaType type) const
@@ -147,6 +150,50 @@ bool ArenaMgr::IsSpellDisabled(uint32 spellId, ArenaType type) const
         return false;
 
     return itr->second.disabledForType[GetArenaTypeIndex(type)];
+}
+
+void ArenaMgr::GetItemSpells(ItemPrototype const* proto, std::vector<uint32>& out)
+{
+    if (!proto)
+        return;
+
+    for (int i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+        if (proto->Spells[i].SpellId)
+            out.push_back(proto->Spells[i].SpellId);
+}
+
+uint32 ArenaMgr::GetItemForSpell(uint32 spellId) const
+{
+    auto itr = m_spellItem.find(spellId);
+    return itr != m_spellItem.end() ? itr->second : 0;
+}
+
+/*
+ * Which item a banned spell belongs to. Most of the ban list is items - the table can only hold
+ * spells, because a spell is what the cast check has to refuse - so without this the list reads as
+ * a wall of spell names where an admin is looking for a potion.
+ *
+ * Built by walking the item prototypes once, after the ban list is loaded, and only remembering the
+ * spells that are actually banned. The first item wins: several items share one spell (every rank of
+ * a potion of the same kind), and for naming the row any of them does.
+ */
+void ArenaMgr::BuildSpellItemMap()
+{
+    m_spellItem.clear();
+    if (m_disabledSpells.empty())
+        return;
+
+    for (auto const& itr : sObjectMgr.GetItemPrototypeMap())
+    {
+        for (int i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+        {
+            uint32 const spellId = itr.second.Spells[i].SpellId;
+            if (!spellId || m_disabledSpells.find(spellId) == m_disabledSpells.end())
+                continue;
+            if (m_spellItem.find(spellId) == m_spellItem.end())
+                m_spellItem[spellId] = itr.second.ItemId;
+        }
+    }
 }
 
 /*
@@ -182,6 +229,22 @@ bool ArenaMgr::SetSpellDisabled(uint32 spellId, bool const perType[ARENA_TYPES_C
         for (uint32 enchantId : enchants)
             m_tempEnchantSpells[enchantId] = spellId;
 
+        // remember which item this spell belongs to, so the ban list can name it
+        if (m_spellItem.find(spellId) == m_spellItem.end())
+        {
+            for (auto const& itr : sObjectMgr.GetItemPrototypeMap())
+            {
+                bool found = false;
+                for (int i = 0; i < MAX_ITEM_PROTO_SPELLS && !found; ++i)
+                    found = itr.second.Spells[i].SpellId == spellId;
+                if (found)
+                {
+                    m_spellItem[spellId] = itr.second.ItemId;
+                    break;
+                }
+            }
+        }
+
         std::string description = spell->SpellName[0];
         WorldDatabase.escape_string(description);
         WorldDatabase.PExecute("REPLACE INTO `disabled_arena_spells` (`entry`, `1v1`, `2v2`, `3v3`, `5v5`, `description`) "
@@ -192,6 +255,7 @@ bool ArenaMgr::SetSpellDisabled(uint32 spellId, bool const perType[ARENA_TYPES_C
     else
     {
         m_disabledSpells.erase(spellId);
+        m_spellItem.erase(spellId);
         for (uint32 enchantId : enchants)
             m_tempEnchantSpells.erase(enchantId);
 
@@ -372,6 +436,8 @@ Arena::Arena()
     m_rated = false;
     m_ratedSettled = false;
     m_ratedRoster.clear();
+    delete m_keptScore;
+    m_keptScore = nullptr;
 }
 
 Arena::~Arena()
@@ -422,6 +488,8 @@ void Arena::Reset()
     m_rated = false;
     m_ratedSettled = false;
     m_ratedRoster.clear();
+    delete m_keptScore;
+    m_keptScore = nullptr;
 }
 
 /*********************************************************/
@@ -848,6 +916,7 @@ void Arena::AddPlayer(Player* player)
     // of a zero that turns into a number at the very end. Read once, here: the scoreboard packet is
     // rebuilt on every frame the client has the score window open and must not look anything up.
     score->newRating = sArenaRatingMgr.GetRating(player->GetObjectGuid(), GetArenaType());
+    score->team = player->GetBGTeam();
     m_playerScores[player->GetObjectGuid()] = score;
 
     // (the other arena queues were already left in HandleBattleFieldPortOpcode - world thread; the map
@@ -878,12 +947,44 @@ void Arena::RemovePlayerAtLeave(ObjectGuid guid, bool transport, bool sendPacket
     // the base class erases the player from m_players before it calls RemovePlayer - remember whether
     // this was a fighter or only a visitor of the match
     m_leaverIsParticipant = m_players.find(guid) != m_players.end();
+
+    /*
+     * Keep his line on the scoreboard. The base class deletes the score row of anybody who leaves,
+     * which is right for a battleground - but in an arena it means the losing side simply is not
+     * there any more when the winner reads the result, and a man who walked out mid match leaves no
+     * trace at all. His row is copied out of the way here and put back afterwards; from then on it
+     * belongs to nobody, which is why it carries his team and his rating change itself.
+     */
+    if (m_leaverIsParticipant)
+    {
+        BattleGroundScoreMap::const_iterator score = m_playerScores.find(guid);
+        if (score != m_playerScores.end())
+            m_keptScore = new ArenaScore(*static_cast<ArenaScore*>(score->second));
+    }
+
     BattleGround::RemovePlayerAtLeave(guid, transport, sendPacket);
     m_leaverIsParticipant = false;
+
+    // Arena::RemovePlayer, called from in there, puts it back. If it did not - a visitor, or a guid
+    // the base did not reach - nothing owns it any more.
+    delete m_keptScore;
+    m_keptScore = nullptr;
 }
 
-void Arena::RemovePlayer(Player* player, ObjectGuid /*guid*/)
+void Arena::RemovePlayer(Player* player, ObjectGuid guid)
 {
+    // His scoreboard row goes back in before anything else happens here: the very next thing this
+    // function does can be CheckWinConditions, and a match that ends there builds its final
+    // scoreboard on the spot. One tick later would be too late for the result everybody reads.
+    if (m_keptScore)
+    {
+        if (m_playerScores.find(guid) == m_playerScores.end())
+            m_playerScores[guid] = m_keptScore;
+        else
+            delete m_keptScore;
+        m_keptScore = nullptr;
+    }
+
     // spectators (visitors and dead participants) leave silently, fighters are announced
     bool const announce = GetStatus() < STATUS_WAIT_LEAVE && (!player || !player->IsArenaSpectator());
     if (announce)

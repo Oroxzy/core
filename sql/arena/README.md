@@ -37,8 +37,9 @@ GM commands, all hardcoded so no row in the `command` table is needed:
 ```
 .arena list                                  the running matches
 .arena set [Option [Value]]                  list or change a setting while the server runs
-.arena ban <spellId> [1v1,2v2,3v3,5v5|all]   forbid a spell (or an item's on-use spell)
-.arena unban <spellId>                       and allow it again
+.arena ban <spellId|item itemId> [brackets]  forbid it in the arena (brackets: 1v1,2v2,3v3,5v5 or all)
+.arena unban <spellId|item itemId>           and allow it again
+.arena set Map <any|0-5|name>                pin every match to one arena, or release it
 .arena rating [$name]                        all four brackets of a character
 .arena setrating <bracket> <rating> [mmr] [$name]
 .arena setmmr <bracket> <mmr> [$name]        the matchmaking rating on its own

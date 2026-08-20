@@ -1452,7 +1452,7 @@ std::unique_ptr<ServerPacket> BattleGroundMgr::BuildPvpLogDataPacket(BattleGroun
                     // score row from the player's RACE - so two players of the same faction on
                     // opposite teams would be coloured alike. Bonus honor is always 0 in an arena
                     // (no honor is awarded there), so it carries the team instead of adding a column.
-                    entry.bonusHonor = bg->GetPlayerTeam(itr->first) == HORDE ? 0 : 1;
+                    entry.bonusHonor = arenaScore->team == HORDE ? 0 : 1;
                     break;
                 }
                 sLog.Out(LOG_BASIC, LOG_LVL_DEBUG, "Unhandled MSG_PVP_LOG_DATA for BG id %u", bg->GetTypeID());
