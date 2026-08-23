@@ -336,13 +336,48 @@ namespace
         {
             if (group->GetLeaderGuid() != player->GetObjectGuid())
             {
-                Refuse(player, orb, "Only the group leader can queue the group.");
+                // and the way out is worth naming: in a party he can only come along, never queue by
+                // himself, so a member who wants to play alone has to leave first
+                Refuse(player, orb, "Only the group leader can queue the group. Leave the group to queue alone.");
                 return false;
             }
 
-            if (group->isRaidGroup() || group->GetMembersCount() > uint32(type))
+            /*
+             * Only the members standing in the world can be queued. An offline one has no player
+             * object and therefore no group reference, so GetFirstMember walks straight past him:
+             * nothing below checks him, AddGroup never puts him in the queue, and the leader is told
+             * his party is in while he is in fact waiting alone. GetMembersCount counts the member
+             * SLOTS instead, offline ones included, so the two numbers differ exactly when somebody
+             * is missing - and it was the only number the size check ever looked at.
+             */
+            uint32 onlineMembers = 0;
+            for (GroupReference* itr = group->GetFirstMember(); itr != nullptr; itr = itr->next())
+                if (itr->getSource())
+                    ++onlineMembers;
+
+            if (onlineMembers != group->GetMembersCount())
             {
-                Refuse(player, orb, "Your group is too large for this arena size.");
+                Refuse(player, orb, "A member of your group is offline.");
+                return false;
+            }
+
+            /*
+             * A party plays this size or it does not queue for it. There is no half party: either it
+             * fills the bracket by itself, or everybody queues alone and the queue puts a side
+             * together - and then nobody is a premade and nothing is rated.
+             *
+             * The alternative, letting a party of two queue for 3v3 and be topped up with a stranger,
+             * only looks friendlier. That match can never be rated (the side is not one party), the
+             * stranger is glued to a pair who talk past him, and the queue has to hold three
+             * differently shaped things apart for it. This way there are two group sizes in the whole
+             * system, one and the bracket, which is what makes both the pairing and the rating
+             * question answerable at all.
+             */
+            if (group->isRaidGroup() || onlineMembers != uint32(type))
+            {
+                std::ostringstream ss;
+                ss << "This arena size needs a group of exactly " << uint32(type) << ". Leave the group to queue alone.";
+                Refuse(player, orb, ss.str().c_str());
                 return false;
             }
 
@@ -394,6 +429,18 @@ namespace
                     member->PSendSysMessage("%s", memberReason.c_str());
                     player->PSendSysMessage("%s is wearing items that are not allowed in the arena.", member->GetName());
                     Refuse(player, orb, "A group member is wearing items that are not allowed in the arena.");
+                    return false;
+                }
+
+                // The resistance cap is the one gear rule with no second enforcement at the door: a
+                // forbidden item is taken off the player on entering, resistance gear is not. Checking
+                // only the leader made the cap a formality - anybody could walk it past by queueing
+                // with a friend instead of alone.
+                if (ArenaMgr::HasExcessResistance(member, &memberReason))
+                {
+                    member->PSendSysMessage("%s", memberReason.c_str());
+                    player->PSendSysMessage("%s is wearing too much resistance for the arena.", member->GetName());
+                    Refuse(player, orb, "A group member is wearing too much resistance for the arena.");
                     return false;
                 }
             }
@@ -758,7 +805,7 @@ static bool ShowArenaOrbMenu(Player* player, GameObject* orb)
 
     Group* group = player->GetGroup();
     if (group && group->GetLeaderGuid() != player->GetObjectGuid())
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Only your group leader can queue the group.", SENDER_NOOP, 0);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Only your group leader can queue. Leave the group to queue alone.", SENDER_NOOP, 0);
 
     for (uint8 index = 0; index < ARENA_TYPES_COUNT; ++index)
     {
@@ -775,10 +822,11 @@ static bool ShowArenaOrbMenu(Player* player, GameObject* orb)
             continue;
         }
 
-        // groups: leader only, group must fit into a team; solo: everything
+        // A group is offered the one size it fills exactly, and nothing else - which also takes 1v1
+        // off the list, since no group of one exists. Alone, every size is offered.
         if (group)
         {
-            if (group->GetLeaderGuid() != player->GetObjectGuid() || group->isRaidGroup() || group->GetMembersCount() > uint32(type) || type == ARENA_TYPE_1V1)
+            if (group->GetLeaderGuid() != player->GetObjectGuid() || group->isRaidGroup() || group->GetMembersCount() != uint32(type))
                 continue;
         }
 

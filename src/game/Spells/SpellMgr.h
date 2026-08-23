@@ -647,7 +647,9 @@ class SpellMgr
                 return nullptr;
         }
 
-        SpellCastResult GetSpellAllowedInLocationError(SpellEntry const* spellInfo, Unit const* caster, Player const* player = nullptr);
+        // fromItem: the cast came out of an item rather than off the player's own spell book. The arena
+        // ban list needs to know, because several items use a class ability's id as their effect.
+        SpellCastResult GetSpellAllowedInLocationError(SpellEntry const* spellInfo, Unit const* caster, Player const* player = nullptr, bool fromItem = false);
         SpellCastResult GetSpellAllowedInLocationError(SpellEntry const* spellInfo, uint32 zone_id, uint32 area_id, Player const* player = nullptr);
         uint32 GetRequiredAreaForSpell(uint32 spellId);
 

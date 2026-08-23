@@ -2279,11 +2279,14 @@ bool ChatHandler::HandleArenaSetCommand(char* args)
  */
 bool ChatHandler::ExtractArenaBanTarget(char** args, std::vector<uint32>& spells, std::string& what)
 {
-    char* first = ExtractLiteralArg(args, "item");
+    // A shift-clicked item is a link and never starts with the word "item", so an item counts as
+    // named either way: by the keyword, or by the link an admin dropped into the line.
+    uint32 itemId = 0;
+    bool const byLink = **args == '|' && ExtractUint32KeyFromLink(args, "Hitem", itemId);
+    char* first = byLink ? *args : ExtractLiteralArg(args, "item");
     if (first)
     {
-        uint32 itemId = 0;
-        if (!ExtractUint32KeyFromLink(args, "Hitem", itemId) && !ExtractUInt32(args, itemId))
+        if (!byLink && !ExtractUint32KeyFromLink(args, "Hitem", itemId) && !ExtractUInt32(args, itemId))
             return false;
 
         ItemPrototype const* proto = sObjectMgr.GetItemPrototype(itemId);

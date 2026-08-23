@@ -2650,7 +2650,7 @@ void SpellMgr::LoadSpellAreas()
     sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, ">> Loaded %u spell area requirements", count);
 }
 
-SpellCastResult SpellMgr::GetSpellAllowedInLocationError(SpellEntry const* spellInfo, Unit const* caster, Player const* player)
+SpellCastResult SpellMgr::GetSpellAllowedInLocationError(SpellEntry const* spellInfo, Unit const* caster, Player const* player, bool fromItem)
 {
     // Spell can be casted only in battleground
 #if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_5_1
@@ -2663,7 +2663,7 @@ SpellCastResult SpellMgr::GetSpellAllowedInLocationError(SpellEntry const* spell
     // Arena: spells disabled by `disabled_arena_spells` for this arena size
     // (the chat message for the player is sent by Spell::CheckCast for real casts only - this function is
     // also asked for triggered casts and by the area dependent aura update)
-    if (player && player->InArena() && sArenaMgr.IsSpellDisabled(spellInfo->Id, player->GetArenaType()))
+    if (player && player->InArena() && sArenaMgr.IsSpellDisabled(spellInfo->Id, player->GetArenaType(), fromItem))
         return SPELL_FAILED_NOT_HERE;
 
     switch (spellInfo->Id)

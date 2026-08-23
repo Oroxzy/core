@@ -2281,7 +2281,19 @@ class Player final: public Unit
 
         BgBattleGroundQueueID_Rec m_bgBattleGroundQueueID[PLAYER_MAX_BATTLEGROUND_QUEUES];
         BGData                    m_bgData;
+        /*
+         * He was invited to this arena as part of a party that filled the bracket on its own, rather
+         * than as one of several waiting players the queue put together. Written when the invite goes
+         * out and never afterwards, because it is the only honest moment: the party can be joined,
+         * left or disbanded at any time between the invite and the gates, and asking at the gates let
+         * three strangers group up in the start box to be counted a premade - or a losing party
+         * disband itself to make the match unrated.
+         */
+        bool                      m_queuedAsFullArenaGroup = false;
     public:
+        void SetQueuedAsFullArenaGroup(bool on)          { m_queuedAsFullArenaGroup = on; }
+        bool QueuedAsFullArenaGroup() const              { return m_queuedAsFullArenaGroup; }
+
         bool InBattleGround()       const                { return m_bgData.bgInstanceID != 0; }
         bool InArena()              const                { return m_bgData.bgInstanceID != 0 && IsArenaBattleGroundTypeId(m_bgData.bgTypeID); }
         ArenaType GetArenaType()    const                { return InArena() ? GetArenaTypeForBattleGroundTypeId(m_bgData.bgTypeID) : ARENA_TYPE_NONE; }

@@ -492,6 +492,9 @@ bool BattleGroundQueue::InviteGroupToBG(GroupQueueInfo* ginfo, BattleGround* bg,
             //sBattleGroundMgr.InvitePlayer(player, bg, ginfo->Team);
 
             player->SetInviteForBattleGroundQueueType(bgQueueTypeId, ginfo->isInvitedToBgInstanceGuid);
+            // did his side come in as one party, or is the queue putting strangers together? Only this
+            // moment can answer it - see Player::m_queuedAsFullArenaGroup
+            player->SetQueuedAsFullArenaGroup(ginfo->arenaRatedEligible);
 
             // create remind invite events
             BgQueueInviteEvent* inviteEvent = new BgQueueInviteEvent(player->GetObjectGuid(), ginfo->isInvitedToBgInstanceGuid, bgTypeId, ginfo->removeInviteTime);

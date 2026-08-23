@@ -140,7 +140,7 @@ void ArenaMgr::LoadFromDB()
     BuildSpellItemMap();
 }
 
-bool ArenaMgr::IsSpellDisabled(uint32 spellId, ArenaType type) const
+bool ArenaMgr::IsSpellDisabled(uint32 spellId, ArenaType type, bool fromItem) const
 {
     if (type == ARENA_TYPE_NONE)
         return false;
@@ -149,7 +149,11 @@ bool ArenaMgr::IsSpellDisabled(uint32 spellId, ArenaType type) const
     if (itr == m_disabledSpells.end())
         return false;
 
-    return itr->second.disabledForType[GetArenaTypeIndex(type)];
+    if (!itr->second.disabledForType[GetArenaTypeIndex(type)])
+        return false;
+
+    // the class keeps its own spell, the trinket that borrowed the id does not
+    return fromItem || m_itemOnlySpells.find(spellId) == m_itemOnlySpells.end();
 }
 
 void ArenaMgr::GetItemSpells(ItemPrototype const* proto, std::vector<uint32>& out)
@@ -180,6 +184,7 @@ uint32 ArenaMgr::GetItemForSpell(uint32 spellId) const
 void ArenaMgr::BuildSpellItemMap()
 {
     m_spellItem.clear();
+    m_itemOnlySpells.clear();
     if (m_disabledSpells.empty())
         return;
 
@@ -194,6 +199,22 @@ void ArenaMgr::BuildSpellItemMap()
                 m_spellItem[spellId] = itr.second.ItemId;
         }
     }
+
+    /*
+     * Which of them a player owns in his own right. A spell that carries a RANK is a rung of a class
+     * spell's ladder - Blizzard does not rank the effects it writes for a trinket - so those are the
+     * ones an item merely borrowed, and banning the item must not take the ability away as well.
+     *
+     * Casting it without an item is then always allowed, which is why this stays narrow: a spell no
+     * class can cast is never reached that way, so nothing is loosened by including it, but a spell
+     * with no rank is left alone rather than guessed about.
+     */
+    for (auto const& itr : m_spellItem)
+        if (sSpellMgr.GetSpellRank(itr.first))
+            m_itemOnlySpells.insert(itr.first);
+
+    if (!m_itemOnlySpells.empty())
+        sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, ">> " SIZEFMTD " banned arena spells are class abilities an item borrowed - refused only when an item casts them", m_itemOnlySpells.size());
 }
 
 /*
@@ -245,10 +266,18 @@ bool ArenaMgr::SetSpellDisabled(uint32 spellId, bool const perType[ARENA_TYPES_C
             }
         }
 
+        /*
+         * Only the four flags are written on a row that already exists. The descriptions in the
+         * table were written by hand and say which item a spell belongs to ("CONSUMABLE Free Action
+         * Potion"); REPLACE would have thrown that away and left the bare spell name behind every
+         * time somebody changed a bracket from the panel.
+         */
         std::string description = spell->SpellName[0];
         WorldDatabase.escape_string(description);
-        WorldDatabase.PExecute("REPLACE INTO `disabled_arena_spells` (`entry`, `1v1`, `2v2`, `3v3`, `5v5`, `description`) "
-                               "VALUES (%u, %u, %u, %u, %u, '%s')",
+        WorldDatabase.PExecute("INSERT INTO `disabled_arena_spells` (`entry`, `1v1`, `2v2`, `3v3`, `5v5`, `description`) "
+                               "VALUES (%u, %u, %u, %u, %u, '%s') "
+                               "ON DUPLICATE KEY UPDATE `1v1` = VALUES(`1v1`), `2v2` = VALUES(`2v2`), "
+                               "`3v3` = VALUES(`3v3`), `5v5` = VALUES(`5v5`)",
                                spellId, uint32(perType[0]), uint32(perType[1]), uint32(perType[2]), uint32(perType[3]),
                                description.c_str());
     }
@@ -256,8 +285,14 @@ bool ArenaMgr::SetSpellDisabled(uint32 spellId, bool const perType[ARENA_TYPES_C
     {
         m_disabledSpells.erase(spellId);
         m_spellItem.erase(spellId);
+        // only the entries this spell put there - two spells can apply the same enchantment, and the
+        // other one may still be banned
         for (uint32 enchantId : enchants)
-            m_tempEnchantSpells.erase(enchantId);
+        {
+            auto itr = m_tempEnchantSpells.find(enchantId);
+            if (itr != m_tempEnchantSpells.end() && itr->second == spellId)
+                m_tempEnchantSpells.erase(itr);
+        }
 
         WorldDatabase.PExecute("DELETE FROM `disabled_arena_spells` WHERE `entry` = %u", spellId);
     }
@@ -911,6 +946,17 @@ void Arena::AddPlayer(Player* player)
 {
     BattleGround::AddPlayer(player);
 
+    // A row of his may still be lying there: leaving keeps it (see RemovePlayerAtLeave), and somebody
+    // who walked out during the preparation can be sent back into the same match by the queue. It is
+    // replaced, not added to - but it has to be freed first, or the old one is lost with nobody
+    // holding it any more.
+    BattleGroundScoreMap::iterator old = m_playerScores.find(player->GetObjectGuid());
+    if (old != m_playerScores.end())
+    {
+        delete old->second;
+        m_playerScores.erase(old);
+    }
+
     ArenaScore* score = new ArenaScore;
     // His rating as he walks in, so the column shows something sensible for the whole match instead
     // of a zero that turns into a number at the very end. Read once, here: the scoreboard packet is
@@ -1342,17 +1388,23 @@ void Arena::UpdatePlayerScore(Player* source, uint32 type, uint32 value)
     }
 }
 
+/*
+ * Counted from the scoreboard rows and not from the player list, so that damage dealt by somebody
+ * who has since left still counts for his side. He is on the scoreboard everybody reads at the end
+ * (his row is kept, see RemovePlayerAtLeave), and a time limit decided on a different tally than
+ * the one on screen is a result nobody can check - worse, it would let a player hand the win to the
+ * other side by walking out with his damage in the last seconds.
+ *
+ * The row carries the side itself: a leaver has no team in the battleground any more.
+ */
 uint32 Arena::GetTeamDamageDone(Team team) const
 {
     uint32 damage = 0;
-    for (const auto& itr : m_players)
+    for (const auto& itr : m_playerScores)
     {
-        if (itr.second.playerTeam != team)
-            continue;
-
-        BattleGroundScoreMap::const_iterator score = m_playerScores.find(itr.first);
-        if (score != m_playerScores.end())
-            damage += ((ArenaScore*)score->second)->damageDone;
+        ArenaScore const* score = static_cast<ArenaScore const*>(itr.second);
+        if (score->team == team)
+            damage += score->damageDone;
     }
     return damage;
 }
@@ -1403,19 +1455,30 @@ void Arena::CheckWinConditions()
 /*********************************************************/
 
 /*
- * One party fills this whole side. A side of one is a premade by definition - that is what makes
- * every 1v1 a rated match without anybody having to form a group first.
+ * Everybody on this side came in as one party that filled the bracket by itself.
  *
- * The party in question is the one he had OUTSIDE. Inside a battleground GetGroup() is the team's
- * own raid group, which BattleGround::AddOrSetPlayerToCorrectBgGroup puts every member of a side
- * into - asking that would have answered "yes, one party" for any side of any origin, and mode 1
- * would have rated everything just like mode 2. The real party is parked in the original group
- * (Player::SetBattleGroundRaid), and a player who queued alone has none.
+ * Asked of how they QUEUED, not of the party they happen to be in when the gates open. A party is
+ * not a fixed thing: the orb hands out the invite, and in the minutes until the doors open anybody
+ * may be invited into a group, leave one, or disband one - the group invite has no idea a
+ * battleground queue exists. Reading the party here let three players who queued as strangers group
+ * up in the start box and collect a premade's rating, and let a party that saw it was losing
+ * disband itself to make the match unrated. The queue's own answer cannot be edited afterwards.
+ *
+ * A side of one is a premade by definition, which is what makes every 1v1 rated without anybody
+ * having to form a group: a solo entry fills the 1v1 bracket exactly, so the queue already marks it
+ * as full (BattleGroundQueue::StampArenaRating).
+ *
+ * The party is still collected, but only for the caller: it is used to refuse a match in which one
+ * party stands on both sides, and it decides nothing about this side.
  */
-bool Arena::IsSidePremade(Team team) const
+bool Arena::IsSidePremade(Team team, Group** party) const
 {
+    if (party)
+        *party = nullptr;
+
     Group* common = nullptr;
     uint32 count = 0;
+    bool premade = true;
 
     for (const auto& itr : m_players)
     {
@@ -1426,17 +1489,22 @@ bool Arena::IsSidePremade(Team team) const
         if (!player)                                        // gone already: can not prove he came with the others
             return false;
 
-        Group* party = player->GetOriginalGroup();
         ++count;
+        if (!player->QueuedAsFullArenaGroup())
+            premade = false;
+
+        // the party is only collected for the caller, it decides nothing here
+        Group* own = player->GetOriginalGroup();
         if (count == 1)
-            common = party;
-        else if (!party || party != common)
-            return false;
+            common = own;
+        else if (own != common)
+            common = nullptr;
     }
 
-    if (count == 1)
-        return true;
-    return count > 1 && common != nullptr;
+    if (party)
+        *party = common;
+
+    return count > 0 && premade;
 }
 
 /*
@@ -1471,8 +1539,25 @@ void Arena::DetermineRated()
         return;
     }
 
-    if (sWorld.getConfig(CONFIG_UINT32_ARENA_RATED_MODE) == ARENA_RATED_PREMADE &&
-        !(IsSidePremade(ALLIANCE) && IsSidePremade(HORDE)))
+    Group* allianceParty = nullptr;
+    Group* hordeParty = nullptr;
+    bool const bothPremade = IsSidePremade(ALLIANCE, &allianceParty) && IsSidePremade(HORDE, &hordeParty);
+
+    /*
+     * One party standing on both sides is not a match, it is a transfer, and the premade rule can
+     * not see it: each side really is one party - the same one. Its members only have to queue
+     * separately, which the mixed queue then sorts across the two sides, and they can hand each
+     * other rating for as long as they like. Asked whatever the mode says, because mode 2 rates
+     * such a match without ever looking at parties at all.
+     */
+    if (allianceParty && allianceParty == hordeParty)
+    {
+        PSendMessageToAll(LANG_ARENA_NOT_RATED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr,
+                          "both sides are the same party");
+        return;
+    }
+
+    if (sWorld.getConfig(CONFIG_UINT32_ARENA_RATED_MODE) == ARENA_RATED_PREMADE && !bothPremade)
     {
         PSendMessageToAll(LANG_ARENA_NOT_RATED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr,
                           "each side has to be one party for that");
@@ -1556,7 +1641,8 @@ void Arena::ApplyRatedResult(Team winner)
 
         ArenaRatingEntry const result = sArenaRatingMgr.Apply(participant.guid, type, ratingChange, mmrChange, won);
 
-        // the scoreboard columns - only for whoever is still in the match, a leaver has no score row
+        // the scoreboard columns - a leaver has one too, his row is kept (see RemovePlayerAtLeave),
+        // so what the match cost him is on the board next to everybody else's
         BattleGroundScoreMap::const_iterator score = m_playerScores.find(participant.guid);
         if (score != m_playerScores.end())
         {

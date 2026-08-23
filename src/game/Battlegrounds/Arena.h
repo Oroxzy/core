@@ -34,6 +34,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 struct ItemPrototype;
@@ -249,7 +250,19 @@ class ArenaMgr
     public:
         void LoadFromDB();
 
-        bool IsSpellDisabled(uint32 spellId, ArenaType type) const;
+        /*
+         * Is this spell forbidden in an arena of that size?
+         *
+         * `fromItem` is what keeps the ban list honest. It bans SPELLS, because a spell is what the
+         * cast check can refuse - but most of what it names are items, and Blizzard gave several
+         * items the id of a class ability as their on-use effect: the Magic Candle casts Fireball
+         * (Rank 1), the Flash Bundle casts Flamestrike (Rank 1), the Sprouted Frond casts Lesser
+         * Heal (Rank 2), the Ankh of Resurrection casts Resurrection (Rank 1). Refusing the id
+         * outright therefore took the mage's Fireball and the priest's heal away with the trinket.
+         * Such a spell is refused only when it really came out of an item; cast by the class it
+         * belongs to, it is none of the ban list's business.
+         */
+        bool IsSpellDisabled(uint32 spellId, ArenaType type, bool fromItem = false) const;
         uint8 GetItemMinPatch(uint32 itemId) const;
         // 0 when this enchantment may stay, otherwise the forbidden spell that applied it
         uint32 GetForbiddenTempEnchantSpell(uint32 enchantId, ArenaType type) const;
@@ -287,6 +300,10 @@ class ArenaMgr
         std::unordered_map<uint32, uint8> m_itemMinPatch;
         // banned spell -> the item it comes from, filled while the ban list is read
         std::unordered_map<uint32, uint32> m_spellItem;
+        // Of those, the ones a player can also cast himself: they carry a rank, so they are a rung of
+        // a class spell's ladder and not an effect Blizzard invented for the item. Only an item may be
+        // refused these - see IsSpellDisabled.
+        std::unordered_set<uint32> m_itemOnlySpells;
         // enchantment id -> the forbidden spell that applies it, for the temporary enchants a player can
         // walk in with (weapon oils, sharpening and weight stones). Rogue poisons are never in here.
         std::unordered_map<uint32, uint32> m_tempEnchantSpells;
@@ -384,7 +401,10 @@ class Arena : public BattleGround
 
         // rating (see ArenaRating.h)
         void DetermineRated();                              // at the gates: does this match count, and who is in it
-        bool IsSidePremade(Team team) const;                // one party fills the whole side (a side of one always does)
+        // Everybody on this side queued as one party that fills the bracket (a side of one always
+        // does). The party itself is handed back when asked for, because it answers a second question
+        // the first one cannot: the same party standing on both sides is not a match at all.
+        bool IsSidePremade(Team team, Group** party = nullptr) const;
         void ApplyRatedResult(Team winner);                 // books the result, fills the scoreboard columns, tells the players
         bool m_rated;                                       // stays set after the end - the scoreboard packet asks
         bool m_ratedSettled;                                // the result was booked, never do it twice

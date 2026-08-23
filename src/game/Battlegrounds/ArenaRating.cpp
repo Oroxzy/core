@@ -161,6 +161,7 @@ ArenaRatingEntry ArenaRatingMgr::Apply(ObjectGuid guid, ArenaType type, int32 ra
             ArenaRatingEntry fresh;
             fresh.rating = GetStartRating();
             fresh.mmr = GetStartMatchmakerRating();
+            fresh.bestRating = fresh.rating;   // a first match must not book a "best" below where it began
             itr = m_ratings.emplace(key, fresh).first;
         }
 
