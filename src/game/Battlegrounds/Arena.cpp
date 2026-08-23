@@ -625,9 +625,9 @@ void Arena::UpdatePreparation(uint32 diff)
         }
     }
 
-    // countdown during the last 10 seconds
+    // the seconds are counted out at the end, all but the first - see ARENA_COUNTDOWN_DURATION
     int32 const delay = GetStartDelayTime();
-    if (delay > 0 && delay <= 10 * int32(IN_MILLISECONDS))
+    if (delay > 0 && delay < int32(ARENA_COUNTDOWN_DURATION))
     {
         uint32 const second = uint32((delay + IN_MILLISECONDS - 1) / IN_MILLISECONDS);
         if (second != m_lastCountdownSecond)

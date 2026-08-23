@@ -195,6 +195,14 @@ enum ArenaTimers
     ARENA_SHORT_BUFF_DURATION               = 30 * IN_MILLISECONDS,     // buffs with less remaining time are removed on start
     ARENA_COOLDOWN_RESET_MAX_DURATION       = 10 * MINUTE * IN_MILLISECONDS,   // only shorter cooldowns are reset (unless configured)
     ARENA_TIME_TO_AUTOREMOVE_ABORTED        = 15 * IN_MILLISECONDS,     // players are removed this fast after an aborted match
+    // How long before the gates the remaining seconds are counted out, one message and one tick each.
+    // This is the only place the length of the countdown is decided: the scoreboard addon puts the
+    // big numbers on screen for exactly these seconds and holds no threshold of its own.
+    //
+    // The first of them is not sent from here. It falls on the same moment as the worded warning
+    // (BG_STARTING_EVENT_THIRD, "Fifteen seconds until the Arena battle begins!"), and two lines
+    // saying the same thing at the same instant is one too many - so the counting starts below it.
+    ARENA_COUNTDOWN_DURATION                = 15 * IN_MILLISECONDS,
 
     ARENA_NA_FIRST_TORNADO_DELAY            = 60 * IN_MILLISECONDS,
     ARENA_NA_TORNADO_INTERVAL_MIN           = 120 * IN_MILLISECONDS,
