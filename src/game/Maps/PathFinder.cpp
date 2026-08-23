@@ -1059,6 +1059,13 @@ bool PathInfo::UpdateForCaster(Unit* pTarget, float castRange)
                 startPoint += dirVect * nonInRangeDist / directionLength;
             }
 
+            // Onto the ground before it is judged, for the same reason UpdateForMelee grounds its
+            // point: this is an interpolation between two path points, and over a step edge it can
+            // hang in the air or sit inside the riser. Range and line of sight are then measured at
+            // the point the creature will actually stand on. Never pulls a flying caster down -
+            // UpdateAllowedPositionZ only lifts a flyer that ended up below the ground.
+            m_sourceUnit->UpdateAllowedPositionZ(startPoint.x, startPoint.y, startPoint.z);
+
             if (pTarget->IsWithinDist3d(startPoint.x, startPoint.y, startPoint.z, castRange) &&
                     pTarget->IsWithinLOS(startPoint.x, startPoint.y, startPoint.z))
                 m_pathPoints[i] = startPoint;
@@ -1097,6 +1104,16 @@ bool PathInfo::UpdateForMelee(Unit* pTarget, float meleeReach)
             targetDist -= meleeReach;
             float directionLength = sqrt(dirVect.squaredLength());
             m_pathPoints[i] = m_pathPoints[i - 1] + dirVect * targetDist / directionLength;
+            /*
+             * And back onto the ground, the way BuildPointPath treats every other point of the path.
+             * This one is not a point the navmesh gave us: it is a straight line drawn from the last
+             * one towards the target and cut off at melee range, so its height is interpolated. Reach
+             * for somebody standing on a step and the line ends half way up the riser - inside it -
+             * and the 1.12 client, which runs the spline without collision of its own, is put there
+             * and has to push itself out again, usually downwards. On an arena floor that is a raised
+             * building with the terrain punched out beneath it, downwards is a long way.
+             */
+            m_sourceUnit->UpdateAllowedPositionZ(m_pathPoints[i].x, m_pathPoints[i].y, m_pathPoints[i].z);
             m_pathPoints.resize(i + 1);
             return false;
         }
