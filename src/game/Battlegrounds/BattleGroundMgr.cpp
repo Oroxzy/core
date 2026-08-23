@@ -1836,14 +1836,25 @@ std::unique_ptr<ServerPacket> BattleGroundMgr::BuildBattleGroundListPacket(Objec
 #if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_6_1
     packet->battlemasterGuid = guid;
 #endif
-    packet->mapId = mapId;
-    packet->bracketId = player->GetBattleGroundBracketIdFromLevel(bgTypeId);
+    BattleGroundBracketId const bracketId = player->GetBattleGroundBracketIdFromLevel(bgTypeId);
 
-    uint32 bracketId = player->GetBattleGroundBracketIdFromLevel(bgTypeId);
-    ClientBattleGroundIdSet const& ids = m_clientBattleGroundIds[bgTypeId][bracketId];
-    packet->instanceIds.reserve(ids.size());
-    for (auto const id : ids)
-        packet->instanceIds.push_back(id);
+    packet->mapId = mapId;
+    packet->bracketId = bracketId;
+
+    /*
+     * A character below the battleground's minimum level has no bracket at all: the answer is
+     * BG_BRACKET_ID_NONE, which is -1, and m_clientBattleGroundIds indexed with it reads billions of
+     * entries past the end of the array. CMSG_BATTLEFIELD_LIST carries the map id and is accepted
+     * from anybody who is logged in, so a level 1 character asking about any battleground map took
+     * the world server down with him. He simply sees no instances, which is the true answer anyway.
+     */
+    if (bracketId != BG_BRACKET_ID_NONE)
+    {
+        ClientBattleGroundIdSet const& ids = m_clientBattleGroundIds[bgTypeId][bracketId];
+        packet->instanceIds.reserve(ids.size());
+        for (auto const id : ids)
+            packet->instanceIds.push_back(id);
+    }
 
     return packet;
 }
