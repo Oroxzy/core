@@ -1945,6 +1945,23 @@ void Unit::CalculateDamageAbsorbAndResist(SpellCaster* pCaster, SpellSchoolMask 
 
             remainingDamage -= currentAbsorb;
 
+            /*
+             * Arena scoreboard: a shield that eats a hit is the only kind of mitigation nobody was
+             * credited for. The damage column already shows what the attacker really landed - the
+             * absorbed part is gone from it - but it went nowhere, so a priest holding a team up
+             * with Power Word: Shield finished a match looking as though he had done nothing.
+             *
+             * It is counted as healing, which is what every damage meter since Recount does and what
+             * a player reads that column as. Blizzard has no answer to copy here: retail's score
+             * window has no absorb column, and neither TrinityCore's ScoreType nor its PvPstats
+             * project tracks one.
+             *
+             * There is no overheal to subtract - an absorb is only ever consumed by damage that
+             * actually arrived, so what is counted is by definition effective.
+             */
+            if (Unit* pShieldCaster = (*i)->GetCaster())
+                pShieldCaster->CountArenaHealingDone(currentAbsorb);
+
             // Reduce shield amount
             mod->m_amount -= currentAbsorb;
             if (dropCharge && (*i)->GetHolder()->DropAuraCharge())
@@ -2026,6 +2043,11 @@ void Unit::CalculateDamageAbsorbAndResist(SpellCaster* pCaster, SpellSchoolMask 
 
             if ((*i)->GetAuraScript())
                 (*i)->GetAuraScript()->OnManaAbsorb((*i), currentAbsorb, remainingDamage);
+
+            // the same as the school absorb above: a mage paying for a hit out of his mana pool is
+            // mitigation, and it is counted the same way
+            if (Unit* pShieldCaster = (*i)->GetCaster())
+                pShieldCaster->CountArenaHealingDone(currentAbsorb);
 
             (*i)->GetModifier()->m_amount -= currentAbsorb;
             if ((*i)->GetModifier()->m_amount <= 0)
