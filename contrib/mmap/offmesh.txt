@@ -5,3 +5,16 @@
 // endpoints resolve to the same poly is a dead self-loop A* never uses.
 189 29,28 (1827.839478 1315.610962 17.235508) (1830.25244 1315.189697 19.016930) 2.5  // Scarlet Monastery Graveyard - path out of spawn position
 0 31,59 (-14425.5 448.4 15.1) (-14426.576 450.133 15.529) 2.5                         // Booty Bay: dock stairs top -> boardwalk (mesh gap between stair poly and boardwalk poly)
+// Blade's Edge Arena (maps 560-563, one per bracket): the two rope-lashed plank spans between the
+// central bridge and the pillars. The ropes carry full collision - a player can walk across - but at
+// 0.4 yd they are narrower than the generator's 0.52 yd erosion radius, so no navmesh polygon ever
+// survives on them and charge, intercept and pets refused a crossing retail allows. Endpoints sit
+// 1 yd inside the bridge deck and the pillar top, past the erosion band on either side.
+560 31,20 (6234.96 257.41 11.12) (6230.24 251.59 11.12) 2.5   // west rope: bridge deck -> pillar top
+560 31,20 (6242.49 266.68 11.12) (6246.91 272.12 11.12) 2.5   // east rope: bridge deck -> pillar top
+561 31,20 (6234.96 257.41 11.12) (6230.24 251.59 11.12) 2.5
+561 31,20 (6242.49 266.68 11.12) (6246.91 272.12 11.12) 2.5
+562 31,20 (6234.96 257.41 11.12) (6230.24 251.59 11.12) 2.5
+562 31,20 (6242.49 266.68 11.12) (6246.91 272.12 11.12) 2.5
+563 31,20 (6234.96 257.41 11.12) (6230.24 251.59 11.12) 2.5
+563 31,20 (6242.49 266.68 11.12) (6246.91 272.12 11.12) 2.5
