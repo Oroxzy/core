@@ -752,14 +752,20 @@ void BattleGroundQueue::FillArenaSelectionPools(BattleGround* bg, BattleGroundBr
     };
     auto ratingGap = [](uint32 a, uint32 b) { return a > b ? a - b : b - a; };
 
-    // The anchor: normally the longest waiting group, but CheckArenaMatch may ask for the next one
-    // along when nothing in the queue was close enough to the first.
+    /*
+     * The group the window is measured from: the longest waiting one whose match could be rated at
+     * all. A group that can never be in a rated match - a solo, in the default mode where only
+     * party against party counts - is no meaningful centre for it, and taking one used to switch
+     * the window off for EVERYBODY: two premades hundreds of points apart were paired the moment a
+     * solo happened to be first in the queue. CheckArenaMatch walks this along with anchorSkip when
+     * nothing was close enough to the first one.
+     */
     GroupQueueInfo const* anchor = nullptr;
     {
         uint32 seen = 0;
         for (GroupQueueInfo const* ginfo : m_queuedGroups[bracketId][BG_QUEUE_MIXED])
         {
-            if (ginfo->isInvitedToBgInstanceGuid)
+            if (ginfo->isInvitedToBgInstanceGuid || !ratingApplies(ginfo))
                 continue;
             if (seen++ == anchorSkip)
             {
@@ -769,41 +775,60 @@ void BattleGroundQueue::FillArenaSelectionPools(BattleGround* bg, BattleGroundBr
         }
     }
 
-    for (GroupQueueInfo* ginfo : m_queuedGroups[bracketId][BG_QUEUE_MIXED])
+    /*
+     * Two passes: the groups that fill a whole side first, the solo players after them.
+     *
+     * Queue order alone cannot see that a party is indivisible. Walk [solo, party of three, solo,
+     * solo] in order for a 3v3 and the first solo takes a seat on one side, the party of three then
+     * fits neither of the two sides that are left two and three wide, and everybody sits in the
+     * queue - although {3} against {1,1,1} was on the table the whole time. Placing the indivisible
+     * pieces first is what makes that match happen, and inside each pass the queue order still
+     * decides who gets in.
+     *
+     * A party that is passed over here has not lost its place: it stays at the head of the queue and
+     * is the first thing the next pass tries.
+     */
+    for (uint8 pass = 0; pass < 2; ++pass)
     {
-        if (ginfo->isInvitedToBgInstanceGuid)
-            continue;
-
-        // the anchor plays whatever his rating, everybody else has to be within reach of it
-        if (ginfo != anchor && ratingWindow && anchor && ratingApplies(anchor) && ratingApplies(ginfo) &&
-            ratingGap(ginfo->arenaMmr, anchor->arenaMmr) > ratingWindow &&
-            !waitedLongEnough(ginfo) && !waitedLongEnough(anchor))
-            continue;
-
-        int32 const groupSize = int32(ginfo->players.size());
-        int32 const freeSlots[BG_TEAMS_COUNT] =
+        bool const wantParties = (pass == 0);
+        for (GroupQueueInfo* ginfo : m_queuedGroups[bracketId][BG_QUEUE_MIXED])
         {
-            int32(teamMax[BG_TEAM_ALLIANCE]) - int32(m_selectionPools[BG_TEAM_ALLIANCE].GetPlayerCount()),
-            int32(teamMax[BG_TEAM_HORDE]) - int32(m_selectionPools[BG_TEAM_HORDE].GetPlayerCount())
-        };
-
-        // prefer the team with more free slots, keep the faction of the group on a tie
-        BattleGroundTeamIndex teamIdx = BattleGround::GetTeamIndexByTeamId(ginfo->groupTeam);
-        if (freeSlots[BG_TEAM_ALLIANCE] > freeSlots[BG_TEAM_HORDE])
-            teamIdx = BG_TEAM_ALLIANCE;
-        else if (freeSlots[BG_TEAM_HORDE] > freeSlots[BG_TEAM_ALLIANCE])
-            teamIdx = BG_TEAM_HORDE;
-
-        // does the whole group fit? otherwise try the other team, otherwise skip it for now
-        if (groupSize > freeSlots[teamIdx])
-        {
-            teamIdx = BattleGround::GetOtherTeamIndex(teamIdx);
-            if (groupSize > freeSlots[teamIdx])
+            if (ginfo->isInvitedToBgInstanceGuid)
                 continue;
-        }
+            if ((ginfo->players.size() > 1) != wantParties)
+                continue;
 
-        ginfo->groupTeam = (teamIdx == BG_TEAM_ALLIANCE) ? ALLIANCE : HORDE;
-        m_selectionPools[teamIdx].AddGroup(ginfo, teamMax[teamIdx], instanceId);
+            // the anchor plays whatever his rating, everybody else has to be within reach of it
+            if (ginfo != anchor && ratingWindow && anchor && ratingApplies(ginfo) &&
+                ratingGap(ginfo->arenaMmr, anchor->arenaMmr) > ratingWindow &&
+                !waitedLongEnough(ginfo) && !waitedLongEnough(anchor))
+                continue;
+
+            int32 const groupSize = int32(ginfo->players.size());
+            int32 const freeSlots[BG_TEAMS_COUNT] =
+            {
+                int32(teamMax[BG_TEAM_ALLIANCE]) - int32(m_selectionPools[BG_TEAM_ALLIANCE].GetPlayerCount()),
+                int32(teamMax[BG_TEAM_HORDE]) - int32(m_selectionPools[BG_TEAM_HORDE].GetPlayerCount())
+            };
+
+            // prefer the team with more free slots, keep the faction of the group on a tie
+            BattleGroundTeamIndex teamIdx = BattleGround::GetTeamIndexByTeamId(ginfo->groupTeam);
+            if (freeSlots[BG_TEAM_ALLIANCE] > freeSlots[BG_TEAM_HORDE])
+                teamIdx = BG_TEAM_ALLIANCE;
+            else if (freeSlots[BG_TEAM_HORDE] > freeSlots[BG_TEAM_ALLIANCE])
+                teamIdx = BG_TEAM_HORDE;
+
+            // does the whole group fit? otherwise try the other team, otherwise skip it for now
+            if (groupSize > freeSlots[teamIdx])
+            {
+                teamIdx = BattleGround::GetOtherTeamIndex(teamIdx);
+                if (groupSize > freeSlots[teamIdx])
+                    continue;
+            }
+
+            ginfo->groupTeam = (teamIdx == BG_TEAM_ALLIANCE) ? ALLIANCE : HORDE;
+            m_selectionPools[teamIdx].AddGroup(ginfo, teamMax[teamIdx], instanceId);
+        }
     }
 }
 
@@ -820,12 +845,15 @@ bool BattleGroundQueue::CheckArenaMatch(BattleGroundBracketId bracketId, BattleG
     uint32 tries = 1;
     if (sArenaRatingMgr.IsRatingEnabled() && sWorld.getConfig(CONFIG_UINT32_ARENA_RATED_MAX_MMR_DIFFERENCE))
     {
+        // only the groups that can be an anchor are worth another try - counting the rest just
+        // repeated the same pools, because the anchor stays where it is and nothing changes
+        bool const filterEverybody = sWorld.getConfig(CONFIG_UINT32_ARENA_RATED_MODE) == ARENA_RATED_ALL;
         uint32 candidates = 0;
         for (GroupQueueInfo const* ginfo : m_queuedGroups[bracketId][BG_QUEUE_MIXED])
-            if (!ginfo->isInvitedToBgInstanceGuid)
+            if (!ginfo->isInvitedToBgInstanceGuid && (filterEverybody || ginfo->arenaRatedEligible))
                 ++candidates;
 
-        tries = std::min(candidates, uint32(ARENA_MATCH_ANCHOR_TRIES));
+        tries = std::max(1u, std::min(candidates, uint32(ARENA_MATCH_ANCHOR_TRIES)));
     }
 
     for (uint32 anchorSkip = 0; anchorSkip < tries; ++anchorSkip)

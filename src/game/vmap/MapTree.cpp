@@ -384,7 +384,11 @@ namespace VMAP
                     IgnoreResult(fread(&referencedVal, sizeof(uint32), 1, rf));
                     if (!iLoadedSpawns.count(referencedVal))
                     {
-                        if (referencedVal > iNTreeValues)
+                        // >=, not >: iTreeValues holds iNTreeValues entries, so the index
+                        // that equals the count is one past the end - and writing a
+                        // ModelInstance there corrupts the heap silently. A tile whose
+                        // tree was regenerated without it is exactly how that happens.
+                        if (referencedVal >= iNTreeValues)
                         {
                             sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "invalid tree element! (%u/%u)", referencedVal, iNTreeValues);
                             continue;
@@ -467,7 +471,11 @@ namespace VMAP
                     IgnoreResult(fread(&referencedVal, sizeof(uint32), 1, tf));
                     if (!iLoadedSpawns.count(referencedVal))
                     {
-                        if (referencedVal > iNTreeValues)
+                        // >=, not >: iTreeValues holds iNTreeValues entries, so the index
+                        // that equals the count is one past the end - and writing a
+                        // ModelInstance there corrupts the heap silently. A tile whose
+                        // tree was regenerated without it is exactly how that happens.
+                        if (referencedVal >= iNTreeValues)
                         {
                             sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "invalid tree element! (%u/%u)", referencedVal, iNTreeValues);
                             continue;

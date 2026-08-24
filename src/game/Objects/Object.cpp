@@ -3383,7 +3383,8 @@ void WorldObject::PMonsterYell(int32 textId, ...) const
     va_list ap;
     va_start(ap, textId);
     float range = sWorld.getConfig(CONFIG_FLOAT_LISTEN_RANGE_YELL);
-    MaNGOS::MonsterChatBuilderFormat say_build(*this, CHAT_MSG_MONSTER_SAY, textId, LANG_UNIVERSAL, nullptr, &ap);
+    // MONSTER_YELL, not MONSTER_SAY: this is the yell overload, and it built a say packet at yell range
+    MaNGOS::MonsterChatBuilderFormat say_build(*this, CHAT_MSG_MONSTER_YELL, textId, LANG_UNIVERSAL, nullptr, &ap);
     MaNGOS::LocalizedPacketDo<MaNGOS::MonsterChatBuilderFormat> say_do(say_build);
     MaNGOS::CameraDistWorker<MaNGOS::LocalizedPacketDo<MaNGOS::MonsterChatBuilderFormat> > say_worker(this, range, say_do);
     Cell::VisitWorldObjects(this, say_worker, range);

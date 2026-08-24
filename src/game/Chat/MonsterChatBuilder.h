@@ -38,7 +38,9 @@ namespace MaNGOS
             va_copy(argsCpy, *i_vaList);
             vsnprintf(textFinal, 2048, text, argsCpy);
             va_end(argsCpy);
-            ChatHandler::BuildChatPacket(data, i_msgtype, text, i_language, CHAT_TAG_NONE, i_source.GetObjectGuid(), i_source.GetNameForLocaleIdx(loc_idx),
+            // textFinal, not text: this used to format the arguments and then send the raw format
+            // string, so every PMonsterSay/PMonsterYell taking a string id put "%s" on the screen
+            ChatHandler::BuildChatPacket(data, i_msgtype, textFinal, i_language, CHAT_TAG_NONE, i_source.GetObjectGuid(), i_source.GetNameForLocaleIdx(loc_idx),
                 i_target ? i_target->GetObjectGuid() : ObjectGuid(), i_target ? i_target->GetNameForLocaleIdx(loc_idx) : "");
         }
 

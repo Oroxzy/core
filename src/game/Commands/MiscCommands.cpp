@@ -2554,6 +2554,13 @@ bool ChatHandler::HandleArenaPanelCommand(char* args)
             maps << "|" << GetArenaMapName(ArenaMapType(i));
         PSendSysMessage("ARENA|map|%u%s", uint32(forced), maps.str().c_str());
 
+        // May this viewer change anything, or is he only looking? Reading the panel is a gamemaster
+        // right, every command behind its buttons is an administrator one - so a gamemaster used to
+        // open a panel that showed nothing at all, and now opens one that shows everything and says
+        // it is read only. Without this line the addon would let him press buttons that are refused
+        // one layer down, with no explanation anywhere.
+        PSendSysMessage("ARENA|rights|%u", GetAccessLevel() >= SEC_ADMINISTRATOR ? 1 : 0);
+
         PSendSysMessage("ARENA|done|config");
         return true;
     }

@@ -1536,7 +1536,10 @@
 
 -- 23a. mangos_string - see ArenaMangosStrings in src/game/Battlegrounds/Arena.h
 
-    DELETE FROM `mangos_string` WHERE `entry` BETWEEN 11100 AND 11204;
+-- The whole reserved block, not just the ids this table happens to hold today: a string
+-- dropped from the table has to disappear from the database with it, and a DELETE bounded
+-- by what is still there would leave the old row behind forever.
+    DELETE FROM `mangos_string` WHERE `entry` BETWEEN 11100 AND 11299;
 
     INSERT INTO `mangos_string` (`entry`, `content_default`, `content_loc1`, `content_loc2`, `content_loc3`, `content_loc4`, `content_loc5`, `content_loc6`, `content_loc7`, `content_loc8`) VALUES
         (11100, '%u seconds until the Arena battle begins!', '%u초 후 투기장 전투가 시작됩니다!', 'Le combat dans l\'arène commence dans %u secondes !', 'Der Arenakampf beginnt in %u Sekunden!', '竞技场的战斗将在%u秒后开始！', '競技場的戰鬥將在%u秒後開始！', 'El combate en la arena comenzará en %u segundos.', 'El combate en la arena comenzará en %u segundos.', 'Бой на арене начнется через %u сек.'),

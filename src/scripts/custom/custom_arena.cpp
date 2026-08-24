@@ -230,6 +230,42 @@ namespace
         return true;
     }
 
+    /*
+     * "Oroxzy hat sich fuer die 2vs2-Arena angemeldet!" - one packet per LANGUAGE in earshot.
+     *
+     * The stock WorldObject::MonsterYell(int32) already translates the sentence, but the bracket
+     * inside it is an ARGUMENT, and an argument goes through whatever language the realm happens to
+     * default to - a German player would have read "die 2v2-Arena". So the bracket is looked up per
+     * locale here as well.
+     *
+     * Everything else is the core's own machinery: LocalizedPacketDo builds one packet per locale
+     * index and hands the same buffer to everybody who shares it, and CameraDistWorker visits the
+     * cells around the announcer instead of walking the whole map's player list.
+     */
+    class ArenaYellBuilder
+    {
+        public:
+            ArenaYellBuilder(Creature const& announcer, int32 entry, char const* who, ArenaType type)
+                : m_announcer(announcer), m_entry(entry), m_who(who ? who : ""), m_type(type) {}
+
+            void operator()(WorldPacket& data, int32 locIdx)
+            {
+                char line[1024];
+                snprintf(line, sizeof(line), sObjectMgr.GetMangosString(m_entry, locIdx), m_who.c_str(),
+                         sObjectMgr.GetMangosString(LANG_ARENA_BRACKET_FIRST + GetArenaTypeIndex(m_type), locIdx));
+
+                ChatHandler::BuildChatPacket(data, CHAT_MSG_MONSTER_YELL, line, LANG_UNIVERSAL,
+                                             CHAT_TAG_NONE, m_announcer.GetObjectGuid(),
+                                             m_announcer.GetNameForLocaleIdx(locIdx));
+            }
+
+        private:
+            Creature const& m_announcer;
+            int32 m_entry;
+            std::string m_who;
+            ArenaType m_type;
+    };
+
     void AnnounceQueueJoin(Player* player, GameObject* orb, ArenaType type, bool asGroup)
     {
         if (!sWorld.getConfig(CONFIG_BOOL_ARENA_ANNOUNCE_QUEUE))
@@ -239,27 +275,14 @@ namespace
         if (!announcer)
             return;
 
-        /*
-         * Built once per listener rather than once for the realm. PMonsterYell already translates
-         * the sentence, but the bracket inside it is an argument, and an argument goes through
-         * untranslated - a German player would have read "hat sich fuer die 2v2-Arena angemeldet".
-         */
         int32 const entry = asGroup ? LANG_ARENA_YELL_GROUP : LANG_ARENA_YELL_SOLO;
         float const range = sWorld.getConfig(CONFIG_FLOAT_LISTEN_RANGE_YELL);
-        for (const auto& itr : announcer->GetMap()->GetPlayers())
-        {
-            Player* listener = itr.getSource();
-            if (!listener || !listener->GetSession() || !announcer->IsWithinDistInMap(listener, range))
-                continue;
 
-            std::string const line = ArenaMgr::Textf(listener, entry, player->GetName(),
-                                                     ArenaMgr::BracketName(listener, type));
+        ArenaYellBuilder builder(*announcer, entry, player->GetName(), type);
+        MaNGOS::LocalizedPacketDo<ArenaYellBuilder> say(builder);
+        MaNGOS::CameraDistWorker<MaNGOS::LocalizedPacketDo<ArenaYellBuilder>> worker(announcer, range, say);
+        Cell::VisitWorldObjects(announcer, worker, range);
 
-            WorldPacket data;
-            ChatHandler::BuildChatPacket(data, CHAT_MSG_MONSTER_YELL, line.c_str(), LANG_UNIVERSAL,
-                                         CHAT_TAG_NONE, announcer->GetObjectGuid(), announcer->GetName());
-            listener->GetSession()->SendPacket(&data);
-        }
         announcer->HandleEmoteCommand(EMOTE_ONESHOT_SHOUT);
     }
 
@@ -421,13 +444,14 @@ namespace
                     continue;
 
                 // one line naming the member and what is wrong with him, in the leader's own language
-                int32 memberProblem = 0;
                 if (member->GetLevel() < minLevel)
                 {
                     Refuse(player, orb, LANG_ARENA_MEMBER_LEVEL, member->GetName(), minLevel);
                     return false;
                 }
-                else if (member->InBattleGround())
+
+                int32 memberProblem = 0;
+                if (member->InBattleGround())
                     memberProblem = LANG_ARENA_MEMBER_IN_BG;
                 else if (member->IsInCombat())
                     memberProblem = LANG_ARENA_MEMBER_COMBAT;
