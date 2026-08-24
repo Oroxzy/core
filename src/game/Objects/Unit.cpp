@@ -757,8 +757,23 @@ uint32 Unit::DealDamage(Unit* pVictim, uint32 damage, CleanDamage const* cleanDa
         duel_hasEnded = true;
     }
 
-    // Arena scoreboard: damage done by players (and their pets/summons) to enemy players (and their pets/summons).
-    // Overkill is not counted.
+    /*
+     * Arena scoreboard: damage done by players (and their pets and summons) to enemy players (and
+     * their pets and summons). `health` was read before this damage is applied, so std::min keeps
+     * overkill out, and `damage` has already had absorbs taken off it - what is counted is what the
+     * target actually lost.
+     *
+     * This is deliberately wider than TrinityCore's equivalent, which requires
+     * `attacker->ToPlayer()` and `victim->GetTypeId() == TYPEID_PLAYER` and so counts neither a
+     * pet's damage nor damage done to one. On retail a hunter's or warlock's column includes the
+     * pet, and it is also the difference between a fair number and a meaningless one here, because
+     * the time limit is decided on damage done. It is also narrower in one place: TrinityCore does
+     * not check the teams, and clamps to the remaining health only for the achievement, not for the
+     * scoreboard.
+     *
+     * The team comparison is on GetBGTeam(), not on the faction, because the arena puts a horde
+     * player on the gold side often enough.
+     */
     if (pVictim != this && damage && IsArenaMapId(GetMapId()) && IsCharmerOrOwnerPlayerOrPlayerItself() && pVictim->IsCharmerOrOwnerPlayerOrPlayerItself())
     {
         if (Player* pDealer = GetCharmerOrOwnerPlayerOrPlayerItself())
@@ -6437,6 +6452,33 @@ bool Unit::IsTargetableBy(WorldObject const* pCaster, bool forAoE, bool checkAli
     }
 
     return IsInWorld();
+}
+
+/*
+ * The arena scoreboard's healing column, wherever the health came from.
+ *
+ * It has to be callable on its own because not every heal goes through SpellCaster::DealHeal. A heal
+ * over time ticks inside the aura and writes the health itself, so Renew, Rejuvenation, Regrowth's
+ * own tail, Tranquility, Spirit Bond and a First Aid bandage were all missing from that column -
+ * which on a restoration druid is very nearly everything he did all match, while his damage column
+ * was complete, because a damage over time tick does go through DealDamage.
+ *
+ * `gain` is what the target's health actually went up by, so overheal is already out. A pet's or a
+ * totem's heal is credited to the player behind it, the same way its damage is.
+ */
+void Unit::CountArenaHealingDone(int32 gain)
+{
+    if (gain <= 0 || !IsArenaMapId(GetMapId()))
+        return;
+
+    Player* pHealer = GetCharmerOrOwnerPlayerOrPlayerItself();
+    if (!pHealer)
+        return;
+
+    // the bg of the map we are on (thread local, no lookup in the global battleground list)
+    BattleGround* bg = GetMap()->IsBattleGround() ? static_cast<BattleGroundMap*>(GetMap())->GetBG() : nullptr;
+    if (bg && bg->IsArena() && bg->GetStatus() == STATUS_IN_PROGRESS)
+        bg->UpdatePlayerScore(pHealer, SCORE_HEALING_DONE, uint32(gain));
 }
 
 int32 Unit::ModifyHealth(int32 dVal)

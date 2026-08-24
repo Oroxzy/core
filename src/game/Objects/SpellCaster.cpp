@@ -776,17 +776,10 @@ int32 SpellCaster::DealHeal(Unit* pVictim, uint32 addhealth, SpellEntry const* s
     if (IsCreature() && ((Creature*)this)->IsTotem())
         pHealer = pUnit->GetOwner();
 
-    // Arena scoreboard: effective healing done by players (and their pets/totems). Overheal is not counted.
-    if (gain > 0 && pHealer && pUnit && IsArenaMapId(GetMapId()))
-    {
-        if (Player* pHealerPlayer = pUnit->GetCharmerOrOwnerPlayerOrPlayerItself())
-        {
-            // the bg of the map we are on (thread local, no lookup in the global battleground list)
-            if (BattleGround* bg = GetMap()->IsBattleGround() ? static_cast<BattleGroundMap*>(GetMap())->GetBG() : nullptr)
-                if (bg->IsArena() && bg->GetStatus() == STATUS_IN_PROGRESS)
-                    bg->UpdatePlayerScore(pHealerPlayer, SCORE_HEALING_DONE, uint32(gain));
-        }
-    }
+    // Arena scoreboard: effective healing done by players (and their pets/totems). A heal over time
+    // does not come through here at all - it ticks inside the aura, which calls the same helper.
+    if (pUnit)
+        pUnit->CountArenaHealingDone(gain);
 
     if (IsPlayer() || pVictim->IsPlayer())
         pHealer->SendHealSpellLog(pVictim, spellProto->Id, addhealth, critical);

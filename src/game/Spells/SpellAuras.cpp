@@ -6021,6 +6021,10 @@ void Aura::PeriodicTick(SpellEntry const* sProto, AuraType auraType, uint32 data
                               GetCasterGuid().GetString().c_str(), target->GetGuidStr().c_str(), pdamage, GetId());
 
             int32 gain = target->ModifyHealth(pdamage);
+            // A tick writes the health itself instead of going through DealHeal, so the arena
+            // scoreboard has to be told here as well - otherwise every heal over time in the game
+            // is missing from the healing column.
+            pCaster->CountArenaHealingDone(gain);
             SpellPeriodicAuraLogInfo pInfo(this, pdamage, 0, 0, 0.0f);
             target->SendPeriodicAuraLog(&pInfo);
 
