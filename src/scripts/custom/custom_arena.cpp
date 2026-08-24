@@ -28,6 +28,7 @@
 #include "BattleGroundMgr.h"
 #include "Group.h"
 #include "GridMap.h"
+#include "Chat.h"                                           // ChatHandler: the lines the orb writes into the chat log
 #include "Utilities/EventMap.h"
 #include "Utilities/Random.h"
 
@@ -98,22 +99,8 @@ namespace
         ORB_NPC_TEXT_HELLO              = 800102,
     };
 
-    char const* GetClassNameForPlayer(Player const* player)
-    {
-        switch (player->GetClass())
-        {
-            case CLASS_WARRIOR: return "Warrior";
-            case CLASS_PALADIN: return "Paladin";
-            case CLASS_HUNTER:  return "Hunter";
-            case CLASS_ROGUE:   return "Rogue";
-            case CLASS_PRIEST:  return "Priest";
-            case CLASS_SHAMAN:  return "Shaman";
-            case CLASS_MAGE:    return "Mage";
-            case CLASS_WARLOCK: return "Warlock";
-            case CLASS_DRUID:   return "Druid";
-        }
-        return "Unknown";
-    }
+    // (the class names live in ArenaMgr::ClassName now - they are mangos_strings, so the spectate
+    // list names another player's class in the language of whoever is reading it)
 
     // Any arena template of the wanted size (all maps of one size share the same level range).
     BattleGround* GetArenaTemplate(ArenaType type)
@@ -144,13 +131,13 @@ namespace
 
     // "Leave 2v2 queue (Arena (2v2))" - built in one place because the main menu and the admin map
     // picker both show it, each in the slot where the queue entry for that size would otherwise be.
-    std::string LeaveQueueLabel(ArenaType type, BattleGroundQueueTypeId queueTypeId)
+    // The arena's own name comes out of battleground_template and is the same in every language, so
+    // only the bracket and the frame around it are translated.
+    std::string LeaveQueueLabel(Player const* player, ArenaType type, BattleGroundQueueTypeId queueTypeId)
     {
-        std::ostringstream ss;
-        ss << "Leave " << GetArenaTypeName(type) << " queue";
-        if (BattleGround* bg = sBattleGroundMgr.GetBattleGroundTemplate(BattleGroundMgr::BgTemplateId(queueTypeId)))
-            ss << " (" << bg->GetName() << ")";
-        return ss.str();
+        BattleGround* bg = sBattleGroundMgr.GetBattleGroundTemplate(BattleGroundMgr::BgTemplateId(queueTypeId));
+        return ArenaMgr::Textf(player, LANG_ARENA_MENU_LEAVE_QUEUE, ArenaMgr::BracketName(player, type),
+                               bg ? bg->GetName() : "");
     }
 
     uint32 GetWaitingPlayersCount(Player const* player, ArenaType type)
@@ -182,8 +169,22 @@ namespace
         return healerPoints >= 31;
     }
 
-    void Refuse(Player* player, GameObject* orb, char const* text)
+    /*
+     * Refused at the orb: the denied sound, one line in the middle of the screen, and the window
+     * closes.
+     *
+     * `entry` is a `mangos_string`, never a literal, so the line comes out in the player's own
+     * language - see section 23 of sql/arena/world_arena.sql. Anything the entry needs (a level, a
+     * group size) follows, exactly as it would for printf.
+     */
+    void Refuse(Player* player, GameObject* orb, int32 entry, ...)
     {
+        char text[1024];
+        va_list ap;
+        va_start(ap, entry);
+        vsnprintf(text, sizeof(text), ArenaMgr::Text(player, entry), ap);
+        va_end(ap);
+
         if (orb)
             orb->PlayDirectSound(SOUND_ARENA_ORB_DENIED, player);
         player->GetSession()->SendNotification("%s", text);
@@ -202,21 +203,19 @@ namespace
         uint32 const minLevel = GetArenaMinLevel(anyTemplate);
         if (player->GetLevel() < minLevel)
         {
-            std::ostringstream ss;
-            ss << "You must be level " << minLevel << " or higher.";
-            Refuse(player, orb, ss.str().c_str());
+            Refuse(player, orb, LANG_ARENA_ORB_LEVEL, minLevel);
             return false;
         }
 
         if (player->IsInCombat())
         {
-            Refuse(player, orb, "You are in combat.");
+            Refuse(player, orb, LANG_ARENA_ORB_IN_COMBAT);
             return false;
         }
 
         if (player->IsGameMaster())
         {
-            Refuse(player, orb, "Please disable GM mode.");
+            Refuse(player, orb, LANG_ARENA_ORB_GM_MODE);
             return false;
         }
 
@@ -224,7 +223,7 @@ namespace
         // and the opponent waits through the whole preparation for nobody
         if (!player->CanJoinToBattleground())
         {
-            Refuse(player, orb, "You can not queue while you are a deserter.");
+            Refuse(player, orb, LANG_ARENA_ORB_DESERTER);
             return false;
         }
 
@@ -240,9 +239,27 @@ namespace
         if (!announcer)
             return;
 
-        std::ostringstream ss;
-        ss << player->GetName() << (asGroup ? " and group queued up for " : " queued up for ") << GetArenaTypeName(type) << " arena!";
-        announcer->MonsterYell(ss.str().c_str());
+        /*
+         * Built once per listener rather than once for the realm. PMonsterYell already translates
+         * the sentence, but the bracket inside it is an argument, and an argument goes through
+         * untranslated - a German player would have read "hat sich fuer die 2v2-Arena angemeldet".
+         */
+        int32 const entry = asGroup ? LANG_ARENA_YELL_GROUP : LANG_ARENA_YELL_SOLO;
+        float const range = sWorld.getConfig(CONFIG_FLOAT_LISTEN_RANGE_YELL);
+        for (const auto& itr : announcer->GetMap()->GetPlayers())
+        {
+            Player* listener = itr.getSource();
+            if (!listener || !listener->GetSession() || !announcer->IsWithinDistInMap(listener, range))
+                continue;
+
+            std::string const line = ArenaMgr::Textf(listener, entry, player->GetName(),
+                                                     ArenaMgr::BracketName(listener, type));
+
+            WorldPacket data;
+            ChatHandler::BuildChatPacket(data, CHAT_MSG_MONSTER_YELL, line.c_str(), LANG_UNIVERSAL,
+                                         CHAT_TAG_NONE, announcer->GetObjectGuid(), announcer->GetName());
+            listener->GetSession()->SendPacket(&data);
+        }
         announcer->HandleEmoteCommand(EMOTE_ONESHOT_SHOUT);
     }
 
@@ -253,13 +270,13 @@ namespace
         BattleGround* anyTemplate = GetArenaTemplate(type);
         if (!anyTemplate)
         {
-            Refuse(player, orb, "This arena size is not available.");
+            Refuse(player, orb, LANG_ARENA_ORB_NO_SIZE);
             return false;
         }
 
         if (player->InBattleGround())
         {
-            Refuse(player, orb, "You are already in a battleground.");
+            Refuse(player, orb, LANG_ARENA_ORB_IN_BG);
             return false;
         }
 
@@ -268,15 +285,15 @@ namespace
 
         if (IsInArenaQueueOfType(player, type))
         {
-            Refuse(player, orb, "You are already queued for this arena size.");
+            Refuse(player, orb, LANG_ARENA_ORB_QUEUED_SIZE);
             return false;
         }
 
         std::string reason;
         if (player->HasForbiddenArenaItems(type, &reason))
         {
-            player->PSendSysMessage("%s", reason.c_str());
-            Refuse(player, orb, "You are wearing items that are not allowed in the arena.");
+            ChatHandler(player).SendSysMessage(reason.c_str());
+            Refuse(player, orb, LANG_ARENA_ORB_ITEMS);
             return false;
         }
 
@@ -284,21 +301,21 @@ namespace
         // only place this can be told to him without stranding him inside is before he queues.
         if (ArenaMgr::HasExcessResistance(player, &reason))
         {
-            player->PSendSysMessage("%s", reason.c_str());
-            Refuse(player, orb, "You are wearing too much resistance for the arena.");
+            ChatHandler(player).SendSysMessage(reason.c_str());
+            Refuse(player, orb, LANG_ARENA_ORB_RESISTANCE);
             return false;
         }
 
         if (type == ARENA_TYPE_1V1 && sWorld.getConfig(CONFIG_BOOL_ARENA_1V1_BLOCK_HEALER_SPECS) && IsHealerSpec(player))
         {
-            Refuse(player, orb, "Healer specs can not queue for 1v1 arenas.");
+            Refuse(player, orb, LANG_ARENA_ORB_HEALER);
             return false;
         }
 
         BattleGroundBracketId const bracketId = player->GetBattleGroundBracketIdFromLevel(anyTemplate->GetTypeID());
         if (bracketId == BG_BRACKET_ID_NONE)
         {
-            Refuse(player, orb, "Your level is not allowed in the arena.");
+            Refuse(player, orb, LANG_ARENA_ORB_BRACKET);
             return false;
         }
 
@@ -316,13 +333,13 @@ namespace
             // the check above catches the same size on another map; this one is the exact queue
             if (player->GetBattleGroundQueueIndex(bgQueueTypeId) < PLAYER_MAX_BATTLEGROUND_QUEUES)
             {
-                Refuse(player, orb, "You are already queued for this arena.");
+                Refuse(player, orb, LANG_ARENA_ORB_QUEUED_THIS);
                 return false;
             }
 
             if (!player->HasFreeBattleGroundQueueId())
             {
-                Refuse(player, orb, "You are already in the maximum number of queues.");
+                Refuse(player, orb, LANG_ARENA_ORB_MAX_QUEUES);
                 return false;
             }
 
@@ -338,7 +355,7 @@ namespace
             {
                 // and the way out is worth naming: in a party he can only come along, never queue by
                 // himself, so a member who wants to play alone has to leave first
-                Refuse(player, orb, "Only the group leader can queue the group. Leave the group to queue alone.");
+                Refuse(player, orb, LANG_ARENA_ORB_NOT_LEADER);
                 return false;
             }
 
@@ -357,7 +374,7 @@ namespace
 
             if (onlineMembers != group->GetMembersCount())
             {
-                Refuse(player, orb, "A member of your group is offline.");
+                Refuse(player, orb, LANG_ARENA_ORB_MEMBER_OFFLINE);
                 return false;
             }
 
@@ -375,9 +392,7 @@ namespace
              */
             if (group->isRaidGroup() || onlineMembers != uint32(type))
             {
-                std::ostringstream ss;
-                ss << "This arena size needs a group of exactly " << uint32(type) << ". Leave the group to queue alone.";
-                Refuse(player, orb, ss.str().c_str());
+                Refuse(player, orb, LANG_ARENA_ORB_PARTY_SIZE, uint32(type));
                 return false;
             }
 
@@ -392,7 +407,7 @@ namespace
             // a member in another level bracket would silently be left behind and the team would fight undersized
             if (!excludedMembers.empty())
             {
-                Refuse(player, orb, "A group member is not in your level bracket.");
+                Refuse(player, orb, LANG_ARENA_ORB_MEMBER_BRACKET);
                 return false;
             }
 
@@ -405,30 +420,36 @@ namespace
                 if (!member || member == player)
                     continue;
 
-                std::ostringstream why;
+                // one line naming the member and what is wrong with him, in the leader's own language
+                int32 memberProblem = 0;
                 if (member->GetLevel() < minLevel)
-                    why << member->GetName() << " must be level " << minLevel << " or higher.";
-                else if (member->InBattleGround())
-                    why << member->GetName() << " is inside a battleground.";
-                else if (member->IsInCombat())
-                    why << member->GetName() << " is in combat.";
-                else if (member->IsGameMaster())
-                    why << member->GetName() << " is in GM mode.";
-                else if (IsInArenaQueueOfType(member, type))
-                    why << member->GetName() << " is already queued for this arena size.";
-
-                if (!why.str().empty())
                 {
-                    Refuse(player, orb, why.str().c_str());
+                    Refuse(player, orb, LANG_ARENA_MEMBER_LEVEL, member->GetName(), minLevel);
+                    return false;
+                }
+                else if (member->InBattleGround())
+                    memberProblem = LANG_ARENA_MEMBER_IN_BG;
+                else if (member->IsInCombat())
+                    memberProblem = LANG_ARENA_MEMBER_COMBAT;
+                else if (member->IsGameMaster())
+                    memberProblem = LANG_ARENA_MEMBER_GM;
+                else if (IsInArenaQueueOfType(member, type))
+                    memberProblem = LANG_ARENA_MEMBER_QUEUED;
+
+                if (memberProblem)
+                {
+                    Refuse(player, orb, memberProblem, member->GetName());
                     return false;
                 }
 
                 std::string memberReason;
                 if (member->HasForbiddenArenaItems(type, &memberReason))
                 {
-                    member->PSendSysMessage("%s", memberReason.c_str());
-                    player->PSendSysMessage("%s is wearing items that are not allowed in the arena.", member->GetName());
-                    Refuse(player, orb, "A group member is wearing items that are not allowed in the arena.");
+                    // the detail goes to the member (it is written in his language), the summary to
+                    // the leader who pressed the button (in his)
+                    ChatHandler(member).SendSysMessage(memberReason.c_str());
+                    ChatHandler(player).PSendSysMessage(LANG_ARENA_MEMBER_ITEMS, member->GetName());
+                    Refuse(player, orb, LANG_ARENA_ORB_MEMBER_ITEMS);
                     return false;
                 }
 
@@ -438,9 +459,9 @@ namespace
                 // with a friend instead of alone.
                 if (ArenaMgr::HasExcessResistance(member, &memberReason))
                 {
-                    member->PSendSysMessage("%s", memberReason.c_str());
-                    player->PSendSysMessage("%s is wearing too much resistance for the arena.", member->GetName());
-                    Refuse(player, orb, "A group member is wearing too much resistance for the arena.");
+                    ChatHandler(member).SendSysMessage(memberReason.c_str());
+                    ChatHandler(player).PSendSysMessage(LANG_ARENA_MEMBER_RESISTANCE, member->GetName());
+                    Refuse(player, orb, LANG_ARENA_ORB_MEMBER_RESISTANCE);
                     return false;
                 }
             }
@@ -482,14 +503,14 @@ namespace
         // would otherwise still work for anybody who kept the menu open when the switch was turned off
         if (!sWorld.getConfig(CONFIG_BOOL_ARENA_SPECTATE))
         {
-            Refuse(player, orb, "Spectating is disabled on this realm.");
+            Refuse(player, orb, LANG_ARENA_ORB_NO_SPECTATE);
             return false;
         }
 
         BattleGround* bg = sBattleGroundMgr.GetBattleGround(instanceId, BATTLEGROUND_TYPE_NONE);
         if (!bg || !bg->IsArena() || bg->GetStatus() != STATUS_IN_PROGRESS)
         {
-            Refuse(player, orb, "This match is over.");
+            Refuse(player, orb, LANG_ARENA_ORB_MATCH_OVER);
             return false;
         }
 
@@ -506,7 +527,7 @@ namespace
         }
         if (!slotAvailable)
         {
-            Refuse(player, orb, "Leave a battleground queue first.");
+            Refuse(player, orb, LANG_ARENA_ORB_LEAVE_QUEUE_FIRST);
             return false;
         }
 
@@ -518,7 +539,7 @@ namespace
                 Player* member = itr->getSource();
                 if (member && member != player && bg->IsPlayerInBattleGround(member->GetObjectGuid()))
                 {
-                    Refuse(player, orb, "You can not watch a match of your own group.");
+                    Refuse(player, orb, LANG_ARENA_ORB_OWN_GROUP);
                     return false;
                 }
             }
@@ -540,7 +561,7 @@ namespace
         }
         if (!target)
         {
-            Refuse(player, orb, "This match is over.");
+            Refuse(player, orb, LANG_ARENA_ORB_MATCH_OVER);
             return false;
         }
 
@@ -623,7 +644,7 @@ static bool ShowArenaAdminMenu(Player* player, GameObject* orb)
     pinned << (forced < ARENA_MAPS_COUNT ? GetArenaMapName(forced) : "any map") << ")";
     player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, pinned.str().c_str(), SENDER_ADMIN_MAP_MENU, 0);
 
-    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Back", SENDER_NOOP, 0);
+    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, ArenaMgr::Text(player, LANG_ARENA_MENU_BACK), SENDER_NOOP, 0);
     player->SEND_GOSSIP_MENU(ORB_NPC_TEXT_HELLO, orb->GetObjectGuid());
     return true;
 }
@@ -649,7 +670,7 @@ static bool ShowArenaMapMenu(Player* player, GameObject* orb)
     }
 
     player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "Release the map again (random as usual)", SENDER_ADMIN, ACTION_ADMIN_MAP_ANY);
-    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Back", SENDER_ADMIN_MENU, 0);
+    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, ArenaMgr::Text(player, LANG_ARENA_MENU_BACK), SENDER_ADMIN_MENU, 0);
     player->SEND_GOSSIP_MENU(ORB_NPC_TEXT_HELLO, orb->GetObjectGuid());
     return true;
 }
@@ -671,7 +692,7 @@ static bool ShowArenaMapBracketMenu(Player* player, GameObject* orb, ArenaMapTyp
         BattleGroundQueueTypeId const queued = GetArenaQueueOfType(player, type);
         if (queued != BATTLEGROUND_QUEUE_NONE)
         {
-            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, LeaveQueueLabel(type, queued).c_str(), SENDER_LEAVE_QUEUE, queued);
+            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, LeaveQueueLabel(player, type, queued).c_str(), SENDER_LEAVE_QUEUE, queued);
             continue;
         }
 
@@ -680,7 +701,7 @@ static bool ShowArenaMapBracketMenu(Player* player, GameObject* orb, ArenaMapTyp
         player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, ss.str().c_str(), SENDER_ADMIN_MAP_QUEUE, map * ARENA_TYPES_COUNT + index);
     }
 
-    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Back", SENDER_ADMIN_MAP_MENU, 0);
+    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, ArenaMgr::Text(player, LANG_ARENA_MENU_BACK), SENDER_ADMIN_MAP_MENU, 0);
     player->SEND_GOSSIP_MENU(ORB_NPC_TEXT_HELLO, orb->GetObjectGuid());
     return true;
 }
@@ -704,18 +725,15 @@ static bool ShowArenaRatingMenu(Player* player, GameObject* orb)
             continue;
 
         ArenaRatingEntry const entry = sArenaRatingMgr.Get(player->GetObjectGuid(), type);
+        char const* bracket = ArenaMgr::BracketName(player, type);
 
-        std::ostringstream ss;
-        ss << GetArenaTypeName(type) << ": ";
-        if (entry.games)
-            ss << entry.rating << " (best " << entry.bestRating << ") - "
-               << entry.games << (entry.games == 1 ? " match, " : " matches, ") << entry.wins << " won";
-        else
-            ss << "no rated match yet";
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, ss.str().c_str(), SENDER_RATING_LADDER, index);
+        std::string const line = entry.games
+            ? ArenaMgr::Textf(player, LANG_ARENA_MENU_RATING_LINE, bracket, entry.rating, entry.bestRating, entry.games, entry.wins)
+            : ArenaMgr::Textf(player, LANG_ARENA_MENU_NO_RATED, bracket);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, line.c_str(), SENDER_RATING_LADDER, index);
     }
 
-    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Back", SENDER_NOOP, 0);
+    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, ArenaMgr::Text(player, LANG_ARENA_MENU_BACK), SENDER_NOOP, 0);
     player->SEND_GOSSIP_MENU(ORB_NPC_TEXT_HELLO, orb->GetObjectGuid());
     return true;
 }
@@ -730,28 +748,27 @@ static bool ShowArenaLadderMenu(Player* player, GameObject* orb, ArenaType type)
     std::vector<ArenaLadderRow> ladder;
     sArenaRatingMgr.GetLadder(type, ARENA_LADDER_LIST_MAX, minGames, ladder);
 
+    char const* bracket = ArenaMgr::BracketName(player, type);
+
     if (ladder.empty())
     {
-        std::ostringstream ss;
-        if (minGames > 1)
-            ss << "Nobody has played " << minGames << " rated " << GetArenaTypeName(type) << " matches yet.";
-        else
-            ss << "Nobody has played a rated " << GetArenaTypeName(type) << " match yet.";
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, ss.str().c_str(), SENDER_RATING, 0);
+        std::string const line = minGames > 1
+            ? ArenaMgr::Textf(player, LANG_ARENA_MENU_LADDER_EMPTY, minGames, bracket)
+            : ArenaMgr::Textf(player, LANG_ARENA_MENU_LADDER_EMPTY_ONE, bracket);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, line.c_str(), SENDER_RATING, 0);
     }
 
     uint32 rank = 0;
     for (auto const& row : ladder)
     {
-        std::ostringstream ss;
-        ss << ++rank << ". " << row.name << " - " << row.rating
-           << " (" << row.games << (row.games == 1 ? " match, " : " matches, ") << row.wins << " won)";
+        std::string const line = ArenaMgr::Textf(player, LANG_ARENA_MENU_LADDER_ROW, ++rank,
+                                                 row.name.c_str(), row.rating, row.games, row.wins);
         // every line leads back into the rating menu, an unhandled action would fall out to the main one
         player->ADD_GOSSIP_ITEM(row.guid == player->GetObjectGuid() ? GOSSIP_ICON_BATTLE : GOSSIP_ICON_CHAT,
-                                ss.str().c_str(), SENDER_RATING, 0);
+                                line.c_str(), SENDER_RATING, 0);
     }
 
-    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Back", SENDER_RATING, 0);
+    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, ArenaMgr::Text(player, LANG_ARENA_MENU_BACK), SENDER_RATING, 0);
     player->SEND_GOSSIP_MENU(ORB_NPC_TEXT_HELLO, orb->GetObjectGuid());
     return true;
 }
@@ -763,7 +780,7 @@ static bool ShowArenaOrbMenu(Player* player, GameObject* orb)
 
     if (!sWorld.getConfig(CONFIG_BOOL_ARENA_ENABLED))
     {
-        Refuse(player, orb, "The arenas are closed.");
+        Refuse(player, orb, LANG_ARENA_ORB_CLOSED);
         return true;
     }
 
@@ -774,7 +791,7 @@ static bool ShowArenaOrbMenu(Player* player, GameObject* orb)
         anyTemplate = GetArenaTemplate(ARENA_TYPE_1V1);
     if (!anyTemplate)
     {
-        Refuse(player, orb, "The arenas are closed.");
+        Refuse(player, orb, LANG_ARENA_ORB_CLOSED);
         return true;
     }
 
@@ -783,8 +800,8 @@ static bool ShowArenaOrbMenu(Player* player, GameObject* orb)
     // an admin in GM mode still gets to the settings, only queueing needs GM mode off
     if (admin && player->IsGameMaster())
     {
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Disable GM mode to queue for an arena.", SENDER_NOOP, 0);
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "<Admin> Arena settings", SENDER_ADMIN_MENU, 0);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, ArenaMgr::Text(player, LANG_ARENA_MENU_GM_OFF), SENDER_NOOP, 0);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, ArenaMgr::Text(player, LANG_ARENA_MENU_ADMIN), SENDER_ADMIN_MENU, 0);
         player->SEND_GOSSIP_MENU(ORB_NPC_TEXT_HELLO, orb->GetObjectGuid());
         return true;
     }
@@ -797,7 +814,7 @@ static bool ShowArenaOrbMenu(Player* player, GameObject* orb)
         if (sArenaRatingMgr.IsRatingEnabled())
         {
             player->PlayerTalkClass->ClearMenus();          // Refuse() closed the window, open it again with just this
-            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TALK, "Your arena rating", SENDER_RATING, 0);
+            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TALK, ArenaMgr::Text(player, LANG_ARENA_MENU_MY_RATING), SENDER_RATING, 0);
             player->SEND_GOSSIP_MENU(ORB_NPC_TEXT_HELLO, orb->GetObjectGuid());
         }
         return true;
@@ -805,7 +822,7 @@ static bool ShowArenaOrbMenu(Player* player, GameObject* orb)
 
     Group* group = player->GetGroup();
     if (group && group->GetLeaderGuid() != player->GetObjectGuid())
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Only your group leader can queue. Leave the group to queue alone.", SENDER_NOOP, 0);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, ArenaMgr::Text(player, LANG_ARENA_MENU_LEADER_ONLY), SENDER_NOOP, 0);
 
     for (uint8 index = 0; index < ARENA_TYPES_COUNT; ++index)
     {
@@ -818,7 +835,7 @@ static bool ShowArenaOrbMenu(Player* player, GameObject* orb)
         BattleGroundQueueTypeId const queued = GetArenaQueueOfType(player, type);
         if (queued != BATTLEGROUND_QUEUE_NONE)
         {
-            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, LeaveQueueLabel(type, queued).c_str(), SENDER_LEAVE_QUEUE, queued);
+            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, LeaveQueueLabel(player, type, queued).c_str(), SENDER_LEAVE_QUEUE, queued);
             continue;
         }
 
@@ -830,11 +847,11 @@ static bool ShowArenaOrbMenu(Player* player, GameObject* orb)
                 continue;
         }
 
-        std::ostringstream ss;
-        ss << (group ? "Group queue for " : "Queue for ") << GetArenaTypeName(type) << " arena";
+        std::string line = ArenaMgr::Textf(player, group ? LANG_ARENA_MENU_GROUP_QUEUE : LANG_ARENA_MENU_QUEUE,
+                                           ArenaMgr::BracketName(player, type));
         if (uint32 waiting = GetWaitingPlayersCount(player, type))
-            ss << " (" << waiting << (waiting == 1 ? " player" : " players") << " waiting)";
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, ss.str().c_str(), SENDER_QUEUE, index);
+            line += ArenaMgr::Textf(player, LANG_ARENA_MENU_WAITING, waiting);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, line.c_str(), SENDER_QUEUE, index);
     }
 
     // running matches
@@ -847,14 +864,14 @@ static bool ShowArenaOrbMenu(Player* player, GameObject* orb)
                 break;
             }
     if (anyMatch && sWorld.getConfig(CONFIG_BOOL_ARENA_SPECTATE))
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, "Spectate a match", SENDER_SPECTATE_LIST, 0);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TRAINER, ArenaMgr::Text(player, LANG_ARENA_MENU_SPECTATE), SENDER_SPECTATE_LIST, 0);
 
     if (sArenaRatingMgr.IsRatingEnabled())
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TALK, "Your arena rating", SENDER_RATING, 0);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_TALK, ArenaMgr::Text(player, LANG_ARENA_MENU_MY_RATING), SENDER_RATING, 0);
 
     // admins can adjust the gear rules (own submenu, see ShowArenaAdminMenu)
     if (admin)
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, "<Admin> Arena settings", SENDER_ADMIN_MENU, 0);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, ArenaMgr::Text(player, LANG_ARENA_MENU_ADMIN), SENDER_ADMIN_MENU, 0);
 
     player->SEND_GOSSIP_MENU(ORB_NPC_TEXT_HELLO, orb->GetObjectGuid());
     return true;
@@ -889,8 +906,13 @@ static bool HandleArenaOrbSelect(Player* player, GameObject* orb, uint32 sender,
                     if (bg->GetStatus() != STATUS_IN_PROGRESS)
                         continue;
 
+                    // The arena's own name is what battleground_template calls it and reads the same
+                    // everywhere; the "(rated)" mark and the class names are the reader's own.
                     std::ostringstream ss;
-                    ss << bg->GetName() << (static_cast<Arena*>(bg)->IsRated() ? " (rated):" : ":");
+                    ss << bg->GetName();
+                    if (static_cast<Arena*>(bg)->IsRated())
+                        ss << ArenaMgr::Text(player, LANG_ARENA_MENU_RATED_MARK);
+                    ss << ":";
                     uint32 shown = 0;
                     for (const auto& playerItr : bg->GetPlayers())
                     {
@@ -898,7 +920,8 @@ static bool HandleArenaOrbSelect(Player* player, GameObject* orb, uint32 sender,
                         if (!participant)
                             continue;
 
-                        ss << (shown ? ", " : " ") << participant->GetName() << " (" << participant->GetTalentSpecName() << " " << GetClassNameForPlayer(participant) << ")";
+                        ss << (shown ? ", " : " ") << participant->GetName() << " (" << participant->GetTalentSpecName()
+                           << " " << ArenaMgr::ClassName(player, participant->GetClass()) << ")";
                         ++shown;
                     }
 
@@ -910,7 +933,7 @@ static bool HandleArenaOrbSelect(Player* player, GameObject* orb, uint32 sender,
                     }
                 }
             }
-            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Back", SENDER_NOOP, 0);
+            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, ArenaMgr::Text(player, LANG_ARENA_MENU_BACK), SENDER_NOOP, 0);
             player->SEND_GOSSIP_MENU(ORB_NPC_TEXT_HELLO, orb->GetObjectGuid());
             return true;
         }
@@ -1056,8 +1079,8 @@ bool GossipHello_ArenaWatcher(Player* player, Creature* creature)
         return false;
 
     if (bg->GetStatus() == STATUS_WAIT_JOIN && !static_cast<Arena*>(bg)->IsPlayerReady(player->GetObjectGuid()))
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, "I'm ready!", GOSSIP_SENDER_MAIN, WATCHER_ACTION_READY);
-    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "I want to leave the arena.", GOSSIP_SENDER_MAIN, WATCHER_ACTION_LEAVE);
+        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_BATTLE, ArenaMgr::Text(player, LANG_ARENA_MENU_READY), GOSSIP_SENDER_MAIN, WATCHER_ACTION_READY);
+    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, ArenaMgr::Text(player, LANG_ARENA_MENU_WANT_LEAVE), GOSSIP_SENDER_MAIN, WATCHER_ACTION_LEAVE);
     if (player->GetSession()->GetSecurity() >= SEC_ADMINISTRATOR)
     {
         if (bg->GetStatus() == STATUS_WAIT_JOIN)
@@ -1175,7 +1198,7 @@ bool GossipSelect_ArenaWatcher(Player* player, Creature* creature, uint32 /*send
         case WATCHER_ACTION_LEAVE:
         {
             player->PlayerTalkClass->ClearMenus();
-            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Yes, I am sure.", GOSSIP_SENDER_MAIN, WATCHER_ACTION_CONFIRM_LEAVE);
+            player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, ArenaMgr::Text(player, LANG_ARENA_MENU_SURE), GOSSIP_SENDER_MAIN, WATCHER_ACTION_CONFIRM_LEAVE);
             player->SEND_GOSSIP_MENU(WATCHER_NPC_TEXT_LEAVE_CONFIRM, creature->GetObjectGuid());
             return true;
         }

@@ -19034,7 +19034,7 @@ void Player::ApplyArenaLeaveLockout()
         holder->SetAuraMaxDuration(duration);
         holder->RefreshHolder();
     }
-    ChatHandler(this).PSendSysMessage("You left an unfinished arena match: no queueing for %u minutes.", minutes);
+    ChatHandler(this).PSendSysMessage(LANG_ARENA_LEFT_MATCH, minutes);
 }
 
 bool Player::IsVisibleInGridForPlayer(Player const* pl) const
@@ -20090,7 +20090,7 @@ bool Player::HasForbiddenArenaItems(ArenaType type, std::string* firstReason) co
             continue;
 
         std::string reason;
-        if (sArenaMgr.IsItemForbidden(pItem->GetProto(), type, firstReason ? &reason : nullptr))
+        if (sArenaMgr.IsItemForbidden(pItem->GetProto(), type, firstReason ? &reason : nullptr, this))
         {
             if (firstReason)
                 *firstReason = ChatHandler(const_cast<Player*>(this)).GetItemLink(pItem->GetProto()) + " " + reason;
@@ -20112,7 +20112,7 @@ void Player::UnequipForbiddenArenaItems(ArenaType type)
             continue;
 
         std::string reason;
-        if (sArenaMgr.IsItemForbidden(pItem->GetProto(), type, &reason))
+        if (sArenaMgr.IsItemForbidden(pItem->GetProto(), type, &reason, this))
         {
             PSendSysMessage("%s %s", ChatHandler(this).GetItemLink(pItem->GetProto()).c_str(), reason.c_str());
             AutoUnequipItemFromSlot(slot);

@@ -45,6 +45,67 @@
 INSTANTIATE_SINGLETON_1(ArenaMgr);
 
 /*********************************************************/
+/***                    LANGUAGES                      ***/
+/*********************************************************/
+
+/*
+ * The arena writes no English anywhere. Every line it puts in front of a player is a `mangos_string`
+ * with all nine columns filled (section 23 of sql/arena/world_arena.sql, generated from
+ * tools/locales/arena_locales.tsv of the client patch), and these three are how the code reaches it.
+ *
+ * Which column is which is worth spelling out, because the two enums in Common.h disagree:
+ * `content_loc<i>` is `LocaleConstant(i)`, so 1 koKR, 2 frFR, 3 deDE, 4 zhCN, 5 zhTW, 6 esES,
+ * 7 esMX, 8 ruRU. DBLocaleConstant numbers the first three the other way round and belongs to a
+ * different index. ObjectMgr::GetMangosString takes the DB index, which the session already holds.
+ */
+char const* ArenaMgr::Text(Player const* player, int32 entry)
+{
+    if (player && player->GetSession())
+        return player->GetSession()->GetMangosString(entry);
+
+    return sObjectMgr.GetMangosString(entry, DB_LOCALE_enUS);
+}
+
+std::string ArenaMgr::Textf(Player const* player, int32 entry, ...)
+{
+    char const* format = Text(player, entry);
+    if (!format)
+        return std::string();
+
+    char buffer[2048];
+    va_list ap;
+    va_start(ap, entry);
+    vsnprintf(buffer, sizeof(buffer), format, ap);
+    va_end(ap);
+    return std::string(buffer);
+}
+
+char const* ArenaMgr::BracketName(Player const* player, ArenaType type)
+{
+    // 1v1 is entry+0, 2v2 entry+1, 3v3 entry+2, 5v5 entry+3 - the same order as GetArenaTypeIndex
+    return Text(player, LANG_ARENA_BRACKET_FIRST + GetArenaTypeIndex(type));
+}
+
+char const* ArenaMgr::ClassName(Player const* reader, uint8 playerClass)
+{
+    // The class ids are not consecutive - 6 and 10 are the holes the death knight and the second
+    // unused slot leave - so the nine strings are picked one by one rather than by arithmetic.
+    switch (playerClass)
+    {
+        case CLASS_WARRIOR: return Text(reader, LANG_ARENA_CLASS_FIRST + 0);
+        case CLASS_PALADIN: return Text(reader, LANG_ARENA_CLASS_FIRST + 1);
+        case CLASS_HUNTER:  return Text(reader, LANG_ARENA_CLASS_FIRST + 2);
+        case CLASS_ROGUE:   return Text(reader, LANG_ARENA_CLASS_FIRST + 3);
+        case CLASS_PRIEST:  return Text(reader, LANG_ARENA_CLASS_FIRST + 4);
+        case CLASS_SHAMAN:  return Text(reader, LANG_ARENA_CLASS_FIRST + 5);
+        case CLASS_MAGE:    return Text(reader, LANG_ARENA_CLASS_FIRST + 6);
+        case CLASS_WARLOCK: return Text(reader, LANG_ARENA_CLASS_FIRST + 7);
+        case CLASS_DRUID:   return Text(reader, LANG_ARENA_CLASS_FIRST + 8);
+    }
+    return "";
+}
+
+/*********************************************************/
 /***                     ARENA MGR                     ***/
 /*********************************************************/
 
@@ -313,18 +374,20 @@ bool ArenaMgr::HasExcessResistance(Player const* player, std::string* reason)
     // those are stripped on entering anyway. What he actually brings into the match is his gear.
     struct SchoolCap
     {
-        char const* name;
+        int32 name;                                     // mangos_string, "Fire Resistance" whole:
+                                                        // German glues the two words together and
+                                                        // French puts a preposition between them
         eConfigUInt32Values config;
         int32 ItemPrototype::* field;
     };
 
     static SchoolCap const schools[] =
     {
-        { "Fire",   CONFIG_UINT32_ARENA_MAX_RES_FIRE,   &ItemPrototype::FireRes   },
-        { "Nature", CONFIG_UINT32_ARENA_MAX_RES_NATURE, &ItemPrototype::NatureRes },
-        { "Frost",  CONFIG_UINT32_ARENA_MAX_RES_FROST,  &ItemPrototype::FrostRes  },
-        { "Shadow", CONFIG_UINT32_ARENA_MAX_RES_SHADOW, &ItemPrototype::ShadowRes },
-        { "Arcane", CONFIG_UINT32_ARENA_MAX_RES_ARCANE, &ItemPrototype::ArcaneRes },
+        { LANG_ARENA_RESISTANCE_FIRST + 0, CONFIG_UINT32_ARENA_MAX_RES_FIRE,   &ItemPrototype::FireRes   },
+        { LANG_ARENA_RESISTANCE_FIRST + 1, CONFIG_UINT32_ARENA_MAX_RES_NATURE, &ItemPrototype::NatureRes },
+        { LANG_ARENA_RESISTANCE_FIRST + 2, CONFIG_UINT32_ARENA_MAX_RES_FROST,  &ItemPrototype::FrostRes  },
+        { LANG_ARENA_RESISTANCE_FIRST + 3, CONFIG_UINT32_ARENA_MAX_RES_SHADOW, &ItemPrototype::ShadowRes },
+        { LANG_ARENA_RESISTANCE_FIRST + 4, CONFIG_UINT32_ARENA_MAX_RES_ARCANE, &ItemPrototype::ArcaneRes },
     };
 
     for (auto const& school : schools)
@@ -342,12 +405,7 @@ bool ArenaMgr::HasExcessResistance(Player const* player, std::string* reason)
         if (total > int32(cap))
         {
             if (reason)
-            {
-                std::ostringstream ss;
-                ss << "Your gear has |cffff726f" << total << "|r " << school.name
-                   << " Resistance, the arena allows |cff71d5ff" << cap << "|r.";
-                *reason = ss.str();
-            }
+                *reason = Textf(player, LANG_ARENA_GEAR_RESISTANCE, Text(player, school.name), total, cap);
             return true;
         }
     }
@@ -383,7 +441,7 @@ char const* ArenaMgr::GetPatchName(uint8 patch)
     return "Unknown patch";
 }
 
-bool ArenaMgr::IsItemForbidden(ItemPrototype const* proto, ArenaType type, std::string* reason) const
+bool ArenaMgr::IsItemForbidden(ItemPrototype const* proto, ArenaType type, std::string* reason, Player const* reader) const
 {
     if (!proto)
         return false;
@@ -395,12 +453,10 @@ bool ArenaMgr::IsItemForbidden(ItemPrototype const* proto, ArenaType type, std::
     {
         if (patch > maxPatch)
         {
+            // the patch titles themselves stay English: they are marketing names no client ever
+            // carried in any language
             if (reason)
-            {
-                std::ostringstream ss;
-                ss << "is from |cffff726f" << GetPatchName(patch) << "|r, allowed are items from |cff71d5ff" << GetPatchName(uint8(maxPatch)) << "|r and below.";
-                *reason = ss.str();
-            }
+                *reason = Textf(reader, LANG_ARENA_GEAR_ITEM_PATCH, GetPatchName(patch), GetPatchName(uint8(maxPatch)));
             return true;
         }
     }
@@ -408,11 +464,7 @@ bool ArenaMgr::IsItemForbidden(ItemPrototype const* proto, ArenaType type, std::
     if (proto->ItemLevel > maxItemLevel)
     {
         if (reason)
-        {
-            std::ostringstream ss;
-            ss << "has item level |cffff726f" << proto->ItemLevel << "|r, allowed is |cff71d5ff" << maxItemLevel << "|r.";
-            *reason = ss.str();
-        }
+            *reason = Textf(reader, LANG_ARENA_GEAR_ITEM_LEVEL, proto->ItemLevel, maxItemLevel);
         return true;
     }
 
@@ -422,11 +474,7 @@ bool ArenaMgr::IsItemForbidden(ItemPrototype const* proto, ArenaType type, std::
         if (spellId && IsSpellDisabled(spellId, type))
         {
             if (reason)
-            {
-                std::ostringstream ss;
-                ss << "is not allowed in " << GetArenaTypeName(type) << " arenas.";
-                *reason = ss.str();
-            }
+                *reason = Textf(reader, LANG_ARENA_GEAR_ITEM_BANNED, BracketName(reader, type));
             return true;
         }
     }
@@ -477,6 +525,51 @@ Arena::Arena()
 
 Arena::~Arena()
 {
+}
+
+// Builds one chat line per listener and sends it, so a line whose argument is itself translated
+// reaches everybody whole. `make` is handed the listener's database locale index.
+template <typename MakeLine>
+static void SendPerLanguage(BattleGround::BattleGroundPlayerMap const& players, MakeLine&& make)
+{
+    for (auto const& itr : players)
+    {
+        Player* player = sObjectMgr.GetPlayer(itr.first);
+        if (!player || !player->GetSession())
+            continue;
+
+        std::string const line = make(player->GetSession()->GetSessionDbLocaleIndex());
+
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_BG_SYSTEM_NEUTRAL, line.c_str(), LANG_UNIVERSAL,
+                                     CHAT_TAG_NONE, ObjectGuid());
+        player->GetSession()->SendPacket(&data);
+    }
+}
+
+void Arena::SendReasonToAll(int32 entry, int32 reasonEntry, uint32 reasonArg)
+{
+    SendPerLanguage(m_players, [entry, reasonEntry, reasonArg](int32 loc)
+    {
+        char reason[512];
+        snprintf(reason, sizeof(reason), sObjectMgr.GetMangosString(reasonEntry, loc), reasonArg);
+
+        char line[1024];
+        snprintf(line, sizeof(line), sObjectMgr.GetMangosString(entry, loc), reason);
+        return std::string(line);
+    });
+}
+
+void Arena::SendNameAndStringToAll(int32 entry, char const* name, int32 stringEntry)
+{
+    std::string const who = name ? name : "";
+    SendPerLanguage(m_players, [entry, &who, stringEntry](int32 loc)
+    {
+        char line[1024];
+        snprintf(line, sizeof(line), sObjectMgr.GetMangosString(entry, loc), who.c_str(),
+                 sObjectMgr.GetMangosString(stringEntry, loc));
+        return std::string(line);
+    });
 }
 
 void Arena::Reset()
@@ -983,7 +1076,8 @@ void Arena::AddPlayer(Player* player)
     if (!player->IsArenaSpectator())
         ApplyTeamAura(player);
 
-    PSendMessageToAll(LANG_ARENA_PLAYER_JOINED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, player->GetName(), player->GetBGTeam() == HORDE ? "Green Team" : "Gold Team");
+    SendNameAndStringToAll(LANG_ARENA_PLAYER_JOINED, player->GetName(),
+                           player->GetBGTeam() == HORDE ? LANG_ARENA_TEAM_GREEN_NAME : LANG_ARENA_TEAM_GOLD_NAME);
 
     UpdateWorldStates();
 }
@@ -1137,8 +1231,8 @@ void Arena::RemoveForbiddenTempEnchants(Player* player, ArenaType type)
         item->ClearEnchantment(TEMP_ENCHANTMENT_SLOT, true);
 
         if (SpellEntry const* spell = sSpellMgr.GetSpellEntry(spellId))
-            ChatHandler(player).PSendSysMessage("|cffffffff|Hspell:%u|h[%s]|h|r was removed from your %s: it is not allowed in %s arenas.",
-                                                spellId, spell->SpellName[0].c_str(), item->GetProto()->Name1, GetArenaTypeName(type));
+            ChatHandler(player).PSendSysMessage(LANG_ARENA_ENCHANT_REMOVED, spellId, spell->SpellName[0].c_str(),
+                                                item->GetProto()->Name1, ArenaMgr::BracketName(player, type));
     }
 }
 
@@ -1526,8 +1620,8 @@ void Arena::DetermineRated()
     ArenaType const type = GetArenaType();
     if (!sArenaRatingMgr.IsRatedBracket(type))
     {
-        PSendMessageToAll(LANG_ARENA_NOT_RATED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr,
-                          sArenaRatingMgr.IsAvailable() ? "the rating is switched off" : "the rating table is missing");
+        SendReasonToAll(LANG_ARENA_NOT_RATED,
+                        sArenaRatingMgr.IsAvailable() ? LANG_ARENA_NR_RATING_OFF : LANG_ARENA_NR_NO_TABLE);
         return;
     }
 
@@ -1535,7 +1629,7 @@ void Arena::DetermineRated()
     // anybody, and .debug bg matches (which may run one-sided) have no business in a ladder.
     if (GetPlayersCountByTeam(ALLIANCE) != uint32(type) || GetPlayersCountByTeam(HORDE) != uint32(type))
     {
-        PSendMessageToAll(LANG_ARENA_NOT_RATED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, "the sides are not both full");
+        SendReasonToAll(LANG_ARENA_NOT_RATED, LANG_ARENA_NR_NOT_FULL);
         return;
     }
 
@@ -1557,9 +1651,7 @@ void Arena::DetermineRated()
 
         // he left between the gates and this line, so his level cannot be established - and a rating
         // handed out on an assumption is worse than one not handed out at all
-        std::ostringstream why;
-        why << "everybody has to be level " << minLevel;
-        PSendMessageToAll(LANG_ARENA_NOT_RATED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, why.str().c_str());
+        SendReasonToAll(LANG_ARENA_NOT_RATED, LANG_ARENA_NR_LEVEL, minLevel);
         return;
     }
 
@@ -1576,15 +1668,13 @@ void Arena::DetermineRated()
      */
     if (allianceParty && allianceParty == hordeParty)
     {
-        PSendMessageToAll(LANG_ARENA_NOT_RATED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr,
-                          "both sides are the same party");
+        SendReasonToAll(LANG_ARENA_NOT_RATED, LANG_ARENA_NR_SAME_PARTY);
         return;
     }
 
     if (sWorld.getConfig(CONFIG_UINT32_ARENA_RATED_MODE) == ARENA_RATED_PREMADE && !bothPremade)
     {
-        PSendMessageToAll(LANG_ARENA_NOT_RATED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr,
-                          "each side has to be one party for that");
+        SendReasonToAll(LANG_ARENA_NOT_RATED, LANG_ARENA_NR_NEED_PARTY);
         return;
     }
 
@@ -1678,7 +1768,7 @@ void Arena::ApplyRatedResult(Team winner)
 
         // and in words, because the scoreboard closes and the chat log does not
         if (Player* player = sObjectMgr.GetPlayer(participant.guid))
-            ChatHandler(player).PSendSysMessage(LANG_ARENA_RATING_RESULT, GetArenaTypeName(type),
+            ChatHandler(player).PSendSysMessage(LANG_ARENA_RATING_RESULT, ArenaMgr::BracketName(player, type),
                                                 result.rating, int32(result.rating) - int32(participant.rating), result.mmr);
     }
 

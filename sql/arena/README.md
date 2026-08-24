@@ -139,3 +139,33 @@ are not allowed per arena size. `character_arena_stats` (guid, bracket, rating, 
 best_rating, last_played) in the CHARACTER database holds the rating; a character who never played a
 rated match has no row. Everything else lives in the standard world tables (see the section list at
 the top of `world_arena.sql`).
+
+## Languages
+
+Every string the arena says is a `mangos_string` (11100-11204) or a `broadcast_text`, and section 23
+of `world_arena.sql` fills all nine language columns of both, plus `locales_creature`,
+`locales_gameobject` and `locales_area` for the orb, the watchers, the announcer and the six zone
+names. Nothing in the arena code writes English text - `ArenaMgr::Text`, `ArenaMgr::Textf`,
+`ArenaMgr::BracketName` and `ArenaMgr::ClassName` are the only way it produces a line, and each
+looks the language up on the player who is going to read it. The exception is gamemaster tooling:
+`.arena` output and the `<Admin>` submenu of the orb stay English, because `Arena.MaxItemLevel = 92`
+is a config key rather than a sentence.
+
+Two column orders are involved and they disagree, which is worth reading before touching a locale
+column by hand:
+
+* the **database** columns `content_loc1..8` are `LocaleConstant(i)` - `1 koKR, 2 frFR, 3 deDE,
+  4 zhCN, 5 zhTW, 6 esES, 7 esMX, 8 ruRU` - because `ObjectMgr` loads column *i* that way, and every
+  row of Blizzard's own data agrees ("The %s has taken the %s" carries Korean in `loc1`);
+* `DBLocaleConstant` in `Common.h` numbers the first three the other way round. It belongs to a
+  different index and is **not** what these tables use;
+* the **client's** DBC string block is `enUS koKR frFR deDE zhCN zhTW esES esMX` plus a mask word,
+  with no enGB slot at all.
+
+Section 23 is generated, not written: the source table is `tools/locales/arena_locales.tsv` in the
+client patch repository, which names the Blizzard origin of every value and also feeds the patch's
+DBCs and the scoreboard AddOn, so all three can never disagree. Regenerate with
+`perl tools/gen_arena_locales_sql.pl <path>/sql/arena/world_arena.sql` after editing the table, and
+run `perl tools/locales/check.pl` first - it refuses a translation whose printf placeholders differ
+from the English row's, which would otherwise read a number as a pointer and take the world server
+down.

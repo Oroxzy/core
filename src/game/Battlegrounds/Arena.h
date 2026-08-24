@@ -98,6 +98,90 @@ enum ArenaMangosStrings
     LANG_ARENA_RATED_MATCH                  = 11104,    // "This match is rated."
     LANG_ARENA_RATING_RESULT                = 11105,    // "Arena rating %s: %u (%+d), matchmaking rating %u."
     LANG_ARENA_NOT_RATED                    = 11106,    // "This match is not rated: %s."
+
+    // why a match did not count - read as the tail of LANG_ARENA_NOT_RATED
+    LANG_ARENA_NR_RATING_OFF                = 11110,
+    LANG_ARENA_NR_NO_TABLE                  = 11111,
+    LANG_ARENA_NR_NOT_FULL                  = 11112,
+    LANG_ARENA_NR_LEVEL                     = 11113,    // takes the level
+    LANG_ARENA_NR_SAME_PARTY                = 11114,
+    LANG_ARENA_NR_NEED_PARTY                = 11115,
+
+    // refused at the orb, shown as a notification in the middle of the screen
+    LANG_ARENA_ORB_CLOSED                   = 11120,
+    LANG_ARENA_ORB_LEVEL                    = 11121,    // takes the level
+    LANG_ARENA_ORB_IN_COMBAT                = 11122,
+    LANG_ARENA_ORB_GM_MODE                  = 11123,
+    LANG_ARENA_ORB_DESERTER                 = 11124,
+    LANG_ARENA_ORB_NO_SIZE                  = 11125,
+    LANG_ARENA_ORB_IN_BG                    = 11126,
+    LANG_ARENA_ORB_QUEUED_SIZE              = 11127,
+    LANG_ARENA_ORB_ITEMS                    = 11128,
+    LANG_ARENA_ORB_RESISTANCE               = 11129,
+    LANG_ARENA_ORB_HEALER                   = 11130,
+    LANG_ARENA_ORB_BRACKET                  = 11131,
+    LANG_ARENA_ORB_QUEUED_THIS              = 11132,
+    LANG_ARENA_ORB_MAX_QUEUES               = 11133,
+    LANG_ARENA_ORB_NOT_LEADER               = 11134,
+    LANG_ARENA_ORB_MEMBER_OFFLINE           = 11135,
+    LANG_ARENA_ORB_PARTY_SIZE               = 11136,    // takes the size
+    LANG_ARENA_ORB_MEMBER_BRACKET           = 11137,
+    LANG_ARENA_ORB_MEMBER_ITEMS             = 11138,
+    LANG_ARENA_ORB_MEMBER_RESISTANCE        = 11139,
+    LANG_ARENA_ORB_NO_SPECTATE              = 11140,
+    LANG_ARENA_ORB_MATCH_OVER               = 11141,
+    LANG_ARENA_ORB_LEAVE_QUEUE_FIRST        = 11142,
+    LANG_ARENA_ORB_OWN_GROUP                = 11143,
+    LANG_ARENA_LEFT_MATCH                   = 11144,    // the deserter debuff, takes the minutes
+
+    // told in chat: which group member is holding the group back, and what the gear check found
+    LANG_ARENA_MEMBER_LEVEL                 = 11150,    // takes the name and the level
+    LANG_ARENA_MEMBER_IN_BG                 = 11151,    // all of these take the member's name
+    LANG_ARENA_MEMBER_COMBAT                = 11152,
+    LANG_ARENA_MEMBER_GM                    = 11153,
+    LANG_ARENA_MEMBER_QUEUED                = 11154,
+    LANG_ARENA_MEMBER_ITEMS                 = 11155,
+    LANG_ARENA_MEMBER_RESISTANCE            = 11156,
+    LANG_ARENA_GEAR_RESISTANCE              = 11157,    // school name, what he has, what is allowed
+    LANG_ARENA_GEAR_ITEM_LEVEL              = 11158,    // tail after the item link
+    LANG_ARENA_GEAR_ITEM_BANNED             = 11159,    // tail after the item link, takes the bracket
+    LANG_ARENA_YELL_SOLO                    = 11160,    // takes the name and the bracket
+    LANG_ARENA_YELL_GROUP                   = 11161,
+    LANG_ARENA_GEAR_ITEM_PATCH              = 11162,    // tail after the item link, two patch names
+    LANG_ARENA_TEAM_GREEN_NAME              = 11163,    // the horde side of a match
+    LANG_ARENA_TEAM_GOLD_NAME               = 11164,    // the alliance side
+    LANG_ARENA_ENCHANT_REMOVED              = 11169,    // spell id, spell name, item name, bracket
+
+    // 1v1, 2v2, 3v3, 5v5 in that order - German writes 2vs2, French and Spanish 2c2, Traditional
+    // Chinese 2對2. Reached through ArenaMgr::BracketName, never by hand.
+    LANG_ARENA_BRACKET_FIRST                = 11165,
+
+    // the orb's own menu
+    LANG_ARENA_MENU_BACK                    = 11170,
+    LANG_ARENA_MENU_GM_OFF                  = 11171,
+    LANG_ARENA_MENU_ADMIN                   = 11172,
+    LANG_ARENA_MENU_LEADER_ONLY             = 11173,
+    LANG_ARENA_MENU_QUEUE                   = 11174,    // takes the bracket
+    LANG_ARENA_MENU_GROUP_QUEUE             = 11175,
+    LANG_ARENA_MENU_WAITING                 = 11176,    // takes the count, appended to the two above
+    LANG_ARENA_MENU_SPECTATE                = 11177,
+    LANG_ARENA_MENU_MY_RATING               = 11178,
+    LANG_ARENA_MENU_LEAVE_QUEUE             = 11179,    // takes the bracket and the arena's name
+    LANG_ARENA_MENU_NO_RATED                = 11180,    // takes the bracket
+    LANG_ARENA_MENU_RATING_LINE             = 11181,    // bracket, rating, best, games, wins
+    LANG_ARENA_MENU_LADDER_EMPTY            = 11182,    // takes the game count and the bracket
+    LANG_ARENA_MENU_LADDER_ROW              = 11183,    // rank, name, rating, games, wins
+    LANG_ARENA_MENU_LADDER_EMPTY_ONE        = 11188,    // the same with no number to name
+    LANG_ARENA_MENU_RATED_MARK              = 11184,    // appended to a running match in the spectate list
+    LANG_ARENA_MENU_READY                   = 11185,
+    LANG_ARENA_MENU_WANT_LEAVE              = 11186,
+    LANG_ARENA_MENU_SURE                    = 11187,
+
+    // CLASS_WARRIOR .. CLASS_DRUID, in class order, for the spectate list
+    LANG_ARENA_CLASS_FIRST                  = 11190,
+
+    // the five schools the gear check looks at, in the order ArenaMgr::HasExcessResistance walks them
+    LANG_ARENA_RESISTANCE_FIRST             = 11200,
 };
 
 enum ArenaSpells
@@ -275,14 +359,36 @@ class ArenaMgr
         // 0 when this enchantment may stay, otherwise the forbidden spell that applied it
         uint32 GetForbiddenTempEnchantSpell(uint32 enchantId, ArenaType type) const;
 
-        // Item level / patch / disabled item spell checks. If reason is given it receives a chat-ready explanation.
-        bool IsItemForbidden(ItemPrototype const* proto, ArenaType type, std::string* reason = nullptr) const;
+        // Item level / patch / disabled item spell checks. If reason is given it receives a chat-ready
+        // explanation in `reader`'s own language (English when nobody is named).
+        bool IsItemForbidden(ItemPrototype const* proto, ArenaType type, std::string* reason = nullptr,
+                             Player const* reader = nullptr) const;
         // Resistance a player carries in on his gear, against the Arena.MaxResistance.* caps.
         // Read from the items, not from his current stats - buffs at the orb would distort it and are
-        // stripped on entering anyway.
+        // stripped on entering anyway. The reason is written in that player's own language: he is the
+        // one who reads it, whether he asked or his group leader did.
         static bool HasExcessResistance(Player const* player, std::string* reason = nullptr);
 
         static char const* GetPatchName(uint8 patch);
+
+        /*
+         * Everything the arena says to a player comes out of `mangos_string`, so a Korean player
+         * reads Korean and a German one German - see section 23 of sql/arena/world_arena.sql and
+         * tools/locales/arena_locales.tsv in the client patch, which is where the text lives.
+         *
+         * Text() is the one for a line built by hand (a gossip entry, a menu label); chat and
+         * notifications take the entry id directly through PSendSysMessage / SendNotification /
+         * PSendMessageToAll, which already look the language up themselves.
+         *
+         * A nullptr player means "no session to ask", and falls back to English.
+         */
+        static char const* Text(Player const* player, int32 entry);
+        // printf on top of Text, for the entries that carry a %s or a %u
+        static std::string Textf(Player const* player, int32 entry, ...);
+        // "2v2" in his language: German says 2vs2, French and Spanish 2c2, Traditional Chinese 2對2
+        static char const* BracketName(Player const* player, ArenaType type);
+        // his own word for another player's class, for the spectate list
+        static char const* ClassName(Player const* reader, uint8 playerClass);
 
         struct DisabledSpell
         {
@@ -388,6 +494,18 @@ class Arena : public BattleGround
         void CheckWinConditions();
 
     private:
+        /*
+         * One line to everybody in the match, each in his own language, where the argument is itself
+         * a `mangos_string` and therefore has to be looked up per listener too.
+         *
+         * BattleGround::SendMessage2ToAll already nests one string inside another, but the reason a
+         * match did not count can carry a number of its own ("everybody has to be level 60") and
+         * that one cannot go through it. Both of these format per listener instead.
+         */
+        void SendReasonToAll(int32 entry, int32 reasonEntry, uint32 reasonArg = 0);
+        // "%s joined the Arena for the %s!": a player's name, then the team colour as a string id
+        void SendNameAndStringToAll(int32 entry, char const* name, int32 stringEntry);
+
         void UpdatePreparation(uint32 diff);
         void UpdateNagrand(uint32 diff);
         void UpdateDalaran(uint32 diff);
