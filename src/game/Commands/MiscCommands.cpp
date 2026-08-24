@@ -2131,6 +2131,7 @@ ArenaBoolOption const s_arenaBoolOptions[] =
     { "AnnounceQueue",        CONFIG_BOOL_ARENA_ANNOUNCE_QUEUE },
     { "LeaveQueuesOnLogout",  CONFIG_BOOL_ARENA_LEAVE_QUEUES_ON_LOGOUT },
     { "1v1.BlockHealerSpecs", CONFIG_BOOL_ARENA_1V1_BLOCK_HEALER_SPECS },
+    { "AbsorbCountsAsHealing", CONFIG_BOOL_ARENA_ABSORB_COUNTS_AS_HEALING },
 };
 
 ArenaUInt32Option const s_arenaUInt32Options[] =

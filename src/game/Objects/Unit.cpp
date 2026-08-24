@@ -1945,22 +1945,10 @@ void Unit::CalculateDamageAbsorbAndResist(SpellCaster* pCaster, SpellSchoolMask 
 
             remainingDamage -= currentAbsorb;
 
-            /*
-             * Arena scoreboard: a shield that eats a hit is the only kind of mitigation nobody was
-             * credited for. The damage column already shows what the attacker really landed - the
-             * absorbed part is gone from it - but it went nowhere, so a priest holding a team up
-             * with Power Word: Shield finished a match looking as though he had done nothing.
-             *
-             * It is counted as healing, which is what every damage meter since Recount does and what
-             * a player reads that column as. Blizzard has no answer to copy here: retail's score
-             * window has no absorb column, and neither TrinityCore's ScoreType nor its PvPstats
-             * project tracks one.
-             *
-             * There is no overheal to subtract - an absorb is only ever consumed by damage that
-             * actually arrived, so what is counted is by definition effective.
-             */
+            // arena scoreboard: the shield's caster is credited with what it just ate, if the realm
+            // counts an absorb as healing - see Unit::CountArenaAbsorbAsHealing
             if (Unit* pShieldCaster = (*i)->GetCaster())
-                pShieldCaster->CountArenaHealingDone(currentAbsorb);
+                pShieldCaster->CountArenaAbsorbAsHealing(currentAbsorb);
 
             // Reduce shield amount
             mod->m_amount -= currentAbsorb;
@@ -2045,9 +2033,10 @@ void Unit::CalculateDamageAbsorbAndResist(SpellCaster* pCaster, SpellSchoolMask 
                 (*i)->GetAuraScript()->OnManaAbsorb((*i), currentAbsorb, remainingDamage);
 
             // the same as the school absorb above: a mage paying for a hit out of his mana pool is
-            // mitigation, and it is counted the same way
+            // mitigation, and is treated the same way - after the mana clamp, so what counts is what
+            // the pool could actually pay for
             if (Unit* pShieldCaster = (*i)->GetCaster())
-                pShieldCaster->CountArenaHealingDone(currentAbsorb);
+                pShieldCaster->CountArenaAbsorbAsHealing(currentAbsorb);
 
             (*i)->GetModifier()->m_amount -= currentAbsorb;
             if ((*i)->GetModifier()->m_amount <= 0)
@@ -6488,6 +6477,24 @@ bool Unit::IsTargetableBy(WorldObject const* pCaster, bool forAoE, bool checkAli
  * `gain` is what the target's health actually went up by, so overheal is already out. A pet's or a
  * totem's heal is credited to the player behind it, the same way its damage is.
  */
+/*
+ * The damage a shield ate, if this realm counts that as healing (Arena.AbsorbCountsAsHealing, off).
+ *
+ * There is nothing to copy here and that is why it is a switch rather than a decision. Retail's
+ * score window has no absorb column, and neither has TrinityCore - its ScoreType has exactly six
+ * values, and its own PvPstats project tracks the same six. So off means what Blizzard shows, and on
+ * means what every damage meter since Recount shows, where a priest holding a team up with Power
+ * Word: Shield is not left looking as though he had done nothing.
+ *
+ * There is no overheal to subtract either way: an absorb is only ever consumed by damage that
+ * actually arrived, so what would be counted is effective by definition.
+ */
+void Unit::CountArenaAbsorbAsHealing(int32 absorbed)
+{
+    if (sWorld.getConfig(CONFIG_BOOL_ARENA_ABSORB_COUNTS_AS_HEALING))
+        CountArenaHealingDone(absorbed);
+}
+
 void Unit::CountArenaHealingDone(int32 gain)
 {
     if (gain <= 0 || !IsArenaMapId(GetMapId()))

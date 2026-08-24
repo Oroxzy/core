@@ -1327,6 +1327,7 @@ void World::LoadConfigSettings(bool reload)
     setConfig(CONFIG_UINT32_ARENA_MAX_RES_SHADOW, "Arena.MaxResistance.Shadow", 200);
     setConfig(CONFIG_UINT32_ARENA_MAX_RES_ARCANE, "Arena.MaxResistance.Arcane", 100);
     setConfig(CONFIG_BOOL_ARENA_ANNOUNCE_QUEUE, "Arena.AnnounceQueue", true);
+    setConfig(CONFIG_BOOL_ARENA_ABSORB_COUNTS_AS_HEALING, "Arena.AbsorbCountsAsHealing", false);
     setConfig(CONFIG_BOOL_ARENA_1V1_BLOCK_HEALER_SPECS, "Arena.1v1.BlockHealerSpecs", false);
     setConfig(CONFIG_BOOL_ARENA_LEAVE_QUEUES_ON_LOGOUT, "Arena.LeaveQueuesOnLogout", true);
     setConfig(CONFIG_BOOL_ARENA_RESET_ALL_COOLDOWNS, "Arena.ResetAllCooldowns", false);
