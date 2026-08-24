@@ -34,6 +34,7 @@
 #include "MapManager.h"
 #include "BattleGroundMgr.h"
 #include "Arena.h"
+#include <iomanip>
 #include "ArenaRating.h"
 
 bool ChatHandler::HandleHelpCommand(char* args)
@@ -2425,6 +2426,21 @@ namespace
 
 // Everybody watching a match without fighting in it. Visitors are known to the map, not to the
 // battleground - the arena's own player list holds the fighters only.
+// 1234567 -> "1.2M", 45678 -> "45.7k". A running match's damage column is read at a glance or not
+// at all, and eight digits in a list of four players is not a glance.
+static std::string ShortNumber(uint32 value)
+{
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(1);
+    if (value >= 1000000)
+        out << (value / 1000000.0) << "M";
+    else if (value >= 10000)
+        out << (value / 1000.0) << "k";
+    else
+        out << value;
+    return out.str();
+}
+
 void CollectArenaSpectators(BattleGround* bg, std::vector<Player*>& out)
 {
     if (!bg->GetBgMap())
@@ -2585,12 +2601,33 @@ bool ChatHandler::HandleArenaPanelCommand(char* args)
                         names << (names.str().empty() ? "" : ", ") << name;
                 }
 
+                /*
+                 * Damage and healing while the match is still running.
+                 *
+                 * They existed only on the end scoreboard until now, and that is precisely why the
+                 * healing column could be blind to every heal over time for as long as it was: there
+                 * was no way to watch the numbers move. A separate field rather than part of the name
+                 * list, because the panel's "go to player" button reads the first name out of that one.
+                 */
+                std::ostringstream scores;
+                for (auto itr = bg->GetPlayerScoresBegin(); itr != bg->GetPlayerScoresEnd(); ++itr)
+                {
+                    std::string name;
+                    if (!sObjectMgr.GetPlayerNameByGUID(itr->first, name))
+                        continue;
+
+                    auto const* score = static_cast<ArenaScore const*>(itr->second);
+                    scores << (scores.str().empty() ? "" : ", ") << name << " "
+                           << ShortNumber(score->damageDone) << "/" << ShortNumber(score->healingDone);
+                }
+
                 std::vector<Player*> spectators;
                 CollectArenaSpectators(bg, spectators);
 
-                PSendSysMessage("ARENA|match|%u|%s|%s|%u|%u|%u|%s", bg->GetInstanceID(), bg->GetName(),
+                PSendSysMessage("ARENA|match|%u|%s|%s|%u|%u|%u|%s|%s", bg->GetInstanceID(), bg->GetName(),
                                 GetArenaTypeName(arena->GetArenaType()), uint32(bg->GetStatus()),
-                                arena->IsRated() ? 1 : 0, uint32(spectators.size()), names.str().c_str());
+                                arena->IsRated() ? 1 : 0, uint32(spectators.size()), names.str().c_str(),
+                                scores.str().c_str());
             }
         }
         PSendSysMessage("ARENA|done|matches");
