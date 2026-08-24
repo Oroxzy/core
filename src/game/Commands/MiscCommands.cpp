@@ -2541,6 +2541,20 @@ bool ChatHandler::HandleArenaPanelCommand(char* args)
 
     std::string const query(what);
 
+    /*
+     * May this viewer change anything, or is he only looking?
+     *
+     * Reading the panel is a gamemaster right and every command behind its buttons is an
+     * administrator one, so the two come apart and the addon has to be told which it is dealing with.
+     *
+     * Sent on EVERY request and not only with the settings, which is where it was and where it was
+     * no use: the panel opens on its Matches tab, and a gamemaster who then goes to Bans or Ratings
+     * never asked for the settings at all. His addon kept the optimistic default, let him press the
+     * buttons, and the server refused them one layer down without a word - which is the exact
+     * confusion this line exists to prevent.
+     */
+    PSendSysMessage("ARENA|rights|%u", GetAccessLevel() >= SEC_ADMINISTRATOR ? 1 : 0);
+
     if (query == "config")
     {
         for (auto const& entry : s_arenaBoolOptions)
@@ -2572,13 +2586,6 @@ bool ChatHandler::HandleArenaPanelCommand(char* args)
         for (uint32 i = 0; i < ARENA_MAPS_COUNT; ++i)
             maps << "|" << GetArenaMapName(ArenaMapType(i));
         PSendSysMessage("ARENA|map|%u%s", uint32(forced), maps.str().c_str());
-
-        // May this viewer change anything, or is he only looking? Reading the panel is a gamemaster
-        // right, every command behind its buttons is an administrator one - so a gamemaster used to
-        // open a panel that showed nothing at all, and now opens one that shows everything and says
-        // it is read only. Without this line the addon would let him press buttons that are refused
-        // one layer down, with no explanation anywhere.
-        PSendSysMessage("ARENA|rights|%u", GetAccessLevel() >= SEC_ADMINISTRATOR ? 1 : 0);
 
         PSendSysMessage("ARENA|done|config");
         return true;

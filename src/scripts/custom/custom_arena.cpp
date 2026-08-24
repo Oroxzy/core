@@ -1296,6 +1296,8 @@ enum
 {
     TORNADO_EVENT_TOUCH         = 1,
     TORNADO_EVENT_DESPAWN       = 2,
+    TORNADO_EVENT_MOVE          = 3,            // retry after a failed floor pick
+    TORNADO_MOVE_RETRY_DELAY    = 1000,
     TORNADO_LIFETIME            = 60 * IN_MILLISECONDS,
     // Harsh Winds' own cadence and reach: Sand Storm retriggers it every second, and its auras last
     // exactly one second, so a slower tick would leave gaps in a slow that is meant to be continuous.
@@ -1311,9 +1313,21 @@ struct npc_nagrand_tornadoAI : public ScriptedAI
 {
     explicit npc_nagrand_tornadoAI(Creature* creature) : ScriptedAI(creature)
     {
-        // visual only: strip the damage effect of the sandstorm aura we borrow for the look
+        /*
+         * Visual only: the sandstorm aura is borrowed for the look, and its one effect - the tick
+         * that would fire Harsh Winds with its flat 1961 damage - is taken back off.
+         *
+         * Unit::RemoveAura(Aura*) rather than SpellAuraHolder::RemoveAura(index), which is a bare
+         * "m_auras[index] = nullptr" and leaves the Aura allocated AND still registered in the
+         * creature's m_modAuras with a holder that no longer knows it. One leak per tornado, forever.
+         * The Unit version unregisters it, unapplies the modifier and frees it - and leaves the
+         * HOLDER standing, which is what carries the visual. Removing it through the holder-aware
+         * path instead would take the last aura off the holder and the holder with it, and the
+         * tornado would be invisible.
+         */
         if (SpellAuraHolder* holder = m_creature->AddAura(SPELL_ARENA_TORNADO_VISUAL))
-            holder->RemoveAura(EFFECT_INDEX_0);
+            if (Aura* trigger = holder->GetAuraByEffectIndex(EFFECT_INDEX_0))
+                m_creature->RemoveAura(trigger);
 
         /*
          * Everything is armed here and NOT in Reset(), which is the bug this replaces. EventMap
@@ -1329,6 +1343,7 @@ struct npc_nagrand_tornadoAI : public ScriptedAI
     }
 
     EventMap m_events;
+    uint32 m_nextPoint = 1;                         // only used to carry a retry across a failed pick
 
     void Reset() override {}
 
@@ -1336,7 +1351,17 @@ struct npc_nagrand_tornadoAI : public ScriptedAI
     {
         float x, y, z;
         if (!ArenaMgr::PickNagrandFloorPoint(m_creature->GetMap(), x, y, z))
-            return;                                 // nothing found this time, MovementInform retries
+        {
+            /*
+             * Ten tries found no sand. Simply returning would park the tornado where it stands for
+             * the rest of its minute - still ticking damage, silence and a snare on whoever happens
+             * to be next to it - because the only thing that asks for a new point is MovementInform,
+             * and that fires for a move that STARTED. So the next attempt is scheduled explicitly.
+             */
+            m_events.ScheduleEvent(TORNADO_EVENT_MOVE, TORNADO_MOVE_RETRY_DELAY);
+            m_nextPoint = pointId;
+            return;
+        }
 
         /*
          * Straight lines at running pace, and neither of those is what it used to do.
@@ -1384,12 +1409,24 @@ struct npc_nagrand_tornadoAI : public ScriptedAI
                     }
 
                     uint32 const damagePct = sWorld.getConfig(CONFIG_UINT32_ARENA_NAGRAND_TORNADO_DAMAGE_PCT);
+                    SpellEntry const* harshWinds = sSpellMgr.GetSpellEntry(SPELL_ARENA_TORNADO_HARSH_WINDS);
 
                     std::list<Player*> players;
                     m_creature->GetAlivePlayerListInRange(m_creature, players, TORNADO_RADIUS);
                     for (Player* target : players)
                     {
                         if (target->IsArenaSpectator() || target->IsGameMaster())
+                            continue;
+
+                        /*
+                         * Immunity has to be asked for by hand, because none of this is a real cast -
+                         * the tornado deliberately stays out of combat, and the price of that is that
+                         * nothing checks the target for it on the way in. Without this a paladin under
+                         * Divine Shield was silenced, snared and damaged straight through the bubble,
+                         * and a cyclone could take the killing blow off a player who was, on paper,
+                         * immune to everything.
+                         */
+                        if (harshWinds && target->IsImmuneToSpell(harshWinds, false))
                             continue;
 
                         target->KnockBackFrom(m_creature, TORNADO_KNOCKBACK_HORIZONTAL, TORNADO_KNOCKBACK_VERTICAL);
@@ -1415,10 +1452,18 @@ struct npc_nagrand_tornadoAI : public ScriptedAI
                         // worth the name but still a hit, so stealth and crowd control still break.
                         // Self inflicted, so the tornado never enters combat and never reaches the
                         // damage column - the arena counts damage between the two sides, not weather.
-                        uint32 const damage = damagePct ? std::max(1u, uint32(target->GetMaxHealth() * damagePct / 100)) : 1u;
-                        target->DealDamage(target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL, nullptr, false);
+                        if (!target->IsImmuneToDamage(SPELL_SCHOOL_MASK_NORMAL))
+                        {
+                            uint32 const damage = damagePct ? std::max(1u, uint32(target->GetMaxHealth() * damagePct / 100)) : 1u;
+                            target->DealDamage(target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL, nullptr, false);
+                        }
                     }
                     m_events.ScheduleEvent(TORNADO_EVENT_TOUCH, TORNADO_TICK_INTERVAL);
+                    break;
+                }
+                case TORNADO_EVENT_MOVE:
+                {
+                    MoveToRandomPoint(m_nextPoint);
                     break;
                 }
                 case TORNADO_EVENT_DESPAWN:

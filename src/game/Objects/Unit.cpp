@@ -1946,9 +1946,13 @@ void Unit::CalculateDamageAbsorbAndResist(SpellCaster* pCaster, SpellSchoolMask 
             remainingDamage -= currentAbsorb;
 
             // arena scoreboard: the shield's caster is credited with what it just ate, if the realm
-            // counts an absorb as healing - see Unit::CountArenaAbsorbAsHealing
-            if (Unit* pShieldCaster = (*i)->GetCaster())
-                pShieldCaster->CountArenaAbsorbAsHealing(currentAbsorb);
+            // counts an absorb as healing - see Unit::CountArenaAbsorbAsHealing.
+            // The map id is asked FIRST because GetCaster() resolves through a global, locked map:
+            // every Power Word: Shield and every Ice Barrier in the world runs through here, and none
+            // of them outside an arena has anything to report.
+            if (IsArenaMapId(GetMapId()))
+                if (Unit* pShieldCaster = (*i)->GetCaster())
+                    pShieldCaster->CountArenaAbsorbAsHealing(currentAbsorb);
 
             // Reduce shield amount
             mod->m_amount -= currentAbsorb;
@@ -2034,9 +2038,10 @@ void Unit::CalculateDamageAbsorbAndResist(SpellCaster* pCaster, SpellSchoolMask 
 
             // the same as the school absorb above: a mage paying for a hit out of his mana pool is
             // mitigation, and is treated the same way - after the mana clamp, so what counts is what
-            // the pool could actually pay for
-            if (Unit* pShieldCaster = (*i)->GetCaster())
-                pShieldCaster->CountArenaAbsorbAsHealing(currentAbsorb);
+            // the pool could actually pay for, and behind the same map id test
+            if (IsArenaMapId(GetMapId()))
+                if (Unit* pShieldCaster = (*i)->GetCaster())
+                    pShieldCaster->CountArenaAbsorbAsHealing(currentAbsorb);
 
             (*i)->GetModifier()->m_amount -= currentAbsorb;
             if ((*i)->GetModifier()->m_amount <= 0)
@@ -6681,19 +6686,20 @@ bool Unit::IsVisibleForOrDetect(WorldObject const* pDetector, WorldObject const*
      * The question is asked of whoever is BEHIND the unit, so a hunter's pet and a shaman's totems
      * are covered by the same check rather than announcing the class their owner is hiding.
      */
-    if (pDetectorPlayer && pDetectorPlayer->GetBattleGroundId() && !pDetectorPlayer->IsGameMaster() &&
+    if (pDetectorPlayer && IsArenaMapId(GetMapId()) && !pDetectorPlayer->IsGameMaster() &&
         !pDetectorPlayer->IsArenaSpectator())
     {
-        if (Player const* pOwner = GetCharmerOrOwnerPlayerOrPlayerItself())
-        {
-            if (pOwner->GetBattleGroundId() == pDetectorPlayer->GetBattleGroundId() &&
-                pOwner->GetBGTeam() != pDetectorPlayer->GetBGTeam())
-            {
-                BattleGround const* bg = pDetectorPlayer->GetBattleGround();
-                if (bg && bg->IsArena() && bg->GetStatus() == STATUS_WAIT_JOIN)
+        // The order is the point. IsArenaMapId is a switch on an integer and throws out every unit
+        // pair in the world that is not standing in an arena; the map already holds its own
+        // battleground, so no global list is searched; and only what is left pays for resolving the
+        // owner, which does take a global lock. Asked the other way round, a forty on forty Alterac
+        // Valley paid that lock for every pet and every viewer, sixty times a second, to learn that
+        // it is not an arena.
+        BattleGround const* bg = GetMap()->IsBattleGround() ? static_cast<BattleGroundMap*>(GetMap())->GetBG() : nullptr;
+        if (bg && bg->IsArena() && bg->GetStatus() == STATUS_WAIT_JOIN)
+            if (Player const* pOwner = GetCharmerOrOwnerPlayerOrPlayerItself())
+                if (pOwner->GetBGTeam() != pDetectorPlayer->GetBGTeam())
                     return false;
-            }
-        }
     }
 
     // Grid dead/alive checks

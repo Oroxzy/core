@@ -641,6 +641,26 @@ void Arena::Update(uint32 diff)
 
     if (GetStatus() == STATUS_IN_PROGRESS)
     {
+        /*
+         * The two sides were invisible to each other while the boxes were closed (see
+         * Unit::IsVisibleForOrDetect), and grid visibility is only refreshed when somebody moves more
+         * than ten yards. At the moment the gates open nobody has moved at all, so it is pushed once
+         * from here.
+         *
+         * From HERE and not from StartingEventOpenDoors, which is where it was and where it did
+         * nothing: BattleGround::Update calls that function and sets STATUS_IN_PROGRESS only
+         * afterwards, so a refresh inside it still reads WAIT_JOIN and re-confirms the very hiding it
+         * is supposed to lift. A caster who opened from inside his box then had no enemy on his
+         * client at all - no nameplate, no /target, nothing - until he had run ten yards.
+         */
+        if (!m_startVisibilityPushed)
+        {
+            m_startVisibilityPushed = true;
+            for (auto const& itr : GetPlayers())
+                if (Player* player = sObjectMgr.GetPlayer(itr.first))
+                    player->UpdateVisibilityAndView();
+        }
+
         m_matchTimer += diff;
 
         // doors are removed a few seconds after they opened
@@ -1003,16 +1023,6 @@ void Arena::StartingEventOpenDoors()
         return;
     }
 
-    /*
-     * The two sides were invisible to each other while the boxes were closed (see
-     * Unit::IsVisibleForOrDetect). Grid visibility is refreshed when somebody moves, and at this
-     * moment nobody has, so it is pushed once here - otherwise the first opponent would appear only
-     * after the first step, which on a small map is a free second.
-     */
-    for (auto const& itr : GetPlayers())
-        if (Player* player = sObjectMgr.GetPlayer(itr.first))
-            player->UpdateVisibilityAndView();
-
     // who is actually standing in the boxes decides whether this counts for the rating
     DetermineRated();
 
@@ -1039,6 +1049,7 @@ void Arena::StartingEventOpenDoors()
 
     m_matchTimer = 0;
     m_timeLimitReached = false;
+    m_startVisibilityPushed = false;
 }
 
 /*********************************************************/

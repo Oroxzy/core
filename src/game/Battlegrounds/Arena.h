@@ -593,6 +593,7 @@ class Arena : public BattleGround
 
         // Nagrand
         uint32 m_tornadoTimer[2];
+        bool m_startVisibilityPushed;                       // the one-shot refresh when the gates open
 
         // Dalaran
         uint32 m_waterfallTimer;

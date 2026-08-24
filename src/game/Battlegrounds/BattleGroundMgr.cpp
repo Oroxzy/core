@@ -830,6 +830,37 @@ void BattleGroundQueue::FillArenaSelectionPools(BattleGround* bg, BattleGroundBr
             m_selectionPools[teamIdx].AddGroup(ginfo, teamMax[teamIdx], instanceId);
         }
     }
+
+    /*
+     * The window was measured around the anchor, so a match he is not in was never measured at all.
+     *
+     * That became possible when the placement grew its two passes: the anchor can be a solo, the
+     * party pass can fill both sides before the solo pass ever runs, and what is left is two parties
+     * that were only ever checked against a rating nobody in the match has - which quietly doubles
+     * the window they were supposed to be inside. Two premades three hundred points apart could meet
+     * behind a waiting solo with a window of two hundred.
+     *
+     * A match without its own anchor is therefore thrown away here rather than sent out, and
+     * CheckArenaMatch walks to the next anchor, where the same two parties are measured against each
+     * other properly - and either match or, correctly, do not.
+     */
+    if (anchor && ratingWindow)
+    {
+        bool anchorIn = false;
+        for (uint8 team = 0; team < BG_TEAMS_COUNT && !anchorIn; ++team)
+            for (GroupQueueInfo const* ginfo : m_selectionPools[team].selectedGroups)
+                if (ginfo == anchor)
+                {
+                    anchorIn = true;
+                    break;
+                }
+
+        if (!anchorIn)
+        {
+            m_selectionPools[BG_TEAM_ALLIANCE].Init();
+            m_selectionPools[BG_TEAM_HORDE].Init();
+        }
+    }
 }
 
 // this method tries to create an arena match with minPlayersPerTeam against minPlayersPerTeam from the mixed queue
