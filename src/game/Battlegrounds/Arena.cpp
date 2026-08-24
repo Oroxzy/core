@@ -1539,6 +1539,30 @@ void Arena::DetermineRated()
         return;
     }
 
+    /*
+     * A ladder is a comparison, and it only means something between characters who have everything
+     * their class is ever going to give them. Below the level cap a match is decided by who levelled
+     * further as much as by who played better, so those fights happen - the arena is open to anybody
+     * the queue lets in - they simply do not move anybody's rating.
+     *
+     * Asked of the whole field rather than of one side: a single character short of the cap makes
+     * the whole result meaningless, not just his own.
+     */
+    uint32 const minLevel = sWorld.getConfig(CONFIG_UINT32_ARENA_RATED_MIN_LEVEL);
+    for (const auto& itr : m_players)
+    {
+        Player* player = sObjectMgr.GetPlayer(itr.first);
+        if (player && player->GetLevel() >= minLevel)
+            continue;
+
+        // he left between the gates and this line, so his level cannot be established - and a rating
+        // handed out on an assumption is worse than one not handed out at all
+        std::ostringstream why;
+        why << "everybody has to be level " << minLevel;
+        PSendMessageToAll(LANG_ARENA_NOT_RATED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, why.str().c_str());
+        return;
+    }
+
     Group* allianceParty = nullptr;
     Group* hordeParty = nullptr;
     bool const bothPremade = IsSidePremade(ALLIANCE, &allianceParty) && IsSidePremade(HORDE, &hordeParty);

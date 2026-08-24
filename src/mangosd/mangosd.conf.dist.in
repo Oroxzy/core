@@ -3468,6 +3468,14 @@ DynamicRespawn.PlayersMaxLevelDiff = 0
 #        Default: 5
 #                 0 (everybody who played once)
 #
+#    Arena.Rated.MinLevel
+#        The level everybody in the match has to have reached before it counts for the rating.
+#        Below it the arena is still open and plays exactly the same - only nobody's rating or
+#        matchmaking rating moves, and the players are told why when the gates open. A ladder only
+#        compares fairly between characters who already have everything their class gives them.
+#        Default: 60 (the level cap)
+#                 1 (rate every match, whatever the level)
+#
 ###################################################################################################
 
 Arena.Enable = 0
@@ -3502,3 +3510,4 @@ Arena.Rated.DrawRatingLoss = 16
 Arena.Rated.MaxRatingDifference = 150
 Arena.Rated.RatingDiscardMinutes = 3
 Arena.Rated.LadderMinGames = 5
+Arena.Rated.MinLevel = 60

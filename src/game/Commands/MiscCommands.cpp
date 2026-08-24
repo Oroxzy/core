@@ -2157,6 +2157,7 @@ ArenaUInt32Option const s_arenaUInt32Options[] =
     { "Rated.MaxRatingDifference",   CONFIG_UINT32_ARENA_RATED_MAX_MMR_DIFFERENCE,   0, 5000 },
     { "Rated.RatingDiscardMinutes",  CONFIG_UINT32_ARENA_RATED_MMR_DISCARD_MINUTES,  0, 60 },
     { "Rated.LadderMinGames",        CONFIG_UINT32_ARENA_RATED_LADDER_MIN_GAMES,     0, 1000 },
+    { "Rated.MinLevel",              CONFIG_UINT32_ARENA_RATED_MIN_LEVEL,            1, PLAYER_MAX_LEVEL },
 };
 
 // How many ban list rows one panel request answers with. The table holds several hundred entries and
