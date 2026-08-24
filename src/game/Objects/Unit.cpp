@@ -6670,6 +6670,32 @@ bool Unit::IsVisibleForOrDetect(WorldObject const* pDetector, WorldObject const*
     Unit const* pDetectorUnit = pDetector->ToUnit();
     Player const* pDetectorPlayer = pDetector->ToPlayer();
 
+    /*
+     * Arena preparation: the two sides do not exist for each other until the gates open.
+     *
+     * Without this the enemy is in the client's object list the whole time the boxes are closed -
+     * a wall stops the eye but not the object list - so "/target <name>" finds him, a macro finds
+     * him, and the whole enemy team can be read off before the match has begun. Hiding the unit
+     * server side is the only place that helps: what the client never received it cannot target.
+     *
+     * The question is asked of whoever is BEHIND the unit, so a hunter's pet and a shaman's totems
+     * are covered by the same check rather than announcing the class their owner is hiding.
+     */
+    if (pDetectorPlayer && pDetectorPlayer->GetBattleGroundId() && !pDetectorPlayer->IsGameMaster() &&
+        !pDetectorPlayer->IsArenaSpectator())
+    {
+        if (Player const* pOwner = GetCharmerOrOwnerPlayerOrPlayerItself())
+        {
+            if (pOwner->GetBattleGroundId() == pDetectorPlayer->GetBattleGroundId() &&
+                pOwner->GetBGTeam() != pDetectorPlayer->GetBGTeam())
+            {
+                BattleGround const* bg = pDetectorPlayer->GetBattleGround();
+                if (bg && bg->IsArena() && bg->GetStatus() == STATUS_WAIT_JOIN)
+                    return false;
+            }
+        }
+    }
+
     // Grid dead/alive checks
     if (pDetectorPlayer)
     {

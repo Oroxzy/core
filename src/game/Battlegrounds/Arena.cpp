@@ -1003,6 +1003,16 @@ void Arena::StartingEventOpenDoors()
         return;
     }
 
+    /*
+     * The two sides were invisible to each other while the boxes were closed (see
+     * Unit::IsVisibleForOrDetect). Grid visibility is refreshed when somebody moves, and at this
+     * moment nobody has, so it is pushed once here - otherwise the first opponent would appear only
+     * after the first step, which on a small map is a free second.
+     */
+    for (auto const& itr : GetPlayers())
+        if (Player* player = sObjectMgr.GetPlayer(itr.first))
+            player->UpdateVisibilityAndView();
+
     // who is actually standing in the boxes decides whether this counts for the rating
     DetermineRated();
 

@@ -1398,7 +1398,7 @@ std::unique_ptr<ServerPacket> BattleGroundMgr::BuildBattleGroundStatusPacket(Bat
 }
 
 #if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_4_2
-std::unique_ptr<ServerPacket> BattleGroundMgr::BuildPvpLogDataPacket(BattleGround const* bg)
+std::unique_ptr<ServerPacket> BattleGroundMgr::BuildPvpLogDataPacket(BattleGround const* bg, Player const* onlySideOf)
 {
     auto packet = std::make_unique<WorldPackets::Battleground::PvpLogData>();
     packet->ended = bg->GetStatus() == STATUS_WAIT_LEAVE;
@@ -1415,8 +1415,15 @@ std::unique_ptr<ServerPacket> BattleGroundMgr::BuildPvpLogDataPacket(BattleGroun
         if (!count)
             break;
 
-        --count;
         BattleGroundScore const* score = itr->second;
+
+        // one side only: the arena stores the team on the score row, which is the one place that
+        // still knows it after cross faction matchmaking has put a horde player on the gold side
+        if (onlySideOf && bg->IsArena() &&
+            static_cast<ArenaScore const*>(score)->team != onlySideOf->GetBGTeam())
+            continue;
+
+        --count;
 
         WorldPackets::Battleground::PvpLogData::PlayerScore entry;
         entry.playerGuid = ObjectGuid(itr->first);

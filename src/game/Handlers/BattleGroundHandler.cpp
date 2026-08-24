@@ -337,10 +337,21 @@ void WorldSession::HandlePVPLogDataOpcode(NullClientPacket const& /*packet*/)
     if (!bg)
         return;
 
+    /*
+     * The score window is a scouting tool before the gates open, and in an arena that matters: it
+     * names every opponent and their class while both sides are still standing in their boxes, which
+     * is a whole match plan handed over for free. Cross faction matchmaking makes it worse, because
+     * the enemy is not even recognisable as "the other faction" until you read it there.
+     *
+     * During preparation an arena therefore answers with the requester's OWN side only. The window
+     * still opens and still shows something, it just does not answer a question the player is not
+     * supposed to be able to ask yet. From the moment the gates open it is the full board again.
+     */
     if (bg->GetStatus() != STATUS_WAIT_LEAVE)
     {
 #if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_4_2
-        SendPacket(sBattleGroundMgr.BuildPvpLogDataPacket(bg));
+        bool const hideEnemies = bg->IsArena() && bg->GetStatus() == STATUS_WAIT_JOIN;
+        SendPacket(sBattleGroundMgr.BuildPvpLogDataPacket(bg, hideEnemies ? _player : nullptr));
 #endif
     }
     else
