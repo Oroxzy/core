@@ -1253,6 +1253,24 @@ bool GossipHello_ArenaAnnouncer(Player* player, Creature* creature)
 /***                  NAGRAND TORNADO                  ***/
 /*********************************************************/
 
+/*
+ * The Nagrand cyclone, as Blizzard actually built it.
+ *
+ * Wowpedia on the Ring of Trials: "Prior to Patch 2.1, a cyclone would appear one minute into the
+ * fight and randomly spin into players, slowing and damaging them" - and 2.1.0 (2007-05-22) removed
+ * it. It is back in the Classic re-releases and about as popular as it was then, which is what
+ * Arena.NagrandTornado is for.
+ *
+ * What it does is spell 34695 "Tornado": Knock Back with EffectMiscValue 200 and 100 base points,
+ * plus School Damage (Physical) of exactly ONE point. vmangos maps a knockback as
+ * KnockBackFrom(caster, EffectMiscValue / 10, damage / 10), so Blizzard's numbers are 20 horizontal
+ * and 10 vertical.
+ *
+ * That single point of damage is the whole of it. This script used to take TEN TO FIFTEEN PERCENT OF
+ * MAXIMUM HEALTH every two seconds instead, which over one tornado's life is more than a full health
+ * bar - a hazard that decides matches rather than disturbing them. The dial is
+ * Arena.NagrandTornado.DamagePercent, and its default is 0: Blizzard's one point.
+ */
 enum
 {
     TORNADO_EVENT_KNOCKBACK     = 1,
@@ -1260,45 +1278,49 @@ enum
     TORNADO_LIFETIME            = 60 * IN_MILLISECONDS,
     TORNADO_KNOCKBACK_INTERVAL  = 2 * IN_MILLISECONDS,
     TORNADO_KNOCKBACK_RANGE     = 5,            // yards
-    TORNADO_MOVE_RADIUS_MIN     = 5,
-    TORNADO_MOVE_RADIUS_MAX     = 45,
 };
+
+// spell 34695: EffectMiscValue 200 -> horizontal, 100 base points -> vertical, both over ten
+float const TORNADO_KNOCKBACK_HORIZONTAL = 20.0f;
+float const TORNADO_KNOCKBACK_VERTICAL   = 10.0f;
 
 struct npc_nagrand_tornadoAI : public ScriptedAI
 {
     explicit npc_nagrand_tornadoAI(Creature* creature) : ScriptedAI(creature)
     {
-        m_creature->SetFactionTemplateId(35);
-
-        // visual only: strip the damage effect of the tornado aura
+        // visual only: strip the damage effect of the sandstorm aura we borrow for the look
         if (SpellAuraHolder* holder = m_creature->AddAura(SPELL_ARENA_TORNADO_VISUAL))
             holder->RemoveAura(EFFECT_INDEX_0);
 
+        /*
+         * Everything is armed here and NOT in Reset(), which is the bug this replaces. EventMap
+         * inserts, it does not replace, so a Reset() that schedules is a Reset() that schedules
+         * AGAIN - and the old code called it from the constructor as well as leaving it for the
+         * framework. Two knockback events in the map means a knockback every second where the
+         * constant says two, at double the damage. A tornado never fights, evades or respawns, so
+         * Reset() has nothing to do and now does nothing.
+         */
         m_events.ScheduleEvent(TORNADO_EVENT_DESPAWN, TORNADO_LIFETIME);
-        Reset();
-    }
-
-    EventMap m_events;
-
-    void Reset() override
-    {
         m_events.ScheduleEvent(TORNADO_EVENT_KNOCKBACK, TORNADO_KNOCKBACK_INTERVAL);
         MoveToRandomPoint(1);
     }
 
+    EventMap m_events;
+
+    void Reset() override {}
+
     void MoveToRandomPoint(uint32 pointId)
     {
-        // random point in the Nagrand arena
-        float const angle = frand(0.0f, 2.0f * M_PI_F);
-        float const distance = float(urand(TORNADO_MOVE_RADIUS_MIN, TORNADO_MOVE_RADIUS_MAX));
-        float const x = 4056.0f + distance * cos(angle);
-        float const y = 2922.0f + distance * sin(angle);
-        float z = 13.65f;
-        float const groundZ = m_creature->GetMap()->GetHeight(x, y, z, true, 10.0f);
-        if (groundZ > INVALID_HEIGHT)
-            z = groundZ + 0.05f;
+        float x, y, z;
+        if (!ArenaMgr::PickNagrandFloorPoint(m_creature->GetMap(), x, y, z))
+            return;                                 // nothing found this time, MovementInform retries
 
-        m_creature->GetMotionMaster()->MovePoint(pointId, x, y, z, MOVE_PATHFINDING | MOVE_WALK_MODE);
+        /*
+         * No pathfinding on purpose. A tornado is not walking around the arena, it is drifting
+         * across it - the old MOVE_PATHFINDING made it hug the wall and take corners like a patrol
+         * guard. Straight lines between points on the sand are both cheaper and what it looks like.
+         */
+        m_creature->GetMotionMaster()->MovePoint(pointId, x, y, z, MOVE_WALK_MODE);
     }
 
     void MovementInform(uint32 type, uint32 pointId) override
@@ -1331,6 +1353,8 @@ struct npc_nagrand_tornadoAI : public ScriptedAI
                         break;
                     }
 
+                    uint32 const damagePct = sWorld.getConfig(CONFIG_UINT32_ARENA_NAGRAND_TORNADO_DAMAGE_PCT);
+
                     std::list<Player*> players;
                     m_creature->GetAlivePlayerListInRange(m_creature, players, TORNADO_KNOCKBACK_RANGE);
                     for (Player* target : players)
@@ -1338,21 +1362,24 @@ struct npc_nagrand_tornadoAI : public ScriptedAI
                         if (target->IsArenaSpectator() || target->IsGameMaster())
                             continue;
 
-                        // TBC cyclone: knockback and 10-15% of the maximum health as nature damage
-                        // (self inflicted so that the tornado never enters combat / the scoreboard)
-                        target->KnockBackFrom(m_creature, 15.0f, 10.0f);
-                        uint32 const damage = urand(target->GetMaxHealth() * 10 / 100, target->GetMaxHealth() * 15 / 100);
-                        target->DealDamage(target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NATURE, nullptr, false);
+                        target->KnockBackFrom(m_creature, TORNADO_KNOCKBACK_HORIZONTAL, TORNADO_KNOCKBACK_VERTICAL);
+
+                        // Blizzard's one point unless the realm asked for a share of the health bar.
+                        // Self inflicted, so the tornado never enters combat and never reaches the
+                        // damage column - the arena counts damage between the two sides, not weather.
+                        uint32 const damage = damagePct ? std::max(1u, uint32(target->GetMaxHealth() * damagePct / 100)) : 1u;
+                        target->DealDamage(target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL, nullptr, false);
                     }
                     m_events.ScheduleEvent(TORNADO_EVENT_KNOCKBACK, TORNADO_KNOCKBACK_INTERVAL);
                     break;
                 }
                 case TORNADO_EVENT_DESPAWN:
                 {
-                    // fade out: no more knockbacks from an invisible tornado
+                    // fade out: no more knockbacks from an invisible tornado, and it leaves at once
+                    // rather than standing around invisible for another four seconds
                     m_events.CancelEvent(TORNADO_EVENT_KNOCKBACK);
                     m_creature->RemoveAurasDueToSpell(SPELL_ARENA_TORNADO_VISUAL);
-                    m_creature->DespawnOrUnsummon(4000);
+                    m_creature->DespawnOrUnsummon(1000);
                     break;
                 }
             }

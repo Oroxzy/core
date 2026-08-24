@@ -2132,6 +2132,7 @@ ArenaBoolOption const s_arenaBoolOptions[] =
     { "LeaveQueuesOnLogout",  CONFIG_BOOL_ARENA_LEAVE_QUEUES_ON_LOGOUT },
     { "1v1.BlockHealerSpecs", CONFIG_BOOL_ARENA_1V1_BLOCK_HEALER_SPECS },
     { "AbsorbCountsAsHealing", CONFIG_BOOL_ARENA_ABSORB_COUNTS_AS_HEALING },
+    { "NagrandTornado",       CONFIG_BOOL_ARENA_NAGRAND_TORNADO },
 };
 
 ArenaUInt32Option const s_arenaUInt32Options[] =
@@ -2159,6 +2160,7 @@ ArenaUInt32Option const s_arenaUInt32Options[] =
     { "Rated.MaxRatingDifference",   CONFIG_UINT32_ARENA_RATED_MAX_MMR_DIFFERENCE,   0, 5000 },
     { "Rated.RatingDiscardMinutes",  CONFIG_UINT32_ARENA_RATED_MMR_DISCARD_MINUTES,  0, 60 },
     { "Rated.LadderMinGames",        CONFIG_UINT32_ARENA_RATED_LADDER_MIN_GAMES,     0, 1000 },
+    { "NagrandTornado.DamagePercent", CONFIG_UINT32_ARENA_NAGRAND_TORNADO_DAMAGE_PCT,  0, 50 },
     { "Rated.MinLevel",              CONFIG_UINT32_ARENA_RATED_MIN_LEVEL,            1, PLAYER_MAX_LEVEL },
 };
 

@@ -1328,6 +1328,7 @@ void World::LoadConfigSettings(bool reload)
     setConfig(CONFIG_UINT32_ARENA_MAX_RES_ARCANE, "Arena.MaxResistance.Arcane", 100);
     setConfig(CONFIG_BOOL_ARENA_ANNOUNCE_QUEUE, "Arena.AnnounceQueue", true);
     setConfig(CONFIG_BOOL_ARENA_ABSORB_COUNTS_AS_HEALING, "Arena.AbsorbCountsAsHealing", false);
+    setConfig(CONFIG_BOOL_ARENA_NAGRAND_TORNADO, "Arena.NagrandTornado", true);
     setConfig(CONFIG_BOOL_ARENA_1V1_BLOCK_HEALER_SPECS, "Arena.1v1.BlockHealerSpecs", false);
     setConfig(CONFIG_BOOL_ARENA_LEAVE_QUEUES_ON_LOGOUT, "Arena.LeaveQueuesOnLogout", true);
     setConfig(CONFIG_BOOL_ARENA_RESET_ALL_COOLDOWNS, "Arena.ResetAllCooldowns", false);
@@ -1350,6 +1351,7 @@ void World::LoadConfigSettings(bool reload)
     setConfigMinMax(CONFIG_UINT32_ARENA_RATED_MMR_DISCARD_MINUTES, "Arena.Rated.RatingDiscardMinutes", 3, 0, 60);
     setConfigMinMax(CONFIG_UINT32_ARENA_RATED_LADDER_MIN_GAMES, "Arena.Rated.LadderMinGames", 5, 0, 1000);
     setConfigMinMax(CONFIG_UINT32_ARENA_RATED_MIN_LEVEL, "Arena.Rated.MinLevel", PLAYER_MAX_LEVEL, 1, PLAYER_MAX_LEVEL);
+    setConfigMinMax(CONFIG_UINT32_ARENA_NAGRAND_TORNADO_DAMAGE_PCT, "Arena.NagrandTornado.DamagePercent", 0, 0, 50);
 
     // Smartlog data
     sLog.InitSmartlogEntries(sConfig.GetStringDefault("Smartlog.ExtraEntries", ""));

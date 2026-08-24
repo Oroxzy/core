@@ -655,7 +655,7 @@ void Arena::Update(uint32 diff)
                 m_doorsDespawnTimer -= diff;
         }
 
-        if (IsNagrandArena())
+        if (IsNagrandArena() && sWorld.getConfig(CONFIG_BOOL_ARENA_NAGRAND_TORNADO))
             UpdateNagrand(diff);
         else if (IsDalaranArena())
             UpdateDalaran(diff);
@@ -1831,19 +1831,45 @@ void Arena::FillInitialWorldStates(WorldPacket& data, uint32& count)
 /***                   NAGRAND ARENA                   ***/
 /*********************************************************/
 
+/*
+ * A random point on the arena floor - the one place that knows where the sand is.
+ *
+ * The old version took a point on a ring up to 45 yd out and walked there whatever was in the way.
+ * The Ring of Trials is not a circle: on the gate axis the floor reaches past 50 yd, across it far
+ * less, so a point picked blind lands in a wall often enough. Every candidate is now measured
+ * against the floor height and rejected if it is not standing on sand, which needs no knowledge of
+ * the shape at all.
+ *
+ * Returns false if no point could be found, which the caller treats as "try again shortly".
+ */
+bool ArenaMgr::PickNagrandFloorPoint(Map* map, float& x, float& y, float& z)
+{
+    for (uint8 tries = 0; tries < 10; ++tries)
+    {
+        float const angle = frand(0.0f, 2.0f * M_PI_F);
+        float const distance = frand(ARENA_NA_TORNADO_RADIUS_MIN, ARENA_NA_TORNADO_RADIUS_MAX);
+        float const cx = ARENA_NA_CENTER_X + distance * cos(angle);
+        float const cy = ARENA_NA_CENTER_Y + distance * sin(angle);
+
+        float const groundZ = map->GetHeight(cx, cy, ARENA_NA_FLOOR_Z + 5.0f, true, 20.0f);
+        if (groundZ <= INVALID_HEIGHT || std::fabs(groundZ - ARENA_NA_FLOOR_Z) > ARENA_NA_FLOOR_TOLERANCE)
+            continue;                                       // a wall, a ramp, or the pit outside the ring
+
+        x = cx;
+        y = cy;
+        z = groundZ + 0.05f;
+        return true;
+    }
+    return false;
+}
+
 bool Arena::SummonTornado()
 {
-    // random point on a ring around the arena center, the tornado npc script moves it around afterwards
-    float const angle = frand(0.0f, 2.0f * M_PI_F);
-    float const distance = float(urand(5, 45));
-    float const x = 4056.0f + distance * cos(angle);
-    float const y = 2922.0f + distance * sin(angle);
-    float z = 13.65f;
-    float const groundZ = GetBgMap()->GetHeight(x, y, z, true, 10.0f);
-    if (groundZ > INVALID_HEIGHT)
-        z = groundZ + 0.05f;
+    float x, y, z;
+    if (!ArenaMgr::PickNagrandFloorPoint(GetBgMap(), x, y, z))
+        return false;                                       // no floor point this time, the caller retries
 
-    if (!GetBgMap()->SummonCreature(NPC_ARENA_TORNADO, x, y, z, angle - M_PI_F, TEMPSUMMON_MANUAL_DESPAWN, 0))
+    if (!GetBgMap()->SummonCreature(NPC_ARENA_TORNADO, x, y, z, frand(0.0f, 2.0f * M_PI_F), TEMPSUMMON_MANUAL_DESPAWN, 0))
     {
         sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "[Arena] Could not summon tornado on map %u instance %u.", GetMapId(), GetInstanceID());
         return false;

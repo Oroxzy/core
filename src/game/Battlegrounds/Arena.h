@@ -288,6 +288,16 @@ enum ArenaTimers
     // saying the same thing at the same instant is one too many - so the counting starts below it.
     ARENA_COUNTDOWN_DURATION                = 15 * IN_MILLISECONDS,
 
+    /*
+     * The Nagrand cyclone, as Blizzard had it.
+     *
+     * "Prior to Patch 2.1, a cyclone would appear one minute into the fight and randomly spin into
+     * players, slowing and damaging them" - and in 2.1.0 (2007-05-22) Blizzard took it out again.
+     * It came back in the Classic re-releases, where it is disliked about as much as it was then,
+     * which is why Arena.NagrandTornado exists.
+     *
+     * The minute is the one number that is beyond doubt, and it is the one we keep.
+     */
     ARENA_NA_FIRST_TORNADO_DELAY            = 60 * IN_MILLISECONDS,
     ARENA_NA_TORNADO_INTERVAL_MIN           = 120 * IN_MILLISECONDS,
     ARENA_NA_TORNADO_INTERVAL_MAX           = 180 * IN_MILLISECONDS,
@@ -308,6 +318,20 @@ enum ArenaTimers
     // he still has to accept and load in before the gates open.
     ARENA_REFILL_LOAD_TIME                  = 10 * IN_MILLISECONDS,
 };
+
+/*
+ * The Ring of Trials floor, measured off the map rather than guessed: the two start points lie
+ * 120.7 yd apart, so the centre is their midpoint, and the inner gates sit 51-53 yd out along that
+ * same axis. The tornado stays well inside it - and every point it picks is checked against the
+ * floor height before it is used, because the ring is not a circle: 40 yd out is sand on one axis
+ * and wall on the other, and the old code walked into it.
+ */
+float const ARENA_NA_CENTER_X               = 4056.5f;
+float const ARENA_NA_CENTER_Y               = 2919.8f;
+float const ARENA_NA_FLOOR_Z                = 12.1f;
+float const ARENA_NA_TORNADO_RADIUS_MIN     = 5.0f;
+float const ARENA_NA_TORNADO_RADIUS_MAX     = 38.0f;
+float const ARENA_NA_FLOOR_TOLERANCE        = 3.0f;   // how far off the sand a candidate point may be
 
 class ArenaScore : public BattleGroundScore
 {
@@ -368,6 +392,10 @@ class ArenaMgr
         // stripped on entering anyway. The reason is written in that player's own language: he is the
         // one who reads it, whether he asked or his group leader did.
         static bool HasExcessResistance(Player const* player, std::string* reason = nullptr);
+
+        // A random point standing on the Nagrand arena floor. Shared, because the tornado is summoned
+        // in one file and steers itself in another, and the two used to carry the coordinates twice.
+        static bool PickNagrandFloorPoint(Map* map, float& x, float& y, float& z);
 
         static char const* GetPatchName(uint8 patch);
 
