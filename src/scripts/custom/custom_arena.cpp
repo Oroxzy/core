@@ -1254,22 +1254,41 @@ bool GossipHello_ArenaAnnouncer(Player* player, Creature* creature)
 /*********************************************************/
 
 /*
- * The Nagrand cyclone, as Blizzard actually built it.
+ * The Nagrand cyclone, and what it took three sources to pin down.
  *
  * Wowpedia on the Ring of Trials: "Prior to Patch 2.1, a cyclone would appear one minute into the
- * fight and randomly spin into players, slowing and damaging them" - and 2.1.0 (2007-05-22) removed
- * it. It is back in the Classic re-releases and about as popular as it was then, which is what
- * Arena.NagrandTornado is for.
+ * fight and randomly spin into players, SLOWING AND DAMAGING them" - removed in 2.1.0 (2007-05-22),
+ * put back for the Classic re-releases, and disliked then as now. That is what Arena.NagrandTornado
+ * is for.
  *
- * What it does is spell 34695 "Tornado": Knock Back with EffectMiscValue 200 and 100 base points,
- * plus School Damage (Physical) of exactly ONE point. vmangos maps a knockback as
- * KnockBackFrom(caster, EffectMiscValue / 10, damage / 10), so Blizzard's numbers are 20 horizontal
- * and 10 vertical.
+ * TWO spells, and taking only the first one is what made this comment wrong once already:
  *
- * That single point of damage is the whole of it. This script used to take TEN TO FIFTEEN PERCENT OF
- * MAXIMUM HEALTH every two seconds instead, which over one tornado's life is more than a full health
- * bar - a hazard that decides matches rather than disturbing them. The dial is
- * Arena.NagrandTornado.DamagePercent, and its default is 0: Blizzard's one point.
+ *   34695 "Tornado"     Knock Back, EffectMiscValue 200 and 100 base points, plus School Damage
+ *                       (Physical) of exactly ONE point. vmangos maps a knockback as
+ *                       KnockBackFrom(caster, EffectMiscValue / 10, damage / 10), so 20 horizontal
+ *                       and 10 vertical. That single point is not the damage - it is what makes the
+ *                       hit a hostile interaction, which is how a cyclone breaks Vanish, Stealth,
+ *                       Blind and a Sap that has not landed yet.
+ *   25160 "Sand Storm"  triggers 25161 "Harsh Winds" every second in a 10 yard radius: -85% run
+ *                       speed, Silence, and 1961 physical damage. On a Burning Crusade health pool
+ *                       of some 9000 that is more than a fifth of it PER SECOND.
+ *
+ * 25160 is the aura this script puts on the tornado for its LOOK, with the damage effect stripped
+ * off - so the patch has been carrying Blizzard's own damage spell all along and throwing away the
+ * part that does the work.
+ *
+ * Player reports line up with the second spell and not the first: a cyclone that lands killing blows
+ * and takes somebody to 200 health is not doing one point of damage. So the damage is real, and it
+ * is a share of the health bar rather than 1961, because 1961 is a level seventy number and this is
+ * a level sixty arena. Arena.NagrandTornado.DamagePercent, default 10 per touch, which at one touch
+ * every two seconds is about a quarter of what Harsh Winds does to a Burning Crusade player. Setting
+ * it to 0 leaves the single point: no damage worth the name, but still a hit, so it still breaks
+ * stealth and crowd control.
+ *
+ * NOT reproduced, and worth knowing: Harsh Winds also SLOWS by 85% and SILENCES inside ten yards.
+ * This tornado does neither, and its reach is five yards rather than ten. Whether the arena cyclone
+ * used Harsh Winds at all or only 34695 is the one thing no source settles - what is certain is that
+ * it slowed, damaged, and could kill.
  */
 enum
 {
@@ -1316,11 +1335,18 @@ struct npc_nagrand_tornadoAI : public ScriptedAI
             return;                                 // nothing found this time, MovementInform retries
 
         /*
-         * No pathfinding on purpose. A tornado is not walking around the arena, it is drifting
-         * across it - the old MOVE_PATHFINDING made it hug the wall and take corners like a patrol
-         * guard. Straight lines between points on the sand are both cheaper and what it looks like.
+         * Straight lines at running pace, and neither of those is what it used to do.
+         *
+         * MOVE_WALK_MODE with the template's walk rate of 1.1 is 2.5 * 1.1 = 2.75 yards a second -
+         * slower than a player who is WALKING, and a third of one who runs. Footage of the real
+         * thing shows it crossing the sand at a pace you have to move to avoid, so it runs now, and
+         * the rate lives in creature_template 19922 where it can be tuned without a compiler.
+         *
+         * No pathfinding either: the old MOVE_PATHFINDING made it hug the wall and take corners like
+         * a patrol guard. A cyclone drifts, and it drifts through the four pillars rather than
+         * walking around them.
          */
-        m_creature->GetMotionMaster()->MovePoint(pointId, x, y, z, MOVE_WALK_MODE);
+        m_creature->GetMotionMaster()->MovePoint(pointId, x, y, z, MOVE_RUN_MODE);
     }
 
     void MovementInform(uint32 type, uint32 pointId) override
@@ -1364,9 +1390,11 @@ struct npc_nagrand_tornadoAI : public ScriptedAI
 
                         target->KnockBackFrom(m_creature, TORNADO_KNOCKBACK_HORIZONTAL, TORNADO_KNOCKBACK_VERTICAL);
 
-                        // Blizzard's one point unless the realm asked for a share of the health bar.
-                        // Self inflicted, so the tornado never enters combat and never reaches the
-                        // damage column - the arena counts damage between the two sides, not weather.
+                        // A share of the health bar, because Harsh Winds' 1961 is a level seventy
+                        // number; 0 leaves the single point of 34695, which still breaks stealth and
+                        // crowd control. Self inflicted, so the tornado never enters combat and never
+                        // reaches the damage column - the arena counts damage between the two sides,
+                        // not the weather.
                         uint32 const damage = damagePct ? std::max(1u, uint32(target->GetMaxHealth() * damagePct / 100)) : 1u;
                         target->DealDamage(target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL, nullptr, false);
                     }

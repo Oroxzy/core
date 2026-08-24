@@ -360,6 +360,9 @@
 
 -- 11. creature_template
 --    19922  Tornado (Nagrand Arena, invisible model, the visual comes from aura 25160)
+--           speed_run 1 = 7.0 yards a second, exactly a running player: the cyclone is meant to
+--           be avoided by moving, not outrun standing still. It used to drift in WALK mode at
+--           2.75 y/s, slower than a walking player, which is nothing like the real thing.
 --    28567  Water Spout (Dalaran Sewers, invisible knockback / flush reference points)
 --    800100 Arena Watcher (ready check npc, kept as the fallback template)
 --           static_flags1 carries VISIBLE_TO_GHOSTS (0x200000): a player who died is an ordinary ghost
@@ -372,7 +375,7 @@
     DELETE FROM `creature_template` WHERE `entry` IN (19922, 28567, 600044) OR `entry` BETWEEN 800100 AND 800121;
 
     INSERT INTO `creature_template` (`entry`, `patch`, `name`, `subname`, `level_min`, `level_max`, `faction`, `npc_flags`, `gossip_menu_id`, `display_id1`, `display_id2`, `display_id3`, `display_id4`, `display_scale1`, `display_scale2`, `display_scale3`, `display_scale4`, `display_probability1`, `display_probability2`, `display_probability3`, `display_probability4`, `display_total_probability`, `mount_display_id`, `speed_walk`, `speed_run`, `detection_range`, `call_for_help_range`, `leash_range`, `type`, `pet_family`, `rank`, `unit_class`, `xp_multiplier`, `health_multiplier`, `mana_multiplier`, `armor_multiplier`, `damage_multiplier`, `damage_variance`, `damage_school`, `base_attack_time`, `ranged_attack_time`, `holy_res`, `fire_res`, `nature_res`, `frost_res`, `shadow_res`, `arcane_res`, `trainer_type`, `trainer_spell`, `trainer_class`, `trainer_race`, `loot_id`, `pickpocket_loot_id`, `skinning_loot_id`, `gold_min`, `gold_max`, `spell_list_id`, `pet_spell_list_id`, `spawn_spell_id`, `totem_spell_id`, `auras`, `ai_name`, `movement_type`, `inhabit_type`, `civilian`, `racial_leader`, `equipment_id`, `trainer_id`, `vendor_id`, `mechanic_immune_mask`, `school_immune_mask`, `immunity_flags`, `static_flags1`, `static_flags2`, `flags_extra`, `script_name`) VALUES
-        (19922, 0, 'Tornado', NULL, 60, 60, 35, 0, 0, 11686, 0, 0, 0, 1, 0, 0, 0, 100, 0, 0, 0, 100, 0, 1.1, 1.14286, 18, 5, 0, 4, 0, 0, 1, 1, 1, 1, 1, 1, 0.14, 0, 2000, 2000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, '', 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 610, 0, 2050, 'custom_npc_nagrand_tornado'),
+        (19922, 0, 'Tornado', NULL, 60, 60, 35, 0, 0, 11686, 0, 0, 0, 1, 0, 0, 0, 100, 0, 0, 0, 100, 0, 1.1, 1, 18, 5, 0, 4, 0, 0, 1, 1, 1, 1, 1, 1, 0.14, 0, 2000, 2000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, '', 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 610, 0, 2050, 'custom_npc_nagrand_tornado'),
         (28567, 0, 'Water Spout', '', 1, 1, 35, 0, 0, 11686, 0, 0, 0, 1, 0, 0, 0, 100, 0, 0, 0, 100, 0, 0.91, 1.14286, 20, 5, 0, 10, 0, 0, 1, 1, 1, 1, 1, 1, 0.14, 0, 2000, 2200, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, '', 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 610, 0, 2, ''),
         (800100, 0, 'Arena Watcher', NULL, 60, 60, 35, 1, 0, 20856, 21153, 0, 0, 1.35, 1.35, 0, 0, 50, 50, 0, 0, 100, 0, 1, 1.14286, 20, 5, 0, 7, 0, 0, 1, 1, 1, 1, 1, 1, 0.14, 0, 2000, 2000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, '', 0, 3, 0, 0, 800100, 0, 0, 0, 0, 0, 2097250, 0, 2, 'custom_npc_arena_watcher'),
         -- Nagrand ogre with a two handed axe
