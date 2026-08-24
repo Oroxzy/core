@@ -1277,26 +1277,30 @@ bool GossipHello_ArenaAnnouncer(Player* player, Creature* creature)
  * off - so the patch has been carrying Blizzard's own damage spell all along and throwing away the
  * part that does the work.
  *
- * Player reports line up with the second spell and not the first: a cyclone that lands killing blows
- * and takes somebody to 200 health is not doing one point of damage. So the damage is real, and it
- * is a share of the health bar rather than 1961, because 1961 is a level seventy number and this is
- * a level sixty arena. Arena.NagrandTornado.DamagePercent, default 10 per touch, which at one touch
- * every two seconds is about a quarter of what Harsh Winds does to a Burning Crusade player. Setting
- * it to 0 leaves the single point: no damage worth the name, but still a hit, so it still breaks
- * stealth and crowd control.
+ * The slow, the silence and the ten yard reach are reproduced by applying 25161 ITSELF, once a
+ * second, which is its own cadence and its own duration. Its damage effect is not applied, and that
+ * is the one deliberate departure: 1961 is a flat number written for a level sixty player standing
+ * in a Silithus sandstorm, while this arena also runs brackets down to level ten, where a fixed
+ * 1961 is not a hazard but an execution.
  *
- * NOT reproduced, and worth knowing: Harsh Winds also SLOWS by 85% and SILENCES inside ten yards.
- * This tornado does neither, and its reach is five yards rather than ten. Whether the arena cyclone
- * used Harsh Winds at all or only 34695 is the one thing no source settles - what is certain is that
- * it slowed, damaged, and could kill.
+ * So the damage is a share of the health bar and means the same thing in every bracket:
+ * Arena.NagrandTornado.DamagePercent, default 5, applied on the same one second beat. Player reports
+ * of cyclones landing killing blows and taking somebody to 200 health are what says the damage has
+ * to be real at all; setting the percentage to 0 leaves a single point, which is no damage worth the
+ * name but still a hit, so stealth and crowd control still break.
+ *
+ * Whether the arena cyclone used Harsh Winds at all or only 34695 is the one thing no source settles
+ * - what is certain from three directions is that it slowed, damaged, and could kill.
  */
 enum
 {
-    TORNADO_EVENT_KNOCKBACK     = 1,
+    TORNADO_EVENT_TOUCH         = 1,
     TORNADO_EVENT_DESPAWN       = 2,
     TORNADO_LIFETIME            = 60 * IN_MILLISECONDS,
-    TORNADO_KNOCKBACK_INTERVAL  = 2 * IN_MILLISECONDS,
-    TORNADO_KNOCKBACK_RANGE     = 5,            // yards
+    // Harsh Winds' own cadence and reach: Sand Storm retriggers it every second, and its auras last
+    // exactly one second, so a slower tick would leave gaps in a slow that is meant to be continuous.
+    TORNADO_TICK_INTERVAL       = 1 * IN_MILLISECONDS,
+    TORNADO_RADIUS              = 10,           // yards, spell 25161
 };
 
 // spell 34695: EffectMiscValue 200 -> horizontal, 100 base points -> vertical, both over ten
@@ -1320,7 +1324,7 @@ struct npc_nagrand_tornadoAI : public ScriptedAI
          * Reset() has nothing to do and now does nothing.
          */
         m_events.ScheduleEvent(TORNADO_EVENT_DESPAWN, TORNADO_LIFETIME);
-        m_events.ScheduleEvent(TORNADO_EVENT_KNOCKBACK, TORNADO_KNOCKBACK_INTERVAL);
+        m_events.ScheduleEvent(TORNADO_EVENT_TOUCH, TORNADO_TICK_INTERVAL);
         MoveToRandomPoint(1);
     }
 
@@ -1368,7 +1372,7 @@ struct npc_nagrand_tornadoAI : public ScriptedAI
         {
             switch (eventId)
             {
-                case TORNADO_EVENT_KNOCKBACK:
+                case TORNADO_EVENT_TOUCH:
                 {
                     // match over (everybody frozen at the scoreboard) or not started: vanish quietly
                     BattleGround* bg = m_creature->GetMap()->IsBattleGround() ? static_cast<BattleGroundMap*>(m_creature->GetMap())->GetBG() : nullptr;
@@ -1382,7 +1386,7 @@ struct npc_nagrand_tornadoAI : public ScriptedAI
                     uint32 const damagePct = sWorld.getConfig(CONFIG_UINT32_ARENA_NAGRAND_TORNADO_DAMAGE_PCT);
 
                     std::list<Player*> players;
-                    m_creature->GetAlivePlayerListInRange(m_creature, players, TORNADO_KNOCKBACK_RANGE);
+                    m_creature->GetAlivePlayerListInRange(m_creature, players, TORNADO_RADIUS);
                     for (Player* target : players)
                     {
                         if (target->IsArenaSpectator() || target->IsGameMaster())
@@ -1390,22 +1394,38 @@ struct npc_nagrand_tornadoAI : public ScriptedAI
 
                         target->KnockBackFrom(m_creature, TORNADO_KNOCKBACK_HORIZONTAL, TORNADO_KNOCKBACK_VERTICAL);
 
-                        // A share of the health bar, because Harsh Winds' 1961 is a level seventy
-                        // number; 0 leaves the single point of 34695, which still breaks stealth and
-                        // crowd control. Self inflicted, so the tornado never enters combat and never
-                        // reaches the damage column - the arena counts damage between the two sides,
-                        // not the weather.
+                        /*
+                         * Blizzard's own slow and silence, from Blizzard's own spell, with Blizzard's
+                         * own numbers and its one second duration - and without its damage.
+                         *
+                         * AddAura builds a holder out of the APPLY_AURA effects only, so 25161's
+                         * third effect, the flat 1961 School Damage, is not applied at all. That is
+                         * exactly what is wanted: 1961 is a fixed number written for a level sixty
+                         * player standing in a Silithus sandstorm, and this arena also runs brackets
+                         * down to level ten, where it is not a hazard but an execution. The damage
+                         * below is a share of the health bar instead and scales with the bracket.
+                         *
+                         * The spell id is in the 1.12 client's own Spell.dbc, so the debuff shows up
+                         * with its proper icon and name without the client patch carrying anything.
+                         */
+                        target->AddAura(SPELL_ARENA_TORNADO_HARSH_WINDS, 0, m_creature);
+
+                        // A share of the health bar, so it means the same thing in a level nineteen
+                        // bracket as it does at sixty; 0 leaves a single point, which is no damage
+                        // worth the name but still a hit, so stealth and crowd control still break.
+                        // Self inflicted, so the tornado never enters combat and never reaches the
+                        // damage column - the arena counts damage between the two sides, not weather.
                         uint32 const damage = damagePct ? std::max(1u, uint32(target->GetMaxHealth() * damagePct / 100)) : 1u;
                         target->DealDamage(target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL, nullptr, false);
                     }
-                    m_events.ScheduleEvent(TORNADO_EVENT_KNOCKBACK, TORNADO_KNOCKBACK_INTERVAL);
+                    m_events.ScheduleEvent(TORNADO_EVENT_TOUCH, TORNADO_TICK_INTERVAL);
                     break;
                 }
                 case TORNADO_EVENT_DESPAWN:
                 {
                     // fade out: no more knockbacks from an invisible tornado, and it leaves at once
                     // rather than standing around invisible for another four seconds
-                    m_events.CancelEvent(TORNADO_EVENT_KNOCKBACK);
+                    m_events.CancelEvent(TORNADO_EVENT_TOUCH);
                     m_creature->RemoveAurasDueToSpell(SPELL_ARENA_TORNADO_VISUAL);
                     m_creature->DespawnOrUnsummon(1000);
                     break;

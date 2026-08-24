@@ -1351,7 +1351,7 @@ void World::LoadConfigSettings(bool reload)
     setConfigMinMax(CONFIG_UINT32_ARENA_RATED_MMR_DISCARD_MINUTES, "Arena.Rated.RatingDiscardMinutes", 3, 0, 60);
     setConfigMinMax(CONFIG_UINT32_ARENA_RATED_LADDER_MIN_GAMES, "Arena.Rated.LadderMinGames", 5, 0, 1000);
     setConfigMinMax(CONFIG_UINT32_ARENA_RATED_MIN_LEVEL, "Arena.Rated.MinLevel", PLAYER_MAX_LEVEL, 1, PLAYER_MAX_LEVEL);
-    setConfigMinMax(CONFIG_UINT32_ARENA_NAGRAND_TORNADO_DAMAGE_PCT, "Arena.NagrandTornado.DamagePercent", 10, 0, 50);
+    setConfigMinMax(CONFIG_UINT32_ARENA_NAGRAND_TORNADO_DAMAGE_PCT, "Arena.NagrandTornado.DamagePercent", 5, 0, 50);
 
     // Smartlog data
     sLog.InitSmartlogEntries(sConfig.GetStringDefault("Smartlog.ExtraEntries", ""));

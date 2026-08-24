@@ -205,6 +205,9 @@ enum ArenaSpells
     SPELL_ARENA_RECENTLY_BANDAGED           = 11196,
     SPELL_ARENA_CALL_PET                    = 883,
     SPELL_ARENA_TORNADO_VISUAL              = 25160,    // used by the Nagrand tornado npc (script)
+    // 25160 triggers this every second in Silithus: -85% run speed, silence, and 1961 damage. Only
+    // the two auras are wanted here - see the tornado script for why the damage is not.
+    SPELL_ARENA_TORNADO_HARSH_WINDS         = 25161,
 };
 
 // world states used by the client patch (WorldStateFrame.lua)
