@@ -1200,6 +1200,12 @@ ChatCommand * ChatHandler::getCommandTable()
         { "panel",          SEC_GAMEMASTER,     true,  &ChatHandler::HandleArenaPanelCommand,          "", nullptr },
         { "spectators",     SEC_GAMEMASTER,     true,  &ChatHandler::HandleArenaSpectatorsCommand,     "", nullptr },
         { "kickspectators", SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleArenaKickSpectatorsCommand, "", nullptr },
+        // What the player's own arena window talks to. The 1.12 client has no arena API of any kind,
+        // so every number on that window is pushed from here and parsed by the AddOn, the same way
+        // the admin panel already works - see HandleArenaQueueInfoCommand.
+        { "info",           SEC_PLAYER,         false, &ChatHandler::HandleArenaQueueInfoCommand,      "", nullptr },
+        { "join",           SEC_PLAYER,         false, &ChatHandler::HandleArenaQueueJoinCommand,      "", nullptr },
+        { "leave",          SEC_PLAYER,         false, &ChatHandler::HandleArenaQueueLeaveCommand,     "", nullptr },
         { nullptr,          0,                  false, nullptr,                                        "", nullptr }
     };
 
@@ -1376,7 +1382,12 @@ ChatCommand * ChatHandler::getCommandTable()
         { "cinematic",      SEC_DEVELOPER,      false, nullptr,                                        "", cinematicCommandTable},
         { "escort",         SEC_TICKETMASTER,   false, nullptr,                                        "", escortCommandTable   },
         { "bg",             SEC_GAMEMASTER,     false, nullptr,                                        "", bgCommandTable       },
-        { "arena",          SEC_GAMEMASTER,     true,  nullptr,                                        "", arenaCommandTable    },
+        // SEC_PLAYER on the PARENT only. ChatHandler::isAvailable tests the security of every command
+        // it walks, parents included, so a gamemaster level ".arena" would refuse a player before he
+        // ever reached ".arena info" - and every subcommand above keeps its own level, so nothing
+        // else opens up. A subcommand ABOVE its parent is the normal arrangement and warns about
+        // nothing; it is the other way round that the loader complains about.
+        { "arena",          SEC_PLAYER,         true,  nullptr,                                        "", arenaCommandTable    },
         { "spell",          SEC_GAMEMASTER,     true, nullptr,                                         "", spellCommandTable    },
         { "pvp",            SEC_GAMEMASTER,     false, &ChatHandler::HandlePvPCommand,                 "", nullptr },
         { "variable",       SEC_DEVELOPER,      true,  &ChatHandler::HandleVariableCommand,            "", nullptr},

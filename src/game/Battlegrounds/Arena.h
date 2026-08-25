@@ -456,6 +456,21 @@ class ArenaMgr
 
 #define sArenaMgr MaNGOS::Singleton<ArenaMgr>::Instance()
 
+/*
+ * The orb's queue rules, reachable from the chat command the player's arena window talks to.
+ *
+ * They are implemented in the SCRIPTS library, next to the orb whose gossip menu is their other
+ * caller (src/scripts/custom/custom_arena.cpp), and the game library reaches them exactly the way it
+ * already reaches AddScripts(): declared here, resolved when mangosd links both. No callback, no
+ * registration - the two libraries are one executable in the end.
+ *
+ * Passing no orb is the whole difference between the window and the gossip menu. Every gate is the
+ * same, and a refusal still arrives as the notification the player would have got standing at the
+ * orb, in his own language - only the denial sound is skipped, since there is no orb to play it.
+ */
+bool ArenaJoinQueueFromWindow(Player* player, ArenaType type);
+bool ArenaLeaveQueueFromWindow(Player* player, ArenaType type);
+
 class Arena : public BattleGround
 {
     friend class BattleGroundMgr;

@@ -2533,6 +2533,142 @@ bool ChatHandler::HandleArenaKickSpectatorsCommand(char* args)
  * commands as chat and reads the answers back out of the system chat. Every line starts with
  * ARENA| so the addon can recognise its own traffic and keep it out of the chat window.
  */
+/*
+ * Everything the player's own arena window needs, in one answer.
+ *
+ * The 1.12 client has no arena interface of any kind - no JoinArena, no rating call, no queue
+ * opcode - so a window that shows a rating and a queue has to be told all of it. This is the same
+ * arrangement the admin panel already uses and has proved: a chat command in, machine readable
+ * "ARENA|..." lines out, hidden from the chat frame by the AddOn that asked for them.
+ *
+ * SEC_PLAYER, and it only ever reports on the caller himself - there is nothing here that another
+ * player's name could be substituted into.
+ *
+ *   ARENA|qb|<index>|<token>|<open>|<rating>|<best>|<games>|<wins>|<waiting>|<queued>
+ *       one line per bracket, index 0..3 = 1v1 2v2 3v3 5v5
+ *       token   the bracket in the player's own language ("2v2", "2c2", "2對2" ...)
+ *       open    1 when this realm has that bracket set up at all
+ *       queued  1 when he is standing in that queue right now
+ *   ARENA|qi|<enabled>|<minLevel>|<ratedMinLevel>|<ratedMode>|<myLevel>|<inBg>
+ *   ARENA|done|info
+ */
+bool ChatHandler::HandleArenaQueueInfoCommand(char* /*args*/)
+{
+    Player* player = m_session ? m_session->GetPlayer() : nullptr;
+    if (!player)
+        return false;
+
+    for (uint8 index = 0; index < ARENA_TYPES_COUNT; ++index)
+    {
+        ArenaType const type = GetArenaTypeByIndex(index);
+
+        // "open" means the realm has a battleground template for that bracket on any of its arenas
+        BattleGround* bgTemplate = nullptr;
+        for (uint8 map = 0; map < ARENA_MAPS_COUNT && !bgTemplate; ++map)
+            bgTemplate = sBattleGroundMgr.GetBattleGroundTemplate(GetArenaBattleGroundTypeId(ArenaMapType(map), type));
+
+        uint32 waiting = 0;
+        bool queued = false;
+        if (bgTemplate)
+        {
+            BattleGroundBracketId const bracketId = player->GetBattleGroundBracketIdFromLevel(bgTemplate->GetTypeID());
+            for (uint8 map = 0; map < ARENA_MAPS_COUNT; ++map)
+            {
+                BattleGroundTypeId const bgTypeId = GetArenaBattleGroundTypeId(ArenaMapType(map), type);
+                waiting += sBattleGroundMgr.GetArenaPlayersWaitingCount(bgTypeId, bracketId);
+                if (player->InBattleGroundQueueForBattleGroundQueueType(BattleGroundMgr::BgQueueTypeId(bgTypeId)))
+                    queued = true;
+            }
+        }
+
+        ArenaRatingEntry const entry = sArenaRatingMgr.Get(player->GetObjectGuid(), type);
+
+        PSendSysMessage("ARENA|qb|%u|%s|%u|%u|%u|%u|%u|%u|%u", index,
+                        ArenaMgr::BracketName(player, type),
+                        bgTemplate ? 1 : 0,
+                        entry.rating, entry.bestRating, entry.games, entry.wins,
+                        waiting, queued ? 1 : 0);
+    }
+
+    PSendSysMessage("ARENA|qi|%u|%u|%u|%u|%u|%u",
+                    sWorld.getConfig(CONFIG_BOOL_ARENA_ENABLED) ? 1 : 0,
+                    sWorld.getConfig(CONFIG_UINT32_ARENA_MIN_LEVEL),
+                    sWorld.getConfig(CONFIG_UINT32_ARENA_RATED_MIN_LEVEL),
+                    sArenaRatingMgr.IsRatingEnabled() ? sWorld.getConfig(CONFIG_UINT32_ARENA_RATED_MODE) : 0u,
+                    player->GetLevel(),
+                    player->InBattleGround() ? 1 : 0);
+
+    PSendSysMessage("ARENA|done|info");
+    return true;
+}
+
+/*
+ * The bracket the player named, or ARENA_TYPES_COUNT when he named nothing usable.
+ * Accepts the English tokens and the plain sizes, so "2v2", "2", "2c2" and "2vs2" all arrive.
+ */
+static uint8 ParseArenaBracketIndex(char const* text)
+{
+    if (!text || !*text)
+        return ARENA_TYPES_COUNT;
+
+    // the first digit decides: every bracket this server has is NvN with the same N twice
+    while (*text && (*text < '0' || *text > '9'))
+        ++text;
+
+    switch (*text)
+    {
+        case '1': return 0;
+        case '2': return 1;
+        case '3': return 2;
+        case '5': return 3;
+    }
+    return ARENA_TYPES_COUNT;
+}
+
+/*
+ * ".arena join <1v1|2v2|3v3|5v5>" - what the arena window's Join button sends.
+ *
+ * Every gate the orb applies applies here too, because this IS the orb's code: the window is
+ * another way in, not a second set of rules. A refusal arrives as the same notification the player
+ * would have seen standing at the orb, in his own language, so the window has nothing to translate.
+ */
+bool ChatHandler::HandleArenaQueueJoinCommand(char* args)
+{
+    Player* player = m_session ? m_session->GetPlayer() : nullptr;
+    if (!player)
+        return false;
+
+    uint8 const index = ParseArenaBracketIndex(args);
+    if (index >= ARENA_TYPES_COUNT)
+    {
+        PSendSysMessage("ARENA|qerr|bracket");
+        return true;
+    }
+
+    bool const joined = ArenaJoinQueueFromWindow(player, GetArenaTypeByIndex(index));
+    PSendSysMessage("ARENA|q%s|%u", joined ? "joined" : "refused", index);
+    return true;
+}
+
+// ".arena leave <bracket>" - the same button once he is in that queue
+bool ChatHandler::HandleArenaQueueLeaveCommand(char* args)
+{
+    Player* player = m_session ? m_session->GetPlayer() : nullptr;
+    if (!player)
+        return false;
+
+    uint8 const index = ParseArenaBracketIndex(args);
+    if (index >= ARENA_TYPES_COUNT)
+    {
+        PSendSysMessage("ARENA|qerr|bracket");
+        return true;
+    }
+
+    bool const left = ArenaLeaveQueueFromWindow(player, GetArenaTypeByIndex(index));
+    PSendSysMessage("ARENA|q%s|%u", left ? "left" : "refused", index);
+    return true;
+}
+
 bool ChatHandler::HandleArenaPanelCommand(char* args)
 {
     char* what = ExtractLiteralArg(&args);

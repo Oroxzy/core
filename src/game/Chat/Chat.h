@@ -403,6 +403,9 @@ class ChatHandler
         bool HandleArenaUnbanCommand(char *args);
         bool HandleArenaListCommand(char *args);
         bool HandleArenaPanelCommand(char *args);
+        bool HandleArenaQueueInfoCommand(char *args);
+        bool HandleArenaQueueJoinCommand(char *args);
+        bool HandleArenaQueueLeaveCommand(char *args);
         bool HandleArenaSpectatorsCommand(char *args);
         bool HandleArenaKickSpectatorsCommand(char *args);
         // reads a spell id or "item <id>" for .arena ban / unban

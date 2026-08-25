@@ -616,6 +616,32 @@ namespace
 }
 
 /*********************************************************/
+/***           WHAT THE ARENA WINDOW CALLS             ***/
+/*********************************************************/
+
+/*
+ * The player's own arena window queues through here rather than through the orb's gossip menu.
+ *
+ * Declared in Arena.h so the chat command in the game library can reach it - see the comment there.
+ * Everything below this line is the same code the orb runs; the only difference is that there is no
+ * orb, which Refuse() already copes with (it only wants one to play its denial sound on).
+ */
+bool ArenaJoinQueueFromWindow(Player* player, ArenaType type)
+{
+    return JoinArenaQueue(player, nullptr, type);
+}
+
+bool ArenaLeaveQueueFromWindow(Player* player, ArenaType type)
+{
+    BattleGroundQueueTypeId const queueTypeId = GetArenaQueueOfType(player, type);
+    if (queueTypeId == BATTLEGROUND_QUEUE_NONE)
+        return false;
+
+    sBattleGroundMgr.m_battleGroundQueues[queueTypeId].LeaveQueue(player);
+    return true;
+}
+
+/*********************************************************/
 /***                     ARENA ORB                     ***/
 /*********************************************************/
 
