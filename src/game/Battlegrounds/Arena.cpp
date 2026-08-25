@@ -30,6 +30,7 @@
 #include "ObjectMgr.h"
 #include "Chat.h"
 #include "Spell.h"
+#include "SpellAuras.h"
 #include "SpellMgr.h"
 #include "World.h"
 #include "Map.h"
@@ -517,6 +518,7 @@ Arena::Arena()
     m_underMapCheckTimer = 0;
     m_framePushTimer = 0;
     m_castLineSent = false;
+    m_auraLineSent = false;
     m_leaverIsParticipant = false;
     m_spectatorsRemoved = false;
     m_rated = false;
@@ -616,6 +618,7 @@ void Arena::Reset()
     m_underMapCheckTimer = 0;
     m_framePushTimer = 0;
     m_castLineSent = false;
+    m_auraLineSent = false;
     m_leaverIsParticipant = false;
     m_spectatorsRemoved = false;
     m_rated = false;
@@ -633,6 +636,91 @@ namespace
 {
     // The prefix the AddOn listens on. Kept short: it rides in front of every payload.
     char const* const ARENA_FRAME_PREFIX = "ARENAFRM";
+
+    /*
+     * What the frames report, and why it is a MECHANIC and not a list of spell ids.
+     *
+     * Every rank of a spell is its own id in 1.12 - Polymorph alone is 118, 12824, 12825 and
+     * 12826 - so a hand written id list is a list to keep up to date forever and to get wrong
+     * once. The mechanic is what the spell DOES, it is the same across every rank, and it already
+     * covers spells nobody thought to write down.
+     *
+     * The set is deliberately short. A wall of icons is noise; what a player needs off an enemy
+     * frame at a glance is two things: can he act, and can he be hurt. MECHANIC_IMMUNE_SHIELD is
+     * the second one whole - SharedDefines calls it "Divine (Blessing) Shield/Protection and Ice
+     * Block" in as many words.
+     */
+    bool IsTrackedMechanic(uint32 mechanic)
+    {
+        switch (mechanic)
+        {
+            case MECHANIC_CHARM:
+            case MECHANIC_DISORIENTED:          // Blind, Gouge
+            case MECHANIC_FEAR:
+            case MECHANIC_ROOT:
+            case MECHANIC_SILENCE:
+            case MECHANIC_SLEEP:
+            case MECHANIC_STUN:
+            case MECHANIC_FREEZE:
+            case MECHANIC_KNOCKOUT:
+            case MECHANIC_POLYMORPH:
+            case MECHANIC_BANISH:
+            case MECHANIC_HORROR:
+            case MECHANIC_SAPPED:
+            case MECHANIC_INVULNERABILITY:
+            case MECHANIC_IMMUNE_SHIELD:
+                return true;
+        }
+        return false;
+    }
+
+    bool IsImmunityMechanic(uint32 mechanic)
+    {
+        return mechanic == MECHANIC_IMMUNE_SHIELD || mechanic == MECHANIC_INVULNERABILITY;
+    }
+
+    /*
+     * The one effect on this player worth a place on his frame.
+     *
+     * One, not all of them. Two icons in a forty pixel row is a fight for space that the
+     * information does not win, and in practice the answer to "what is happening to him" is a
+     * single thing: he is immune, or he is held. Immunity outranks control - being unable to hurt
+     * him matters more than his being unable to move - and among equals the one with the most
+     * time left on it wins, because that is the one still there when you get to him.
+     */
+    void FindTrackedAura(Player const* player, uint32& mechanic, int32& remaining)
+    {
+        mechanic = 0;
+        remaining = 0;
+
+        for (auto const& itr : player->GetSpellAuraHolderMap())
+        {
+            SpellAuraHolder const* holder = itr.second;
+            if (!holder)
+                continue;
+
+            SpellEntry const* info = holder->GetSpellProto();
+            if (!info)
+                continue;
+
+            uint32 found = info->Mechanic;
+            for (uint32 i = 0; i < MAX_EFFECT_INDEX && !IsTrackedMechanic(found); ++i)
+                found = info->EffectMechanic[i];
+
+            if (!IsTrackedMechanic(found))
+                continue;
+
+            int32 const left = holder->GetAuraDuration();
+
+            if (!mechanic
+                || (IsImmunityMechanic(found) && !IsImmunityMechanic(mechanic))
+                || (IsImmunityMechanic(found) == IsImmunityMechanic(mechanic) && left > remaining))
+            {
+                mechanic = found;
+                remaining = left;
+            }
+        }
+    }
 
     /*
      * One addon message to one player.
@@ -765,6 +853,38 @@ void Arena::PushFrameData(uint32 diff)
         casts.push_back(info);
     }
 
+    /*
+     * The control effects, in one line for everybody.
+     *
+     * Unlike the casts this needs no localisation: the AddOn draws an icon and a countdown, not a
+     * word, so the same bytes serve every watcher. That is also why it is a mechanic on the wire
+     * and not a name - the icon table lives in the AddOn and is fifteen entries long.
+     */
+    std::ostringstream auras;
+    bool anyAura = false;
+    for (auto const& itr : GetPlayers())
+    {
+        Player* player = sObjectMgr.GetPlayer(itr.first);
+        if (!player)
+            continue;
+
+        uint32 mechanic = 0;
+        int32 remaining = 0;
+        FindTrackedAura(player, mechanic, remaining);
+        if (!mechanic)
+            continue;
+
+        if (!anyAura)
+            auras << "b|";
+        else
+            auras << ";";
+        anyAura = true;
+
+        // a duration of -1 is permanent; the AddOn shows the icon without a countdown
+        auras << player->GetName() << "," << mechanic << "," << remaining;
+    }
+    std::string const auraLine = anyAura ? auras.str() : std::string();
+
     // everybody on the map: the fighters and the visitors watching them
     if (Map* map = GetBgMap())
     {
@@ -776,6 +896,11 @@ void Arena::PushFrameData(uint32 diff)
                 continue;
 
             SendArenaAddon(receiver, line);
+
+            if (!auraLine.empty())
+                SendArenaAddon(receiver, auraLine);
+            else if (m_auraLineSent)
+                SendArenaAddon(receiver, "b|");
 
             if (casts.empty())
             {
@@ -812,6 +937,7 @@ void Arena::PushFrameData(uint32 diff)
     }
 
     m_castLineSent = !casts.empty();
+    m_auraLineSent = anyAura;
 }
 
 void Arena::Update(uint32 diff)
