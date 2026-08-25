@@ -29,6 +29,7 @@
 #include "GameObject.h"
 #include "ObjectMgr.h"
 #include "Chat.h"
+#include "Spell.h"
 #include "SpellMgr.h"
 #include "World.h"
 #include "Map.h"
@@ -515,6 +516,7 @@ Arena::Arena()
     m_waterfallState = WATERFALL_OFF;
     m_underMapCheckTimer = 0;
     m_framePushTimer = 0;
+    m_castLineSent = false;
     m_leaverIsParticipant = false;
     m_spectatorsRemoved = false;
     m_rated = false;
@@ -613,6 +615,7 @@ void Arena::Reset()
     m_waterfallState = WATERFALL_OFF;
     m_underMapCheckTimer = 0;
     m_framePushTimer = 0;
+    m_castLineSent = false;
     m_leaverIsParticipant = false;
     m_spectatorsRemoved = false;
     m_rated = false;
@@ -716,13 +719,99 @@ void Arena::PushFrameData(uint32 diff)
 
     std::string const line = payload.str();
 
+    /*
+     * Who is casting what.
+     *
+     * A separate message rather than more fields on the one above, for one reason: a spell name
+     * is up to twenty five bytes and a chat payload is capped around 255. Five fighters with
+     * their bars already come to about 150, and five casting at once would burst it. Casts are
+     * their own line, they are usually none or one, and they simply do not go out when nobody is
+     * casting.
+     *
+     * The name has to travel WITH the cast. The 1.12 client cannot look a spell id up: there is
+     * no GetSpellInfo, and GetSpellName only reaches the player's own spellbook. If the server
+     * does not spell it out, the AddOn has an id and nothing to show for it.
+     */
+    struct CastInfo
+    {
+        std::string caster;
+        SpellEntry const* spell;
+        uint32 total;
+        uint32 remaining;
+    };
+    std::vector<CastInfo> casts;
+
+    for (auto const& itr : GetPlayers())
+    {
+        Player* player = sObjectMgr.GetPlayer(itr.first);
+        if (!player)
+            continue;
+
+        Spell* spell = player->GetCurrentSpell(CURRENT_GENERIC_SPELL);
+        if (!spell)
+            spell = player->GetCurrentSpell(CURRENT_CHANNELED_SPELL);
+        if (!spell || !spell->m_spellInfo)
+            continue;
+
+        int32 const total = spell->GetCastTime();
+        if (total <= 0)
+            continue;                           // instant: there is no bar to draw
+
+        CastInfo info;
+        info.caster = player->GetName();
+        info.spell = spell->m_spellInfo;
+        info.total = uint32(total);
+        info.remaining = spell->GetCastedTime();
+        casts.push_back(info);
+    }
+
     // everybody on the map: the fighters and the visitors watching them
     if (Map* map = GetBgMap())
     {
         Map::PlayerList const& players = map->GetPlayers();
         for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
-            SendArenaAddon(itr->getSource(), line);
+        {
+            Player* receiver = itr->getSource();
+            if (!receiver)
+                continue;
+
+            SendArenaAddon(receiver, line);
+
+            if (casts.empty())
+            {
+                // cleared once, not on every tick for the rest of the match
+                if (m_castLineSent)
+                    SendArenaAddon(receiver, "c|");
+                continue;
+            }
+
+            /*
+             * Built per receiver, because the spell name is localised and this is the one place
+             * where two watchers legitimately need different bytes. It costs nothing worth
+             * counting: at most a couple of casters and a handful of watchers, twice a second.
+             */
+            LocaleConstant const locale = receiver->GetSession() ?
+                                          receiver->GetSession()->GetSessionDbcLocale() : LOCALE_enUS;
+
+            std::ostringstream castLine;
+            castLine << "c|";
+            for (size_t i = 0; i < casts.size(); ++i)
+            {
+                std::string const& name = casts[i].spell->SpellName[locale].empty() ?
+                                          casts[i].spell->SpellName[LOCALE_enUS] :
+                                          casts[i].spell->SpellName[locale];
+
+                if (i)
+                    castLine << ";";
+                castLine << casts[i].caster << "," << name << ","
+                         << casts[i].total << "," << casts[i].remaining;
+            }
+
+            SendArenaAddon(receiver, castLine.str());
+        }
     }
+
+    m_castLineSent = !casts.empty();
 }
 
 void Arena::Update(uint32 diff)
