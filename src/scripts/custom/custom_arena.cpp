@@ -1298,6 +1298,20 @@ enum
     TORNADO_EVENT_DESPAWN       = 2,
     TORNADO_EVENT_MOVE          = 3,            // retry after a failed floor pick
     TORNADO_MOVE_RETRY_DELAY    = 1000,
+    /*
+     * How long the body stays behind its own visual.
+     *
+     * Taking the sandstorm aura off does not switch the cyclone off, it plays it OUT: the effect
+     * lifts and dissolves upward into the air, which is worth watching and takes a moment. Deleting
+     * the creature destroys everything attached to it, animation included, so a short delay chops
+     * the dissolve off half way and the tornado appears to blink out. That is what "it does not
+     * despawn nicely" was.
+     *
+     * There is no cost to being generous here: from the moment the aura goes the creature is
+     * invisible, its touch event is cancelled, and it does nothing at all - it is only waiting for
+     * the client to finish. Anything shorter is visible; anything longer is not.
+     */
+    TORNADO_DISSOLVE_TIME       = 10 * IN_MILLISECONDS,
     TORNADO_LIFETIME            = 60 * IN_MILLISECONDS,
     // Harsh Winds' own cadence and reach: Sand Storm retriggers it every second, and its auras last
     // exactly one second, so a slower tick would leave gaps in a slow that is meant to be continuous.
@@ -1424,7 +1438,7 @@ struct npc_nagrand_tornadoAI : public ScriptedAI
                     {
                         ClearHarshWinds();
                         m_creature->RemoveAurasDueToSpell(SPELL_ARENA_TORNADO_VISUAL);
-                        m_creature->DespawnOrUnsummon();
+                        m_creature->DespawnOrUnsummon(TORNADO_DISSOLVE_TIME);
                         break;
                     }
 
@@ -1489,19 +1503,14 @@ struct npc_nagrand_tornadoAI : public ScriptedAI
                 case TORNADO_EVENT_DESPAWN:
                 {
                     /*
-                     * It stops touching, it takes its debuffs back, the swirl goes, and the body
-                     * follows a moment later.
-                     *
-                     * The delay is not a fade and never was: removing the aura is what makes the
-                     * cyclone disappear, so whatever is waited afterwards is an invisible creature
-                     * standing about. It is kept short and only so the unit is not deleted in the
-                     * same breath as its own aura removal.
+                     * It stops touching, it takes its debuffs back, and then it is played out rather
+                     * than switched off - see TORNADO_DISSOLVE_TIME.
                      */
                     m_events.CancelEvent(TORNADO_EVENT_TOUCH);
                     m_events.CancelEvent(TORNADO_EVENT_MOVE);
                     ClearHarshWinds();
                     m_creature->RemoveAurasDueToSpell(SPELL_ARENA_TORNADO_VISUAL);
-                    m_creature->DespawnOrUnsummon(1000);
+                    m_creature->DespawnOrUnsummon(TORNADO_DISSOLVE_TIME);
                     break;
                 }
             }
