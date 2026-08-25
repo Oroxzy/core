@@ -2558,6 +2558,13 @@ bool ChatHandler::HandleArenaQueueInfoCommand(char* /*args*/)
     if (!player)
         return false;
 
+    /*
+     * Worth knowing when this goes quiet: ChatHandler::ParseCommands drops every command from a
+     * SEC_PLAYER session when PlayerCommands is off, before it ever reaches here. The default is on,
+     * but a realm that turns it off turns the arena window off with it - there is no other way for a
+     * 1.12 client to ask the server anything - and the symptom is a window that simply never fills.
+     */
+
     for (uint8 index = 0; index < ARENA_TYPES_COUNT; ++index)
     {
         ArenaType const type = GetArenaTypeByIndex(index);
