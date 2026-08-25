@@ -125,6 +125,17 @@ class ArenaRatingMgr
         void GetRank(ObjectGuid guid, ArenaType type, uint32& rank, uint32& total) const;
 
         /*
+         * The same thing for every bracket at once.
+         *
+         * GetRank walks the whole rating map, and the arena window wants all four - so asking it
+         * four times walked the map four times for one refresh, and that window refreshes on
+         * open, on every queue change and on every tab switch. One walk answers all of them.
+         *
+         * rank[i] and total[i] are indexed the way GetArenaTypeIndex indexes brackets.
+         */
+        void GetRanks(ObjectGuid guid, uint32* rank, uint32* total) const;
+
+        /*
          * The maths, TrinityCore 3.3.5 ArenaTeam.cpp. All of it is driven by one number: how likely
          * the winner was to win. Beating somebody far above you moves the rating a lot, beating
          * somebody far below you moves it barely at all.

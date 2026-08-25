@@ -638,6 +638,16 @@ namespace
     char const* const ARENA_FRAME_PREFIX = "ARENAFRM";
 
     /*
+     * The most this will put in one payload.
+     *
+     * Well under what a chat message carries, and deliberately so: the prefix and its tab ride in
+     * front of it, and the client is the side that has to survive whatever arrives. Only the cast
+     * line is measured against it - the bars and the control effects are fixed width and cannot
+     * reach it.
+     */
+    size_t const ARENA_FRAME_MAX_PAYLOAD = 200;
+
+    /*
      * What the frames report, and why it is a MECHANIC and not a list of spell ids.
      *
      * Every rank of a spell is its own id in 1.12 - Polymorph alone is 118, 12824, 12825 and
@@ -918,21 +928,42 @@ void Arena::PushFrameData(uint32 diff)
             LocaleConstant const locale = receiver->GetSession() ?
                                           receiver->GetSession()->GetSessionDbcLocale() : LOCALE_enUS;
 
+            /*
+             * Capped, because this is the one line that can run away.
+             *
+             * The bars are fixed width - five fighters come to about 150 bytes whatever happens.
+             * A spell NAME is not: thirty characters is normal and a Cyrillic one is two bytes a
+             * character, so five casting at once could put this past 380. A chat payload does not
+             * survive that, and five mages casting in a 5v5 is a Tuesday, not a corner case.
+             *
+             * Dropping the tail is the right failure: the casts are in no meaningful order, and a
+             * frame with no bar is a frame that says nothing, which is much better than a payload
+             * the client throws away entirely - that would take the health bars down with it.
+             */
             std::ostringstream castLine;
             castLine << "c|";
+            size_t written = 0;
             for (size_t i = 0; i < casts.size(); ++i)
             {
                 std::string const& name = casts[i].spell->SpellName[locale].empty() ?
                                           casts[i].spell->SpellName[LOCALE_enUS] :
                                           casts[i].spell->SpellName[locale];
 
-                if (i)
+                if (castLine.tellp() + std::streamoff(name.size() + casts[i].caster.size() + 16)
+                    > std::streamoff(ARENA_FRAME_MAX_PAYLOAD))
+                    break;
+
+                if (written)
                     castLine << ";";
                 castLine << casts[i].caster << "," << name << ","
                          << casts[i].total << "," << casts[i].remaining;
+                ++written;
             }
 
-            SendArenaAddon(receiver, castLine.str());
+            if (written)
+                SendArenaAddon(receiver, castLine.str());
+            else if (m_castLineSent)
+                SendArenaAddon(receiver, "c|");
         }
     }
 

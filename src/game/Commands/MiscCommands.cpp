@@ -2558,6 +2558,11 @@ bool ChatHandler::HandleArenaQueueInfoCommand(char* /*args*/)
     if (!player)
         return false;
 
+    // all four ladder places in one walk of the rating map rather than one walk per bracket
+    uint32 rankOf[ARENA_TYPES_COUNT];
+    uint32 totalOf[ARENA_TYPES_COUNT];
+    sArenaRatingMgr.GetRanks(player->GetObjectGuid(), rankOf, totalOf);
+
     /*
      * Worth knowing when this goes quiet: ChatHandler::ParseCommands drops every command from a
      * SEC_PLAYER session when PlayerCommands is off, before it ever reaches here. The default is on,
@@ -2590,10 +2595,8 @@ bool ChatHandler::HandleArenaQueueInfoCommand(char* /*args*/)
 
         ArenaRatingEntry const entry = sArenaRatingMgr.Get(player->GetObjectGuid(), type);
 
-        // where he stands in this bracket, for the window's detail panel
-        uint32 rank = 0;
-        uint32 total = 0;
-        sArenaRatingMgr.GetRank(player->GetObjectGuid(), type, rank, total);
+        uint32 const rank = rankOf[index];
+        uint32 const total = totalOf[index];
 
         PSendSysMessage("ARENA|qb|%u|%s|%u|%u|%u|%u|%u|%u|%u|%u|%u", index,
                         ArenaMgr::BracketName(player, type),
@@ -2699,7 +2702,22 @@ bool ChatHandler::HandleArenaMatchesCommand(char* /*args*/)
         return false;
 
     // sent first and unconditionally, so the tab can say "switched off" rather than "none running"
-    PSendSysMessage("ARENA|wcfg|%u", sWorld.getConfig(CONFIG_BOOL_ARENA_SPECTATE) ? 1 : 0);
+    bool const mayWatch = sWorld.getConfig(CONFIG_BOOL_ARENA_SPECTATE);
+    PSendSysMessage("ARENA|wcfg|%u", mayWatch ? 1 : 0);
+
+    /*
+     * And nothing else when watching is off.
+     *
+     * The list was going out regardless, so a player who could not spectate still learned every
+     * running match and every name in it. That is precisely the scouting tool this command was
+     * written to avoid being - it is why the live damage and healing the admin panel carries are
+     * not in here - and leaving the roster in while refusing the door was inconsistent with it.
+     */
+    if (!mayWatch)
+    {
+        PSendSysMessage("ARENA|done|matches");
+        return true;
+    }
 
     for (uint32 bgTypeId = BATTLEGROUND_ARENA_FIRST; bgTypeId <= BATTLEGROUND_ARENA_LAST; ++bgTypeId)
     {

@@ -285,6 +285,51 @@ void ArenaRatingMgr::GetRank(ObjectGuid guid, ArenaType type, uint32& rank, uint
         rank = above + 1;
 }
 
+void ArenaRatingMgr::GetRanks(ObjectGuid guid, uint32* rank, uint32* total) const
+{
+    uint32 own[ARENA_TYPES_COUNT];
+    uint32 above[ARENA_TYPES_COUNT];
+    bool played[ARENA_TYPES_COUNT];
+
+    for (uint8 i = 0; i < ARENA_TYPES_COUNT; ++i)
+    {
+        rank[i] = 0;
+        total[i] = 0;
+        own[i] = 0;
+        above[i] = 0;
+        played[i] = false;
+    }
+
+    std::lock_guard<std::mutex> guard(m_lock);
+
+    // his own rating in each bracket first, so the single pass below has something to compare to
+    for (uint8 i = 0; i < ARENA_TYPES_COUNT; ++i)
+    {
+        auto const itr = m_ratings.find(MakeKey(guid, GetArenaTypeByIndex(i)));
+        if (itr != m_ratings.end())
+        {
+            own[i] = itr->second.rating;
+            played[i] = true;
+        }
+    }
+
+    // MakeKey packs the bracket into the low byte, so one pass sorts every row into its bracket
+    for (auto const& itr : m_ratings)
+    {
+        uint8 const index = uint8(itr.first & 0xFF);
+        if (index >= ARENA_TYPES_COUNT)
+            continue;
+
+        ++total[index];
+        if (played[index] && itr.second.rating > own[index])
+            ++above[index];
+    }
+
+    for (uint8 i = 0; i < ARENA_TYPES_COUNT; ++i)
+        if (played[i])
+            rank[i] = above[i] + 1;
+}
+
 void ArenaRatingMgr::GetLadder(ArenaType type, uint32 maxRows, uint32 minGames, std::vector<ArenaLadderRow>& out) const
 {
     out.clear();
