@@ -1389,6 +1389,25 @@ struct npc_nagrand_tornadoAI : public ScriptedAI
     void AttackStart(Unit* /*who*/) override {}
     void MoveInLineOfSight(Unit* /*who*/) override {}
 
+    /*
+     * Everything the cyclone leaves behind, taken back before it goes.
+     *
+     * Nothing in the core removes an aura because its CASTER went away, and Harsh Winds outlives one
+     * tick, so a player kept the silence and the eighty five percent snare for up to a second after
+     * the tornado he could no longer see. Standing rooted and mute with nothing on screen to explain
+     * it is the part that reads as broken - not the disappearance itself.
+     *
+     * The arena map's own player list is used rather than a radius search: a knockback throws a
+     * player twenty yards, so he can be well outside the ten the debuff was applied in, and there
+     * are never more than a dozen people on this map anyway.
+     */
+    void ClearHarshWinds()
+    {
+        for (auto const& itr : m_creature->GetMap()->GetPlayers())
+            if (Player* player = itr.getSource())
+                player->RemoveAurasByCasterSpell(SPELL_ARENA_TORNADO_HARSH_WINDS, m_creature->GetObjectGuid());
+    }
+
     void UpdateAI(uint32 const diff) override
     {
         m_events.Update(diff);
@@ -1403,6 +1422,7 @@ struct npc_nagrand_tornadoAI : public ScriptedAI
                     BattleGround* bg = m_creature->GetMap()->IsBattleGround() ? static_cast<BattleGroundMap*>(m_creature->GetMap())->GetBG() : nullptr;
                     if (!bg || bg->GetStatus() != STATUS_IN_PROGRESS)
                     {
+                        ClearHarshWinds();
                         m_creature->RemoveAurasDueToSpell(SPELL_ARENA_TORNADO_VISUAL);
                         m_creature->DespawnOrUnsummon();
                         break;
@@ -1468,9 +1488,18 @@ struct npc_nagrand_tornadoAI : public ScriptedAI
                 }
                 case TORNADO_EVENT_DESPAWN:
                 {
-                    // fade out: no more knockbacks from an invisible tornado, and it leaves at once
-                    // rather than standing around invisible for another four seconds
+                    /*
+                     * It stops touching, it takes its debuffs back, the swirl goes, and the body
+                     * follows a moment later.
+                     *
+                     * The delay is not a fade and never was: removing the aura is what makes the
+                     * cyclone disappear, so whatever is waited afterwards is an invisible creature
+                     * standing about. It is kept short and only so the unit is not deleted in the
+                     * same breath as its own aura removal.
+                     */
                     m_events.CancelEvent(TORNADO_EVENT_TOUCH);
+                    m_events.CancelEvent(TORNADO_EVENT_MOVE);
+                    ClearHarshWinds();
                     m_creature->RemoveAurasDueToSpell(SPELL_ARENA_TORNADO_VISUAL);
                     m_creature->DespawnOrUnsummon(1000);
                     break;
