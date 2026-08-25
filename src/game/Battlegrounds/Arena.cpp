@@ -514,6 +514,7 @@ Arena::Arena()
     m_pipeKnockbackCount = 0;
     m_waterfallState = WATERFALL_OFF;
     m_underMapCheckTimer = 0;
+    m_framePushTimer = 0;
     m_leaverIsParticipant = false;
     m_spectatorsRemoved = false;
     m_rated = false;
@@ -611,6 +612,7 @@ void Arena::Reset()
     m_pipeKnockbackCount = 0;
     m_waterfallState = WATERFALL_OFF;
     m_underMapCheckTimer = 0;
+    m_framePushTimer = 0;
     m_leaverIsParticipant = false;
     m_spectatorsRemoved = false;
     m_rated = false;
@@ -623,6 +625,105 @@ void Arena::Reset()
 /*********************************************************/
 /***                      UPDATE                       ***/
 /*********************************************************/
+
+namespace
+{
+    // The prefix the AddOn listens on. Kept short: it rides in front of every payload.
+    char const* const ARENA_FRAME_PREFIX = "ARENAFRM";
+
+    /*
+     * One addon message to one player.
+     *
+     * On 1.12 an addon message is marked by the LANGUAGE field, not by the message type:
+     * LANG_ADDON, with the text carrying "PREFIX\tpayload" exactly the way the client's own
+     * SendAddonMessage assembles it. SharedDefines.h has a CHAT_MSG_ADDON constant, but that is
+     * the 2.4 way of doing it - the comment on LANG_ADDON says as much, and nothing in this
+     * source uses the constant.
+     *
+     * Whisper rather than party, so it works for a spectator who is in no group and for a 1v1
+     * where there is no party at all. The sender is the receiver himself, which keeps it out of
+     * every ignore list.
+     */
+    void SendArenaAddon(Player* to, std::string const& payload)
+    {
+        if (!to || !to->GetSession())
+            return;
+
+        std::string text(ARENA_FRAME_PREFIX);
+        text += "\t";
+        text += payload;
+
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, text.c_str(), LANG_ADDON, CHAT_TAG_NONE,
+                                     to->GetObjectGuid(), to->GetName());
+        to->GetSession()->SendPacket(&data);
+    }
+}
+
+/*
+ * The bars of every fighter, to everybody who can see the match.
+ *
+ * Stateless on purpose: one line carries the whole roster AND its numbers, so a spectator who
+ * arrives mid match is right on his first tick and nothing has to be re-sent when somebody dies or
+ * leaves. It costs a few bytes more per tick than sending names once and indices afterwards, and
+ * it saves having to keep two sides in step, which is where that kind of protocol goes wrong.
+ *
+ * Only while the match is running. During preparation the two sides are deliberately invisible to
+ * each other (Unit::IsVisibleForOrDetect), and handing the enemy's health over a side channel
+ * would undo exactly that.
+ */
+void Arena::PushFrameData(uint32 diff)
+{
+    if (m_framePushTimer > diff)
+    {
+        m_framePushTimer -= diff;
+        return;
+    }
+    m_framePushTimer = ARENA_FRAME_PUSH_INTERVAL;
+
+    std::ostringstream payload;
+    payload << "a|";
+
+    bool any = false;
+    for (auto const& itr : GetPlayers())
+    {
+        Player* player = sObjectMgr.GetPlayer(itr.first);
+        if (!player)
+            continue;
+
+        uint32 const maxHealth = player->GetMaxHealth();
+        uint32 const health = maxHealth ? uint32((uint64(player->GetHealth()) * 100) / maxHealth) : 0;
+
+        Powers const powerType = player->GetPowerType();
+        uint32 const maxPower = player->GetMaxPower(powerType);
+        uint32 const power = maxPower ? uint32((uint64(player->GetPower(powerType)) * 100) / maxPower) : 0;
+
+        if (any)
+            payload << ";";
+        any = true;
+
+        payload << player->GetName() << ","
+                << uint32(player->GetClass()) << ","
+                << (player->GetBGTeam() == ALLIANCE ? 0 : 1) << ","
+                << health << ","
+                << power << ","
+                << uint32(powerType) << ","
+                << (player->IsAlive() ? 0 : 1);
+    }
+
+    if (!any)
+        return;
+
+    std::string const line = payload.str();
+
+    // everybody on the map: the fighters and the visitors watching them
+    if (Map* map = GetBgMap())
+    {
+        Map::PlayerList const& players = map->GetPlayers();
+        for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+            SendArenaAddon(itr->getSource(), line);
+    }
+}
 
 void Arena::Update(uint32 diff)
 {
@@ -674,6 +775,8 @@ void Arena::Update(uint32 diff)
             else
                 m_doorsDespawnTimer -= diff;
         }
+
+        PushFrameData(diff);
 
         if (IsNagrandArena() && sWorld.getConfig(CONFIG_BOOL_ARENA_NAGRAND_TORNADO))
             UpdateNagrand(diff);

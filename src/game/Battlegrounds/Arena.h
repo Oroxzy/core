@@ -317,6 +317,15 @@ enum ArenaTimers
     ARENA_DS_PIPE_KNOCKBACK_COUNT           = 2,
     ARENA_DS_PIPE_RECHECK_INTERVAL          = 2 * IN_MILLISECONDS,  // server side replacement for the pipe area triggers
     ARENA_UNDER_MAP_CHECK_INTERVAL          = 3 * IN_MILLISECONDS,
+    /*
+     * How often the fighters' bars are pushed to everybody's arena frames.
+     *
+     * Twice a second. The 1.12 client has no arena unit tokens at all - "arena" appears nowhere in
+     * WoW.exe and there is no ARENA_ event of any kind - so an addon cannot read an opponent the
+     * way Gladius and its relatives do on later clients. It has to be told, and this is the tick
+     * that tells it. One packet per watcher per tick, carrying every fighter.
+     */
+    ARENA_FRAME_PUSH_INTERVAL               = 500,
     // Extra time on top of the invite accept window when the countdown is held open for a replacement:
     // he still has to accept and load in before the gates open.
     ARENA_REFILL_LOAD_TIME                  = 10 * IN_MILLISECONDS,
@@ -481,6 +490,8 @@ class Arena : public BattleGround
         ~Arena();
 
         void Update(uint32 diff) override;
+        // Sends every watcher one line with every fighter's bars. See ARENA_FRAME_PUSH_INTERVAL.
+        void PushFrameData(uint32 diff);
         void Reset() override;
         bool SetupBattleGround() override { return true; }
         void StartingEventCloseDoors() override;
@@ -621,6 +632,7 @@ class Arena : public BattleGround
         WaterfallState m_waterfallState;
 
         uint32 m_underMapCheckTimer;
+        uint32 m_framePushTimer;
         // teleports players that fell below the arena floor back to their team start location
         void CheckPlayersUnderMap();
 };
