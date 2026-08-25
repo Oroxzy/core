@@ -268,7 +268,19 @@ namespace
 
     void AnnounceQueueJoin(Player* player, GameObject* orb, ArenaType type, bool asGroup)
     {
-        if (!sWorld.getConfig(CONFIG_BOOL_ARENA_ANNOUNCE_QUEUE))
+        /*
+         * No orb, no announcer.
+         *
+         * The announcer is a creature standing beside the orb and is found BY the orb, so a queue
+         * that did not come from an orb has nothing to search from. When the arena window learned to
+         * queue, this line went looking for a creature near a null pointer and took the world server
+         * down with it - Arena.AnnounceQueue is on by default, so it happened on the first join.
+         *
+         * Skipping is also the right answer rather than a patch over one: the yell is positional, it
+         * is meant for the people standing at the orb, and a player queueing from the other end of
+         * the world has no orb for it to come out of.
+         */
+        if (!orb || !sWorld.getConfig(CONFIG_BOOL_ARENA_ANNOUNCE_QUEUE))
             return;
 
         Creature* announcer = orb->FindNearestCreature(NPC_ARENA_ANNOUNCER, 20.0f);
