@@ -19,3 +19,8 @@ bool ArenaLeaveQueueFromWindow(Player* /*player*/, ArenaType /*type*/)
 {
     return false;
 }
+
+bool ArenaSpectateFromWindow(Player* /*player*/, uint32 /*instanceId*/)
+{
+    return false;
+}

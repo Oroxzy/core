@@ -2676,6 +2676,82 @@ bool ChatHandler::HandleArenaQueueLeaveCommand(char* args)
     return true;
 }
 
+/*
+ * ".arena matches" - the running matches, for the arena window's spectate tab.
+ *
+ * Deliberately thinner than what the admin panel sends. The panel carries live damage and healing;
+ * a player who is not watching yet has no business reading the scoreboard of a match in progress,
+ * and handing it out would turn the window into a scouting tool. The names are in it because
+ * anybody allowed to spectate can read them a second after arriving anyway.
+ *
+ * Spectators are not in bg->GetPlayers() - they stand on the map without being in the match - so
+ * the name list below is the fighters and nothing else, with no filtering needed to keep it so.
+ */
+bool ChatHandler::HandleArenaMatchesCommand(char* /*args*/)
+{
+    Player* player = m_session ? m_session->GetPlayer() : nullptr;
+    if (!player)
+        return false;
+
+    // sent first and unconditionally, so the tab can say "switched off" rather than "none running"
+    PSendSysMessage("ARENA|wcfg|%u", sWorld.getConfig(CONFIG_BOOL_ARENA_SPECTATE) ? 1 : 0);
+
+    for (uint32 bgTypeId = BATTLEGROUND_ARENA_FIRST; bgTypeId <= BATTLEGROUND_ARENA_LAST; ++bgTypeId)
+    {
+        for (BattleGroundSet::const_iterator itr = sBattleGroundMgr.GetBattleGroundsBegin(BattleGroundTypeId(bgTypeId));
+             itr != sBattleGroundMgr.GetBattleGroundsEnd(BattleGroundTypeId(bgTypeId)); ++itr)
+        {
+            BattleGround* bg = itr->second;
+            if (!itr->first || !bg->GetPlayersSize())
+                continue;
+
+            // only what can actually be watched: a match still at the gates has nothing to show and
+            // SpectateArena would refuse it anyway
+            if (bg->GetStatus() != STATUS_IN_PROGRESS)
+                continue;
+
+            Arena* arena = static_cast<Arena*>(bg);
+            std::ostringstream names;
+            for (auto const& member : bg->GetPlayers())
+            {
+                std::string name;
+                if (sObjectMgr.GetPlayerNameByGUID(member.first, name))
+                    names << (names.str().empty() ? "" : ", ") << name;
+            }
+
+            std::vector<Player*> spectators;
+            CollectArenaSpectators(bg, spectators);
+
+            PSendSysMessage("ARENA|w|%u|%s|%s|%u|%u|%s", bg->GetInstanceID(), bg->GetName(),
+                            GetArenaTypeName(arena->GetArenaType()), arena->IsRated() ? 1 : 0,
+                            uint32(spectators.size()), names.str().c_str());
+        }
+    }
+
+    PSendSysMessage("ARENA|done|matches");
+    return true;
+}
+
+// ".arena watch <instanceId>" - the spectate tab's button. The refusal, when there is one, arrives
+// as the same notification the orb would have given, so the window has nothing to translate.
+bool ChatHandler::HandleArenaWatchCommand(char* args)
+{
+    Player* player = m_session ? m_session->GetPlayer() : nullptr;
+    if (!player)
+        return false;
+
+    uint32 instanceId = 0;
+    if (!ExtractUInt32(&args, instanceId) || !instanceId)
+    {
+        PSendSysMessage("ARENA|werr|id");
+        return true;
+    }
+
+    bool const watching = ArenaSpectateFromWindow(player, instanceId);
+    PSendSysMessage("ARENA|w%s|%u", watching ? "ok" : "no", instanceId);
+    return true;
+}
+
 bool ChatHandler::HandleArenaPanelCommand(char* args)
 {
     char* what = ExtractLiteralArg(&args);

@@ -470,6 +470,7 @@ class ArenaMgr
  */
 bool ArenaJoinQueueFromWindow(Player* player, ArenaType type);
 bool ArenaLeaveQueueFromWindow(Player* player, ArenaType type);
+bool ArenaSpectateFromWindow(Player* player, uint32 instanceId);
 
 class Arena : public BattleGround
 {

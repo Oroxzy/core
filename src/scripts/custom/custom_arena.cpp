@@ -653,6 +653,19 @@ bool ArenaLeaveQueueFromWindow(Player* player, ArenaType type)
     return true;
 }
 
+/*
+ * The window's spectate tab, and the orb's "watch this match" entry by another road.
+ *
+ * This IS that entry - every gate SpectateArena applies still applies: the config switch, the match
+ * having to be running, not already being in a battleground, not being in combat, and a free queue
+ * slot so the client gives him the way out again. Nothing is relaxed because the request arrived
+ * over a chat command instead of a gossip menu.
+ */
+bool ArenaSpectateFromWindow(Player* player, uint32 instanceId)
+{
+    return SpectateArena(player, nullptr, instanceId);
+}
+
 /*********************************************************/
 /***                     ARENA ORB                     ***/
 /*********************************************************/
