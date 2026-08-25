@@ -2590,11 +2590,16 @@ bool ChatHandler::HandleArenaQueueInfoCommand(char* /*args*/)
 
         ArenaRatingEntry const entry = sArenaRatingMgr.Get(player->GetObjectGuid(), type);
 
-        PSendSysMessage("ARENA|qb|%u|%s|%u|%u|%u|%u|%u|%u|%u", index,
+        // where he stands in this bracket, for the window's detail panel
+        uint32 rank = 0;
+        uint32 total = 0;
+        sArenaRatingMgr.GetRank(player->GetObjectGuid(), type, rank, total);
+
+        PSendSysMessage("ARENA|qb|%u|%s|%u|%u|%u|%u|%u|%u|%u|%u|%u", index,
                         ArenaMgr::BracketName(player, type),
                         bgTemplate ? 1 : 0,
                         entry.rating, entry.bestRating, entry.games, entry.wins,
-                        waiting, queued ? 1 : 0);
+                        waiting, queued ? 1 : 0, rank, total);
     }
 
     PSendSysMessage("ARENA|qi|%u|%u|%u|%u|%u|%u",

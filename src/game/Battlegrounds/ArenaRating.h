@@ -114,6 +114,17 @@ class ArenaRatingMgr
         void GetLadder(ArenaType type, uint32 maxRows, uint32 minGames, std::vector<ArenaLadderRow>& out) const;
 
         /*
+         * Where one character stands in a bracket: how many have a higher rating, plus one.
+         *
+         * Counted over the characters who have a row in that bracket, which is the same thing as
+         * the characters who have played it - so the total is the size of the ladder and not the
+         * size of the realm, and a character who never played answers rank 0 out of the real
+         * total. Cheap enough to ask on every window refresh: every rating is already in memory
+         * and this walks it once.
+         */
+        void GetRank(ObjectGuid guid, ArenaType type, uint32& rank, uint32& total) const;
+
+        /*
          * The maths, TrinityCore 3.3.5 ArenaTeam.cpp. All of it is driven by one number: how likely
          * the winner was to win. Beating somebody far above you moves the rating a lot, beating
          * somebody far below you moves it barely at all.

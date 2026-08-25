@@ -256,6 +256,35 @@ uint32 ArenaRatingMgr::Reset(ArenaType type)
     return removed;
 }
 
+void ArenaRatingMgr::GetRank(ObjectGuid guid, ArenaType type, uint32& rank, uint32& total) const
+{
+    rank = 0;
+    total = 0;
+    if (type == ARENA_TYPE_NONE)
+        return;
+
+    std::lock_guard<std::mutex> guard(m_lock);
+
+    // MakeKey packs the bracket into the low byte, so the map can be filtered without unpacking
+    uint64 const index = uint64(GetArenaTypeIndex(type));
+    auto const own = m_ratings.find(MakeKey(guid, type));
+
+    uint32 above = 0;
+    for (auto const& itr : m_ratings)
+    {
+        if ((itr.first & 0xFF) != index)
+            continue;
+
+        ++total;
+        if (own != m_ratings.end() && itr.second.rating > own->second.rating)
+            ++above;
+    }
+
+    // no row means he has never played this bracket, and there is no place to report
+    if (own != m_ratings.end())
+        rank = above + 1;
+}
+
 void ArenaRatingMgr::GetLadder(ArenaType type, uint32 maxRows, uint32 minGames, std::vector<ArenaLadderRow>& out) const
 {
     out.clear();
