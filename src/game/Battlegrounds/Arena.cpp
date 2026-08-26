@@ -518,7 +518,6 @@ Arena::Arena()
     m_underMapCheckTimer = 0;
     m_framePushTimer = 0;
     m_castLineSent = false;
-    m_auraLineSent = false;
     m_leaverIsParticipant = false;
     m_spectatorsRemoved = false;
     m_rated = false;
@@ -618,7 +617,6 @@ void Arena::Reset()
     m_underMapCheckTimer = 0;
     m_framePushTimer = 0;
     m_castLineSent = false;
-    m_auraLineSent = false;
     m_leaverIsParticipant = false;
     m_spectatorsRemoved = false;
     m_rated = false;
@@ -807,9 +805,16 @@ namespace
         bool onCooldown;                        // false: happening now. true: used, and this is the wait
     };
 
-    // Two of them, and the frames have room for two beside the bar. The first version sent one
-    // because the icon sat INSIDE the health bar, where a second would have had nowhere to go.
-    size_t const ARENA_FRAME_MAX_AURAS = 2;
+    /*
+     * Five, because the frames now have a row of five.
+     *
+     * It was one while the icon sat inside the health bar, two once it moved outside, and five
+     * now that the row from sArena's layout is there to fill. The row in sArena is a diminishing
+     * returns tracker with a fixed category per slot; ours holds what is actually happening to
+     * the man - control effects first, then cooldowns - because DR is a thing this server
+     * deliberately does not report.
+     */
+    size_t const ARENA_FRAME_MAX_AURAS = 5;
 
     /*
      * The effects on this player worth a place on his frame, best first.
@@ -1079,14 +1084,22 @@ void Arena::PushFrameData(uint32 diff)
     }
 
     /*
-     * The control effects, in one line for everybody.
+     * The control effects and cooldowns: ONE LINE PER FIGHTER.
      *
-     * Unlike the casts this needs no localisation: the AddOn draws an icon and a countdown, not a
-     * word, so the same bytes serve every watcher. That is also why it is a mechanic on the wire
-     * and not a name - the icon table lives in the AddOn and is fifteen entries long.
+     * They all shared a line while there were two of them each. Five do not fit - five fighters
+     * with five entries comes to well past four hundred bytes against a two hundred ceiling - and
+     * the old overflow guard dropped whole FIGHTERS off the tail, so the last two enemies would
+     * simply have shown nothing at all. That is the exact failure these frames exist to prevent.
+     *
+     * A line each is about eighty bytes and cannot overflow. It is also sent for EVERY fighter
+     * every tick, including the ones with nothing on them, which is what makes it stateless: an
+     * empty line clears that man and nothing has to remember what was sent last time. The
+     * AddOn's parser had to learn the same lesson - it used to wipe the whole table on every
+     * message, which with a line per fighter would have left only the last one standing.
+     *
+     * No localisation, unlike the casts: the AddOn draws an icon and a countdown, not a word.
      */
-    std::ostringstream auras;
-    bool anyAura = false;
+    std::vector<std::string> auraLines;
     for (auto const& itr : GetPlayers())
     {
         Player* player = sObjectMgr.GetPlayer(itr.first);
@@ -1095,30 +1108,25 @@ void Arena::PushFrameData(uint32 diff)
 
         std::vector<TrackedAura> found;
         FindTrackedAuras(player, found);
-        if (found.empty())
-            continue;
 
-        // measured against the same ceiling the cast line uses, and for the same reason: it is
-        // the tail that goes, not the packet
         std::ostringstream entry;
-        entry << player->GetName();
+        entry << "b|" << player->GetName();
+
         for (size_t i = 0; i < found.size(); ++i)
-            entry << "," << found[i].id << "," << found[i].remaining
-                  << "," << (found[i].onCooldown ? 1 : 0);
+        {
+            std::ostringstream one;
+            // a duration of -1 is permanent; the AddOn shows the icon without a countdown
+            one << "," << found[i].id << "," << found[i].remaining
+                << "," << (found[i].onCooldown ? 1 : 0);
 
-        if (size_t(auras.tellp()) + entry.str().size() + 3 > ARENA_FRAME_MAX_PAYLOAD)
-            break;
+            if (size_t(entry.tellp()) + one.str().size() > ARENA_FRAME_MAX_PAYLOAD)
+                break;
 
-        if (!anyAura)
-            auras << "b|";
-        else
-            auras << ";";
-        anyAura = true;
+            entry << one.str();
+        }
 
-        // a duration of -1 is permanent; the AddOn shows the icon without a countdown
-        auras << entry.str();
+        auraLines.push_back(entry.str());
     }
-    std::string const auraLine = anyAura ? auras.str() : std::string();
 
     // everybody on the map: the fighters and the visitors watching them
     if (Map* map = GetBgMap())
@@ -1132,10 +1140,8 @@ void Arena::PushFrameData(uint32 diff)
 
             SendArenaAddon(receiver, line);
 
-            if (!auraLine.empty())
-                SendArenaAddon(receiver, auraLine);
-            else if (m_auraLineSent)
-                SendArenaAddon(receiver, "b|");
+            for (std::string const& line : auraLines)
+                SendArenaAddon(receiver, line);
 
             if (casts.empty())
             {
@@ -1193,7 +1199,6 @@ void Arena::PushFrameData(uint32 diff)
     }
 
     m_castLineSent = !casts.empty();
-    m_auraLineSent = anyAura;
 }
 
 void Arena::Update(uint32 diff)

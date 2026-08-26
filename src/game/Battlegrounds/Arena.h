@@ -634,7 +634,7 @@ class Arena : public BattleGround
         uint32 m_underMapCheckTimer;
         uint32 m_framePushTimer;
         bool m_castLineSent;                    // so the last cast can be cleared exactly once
-        bool m_auraLineSent;                    // and the same for the control effects
+
         // teleports players that fell below the arena floor back to their team start location
         void CheckPlayersUnderMap();
 };
