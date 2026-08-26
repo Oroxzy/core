@@ -2217,7 +2217,7 @@ bool SpellCaster::GetExpireTime(SpellEntry const* spellEntry, TimePoint& expireT
         TimePoint spellExpireTime = TimePoint();
         TimePoint catExpireTime = TimePoint();
         bool foundSpellCD = cdData->GetSpellCDExpireTime(spellExpireTime);
-        bool foundCatCD = cdData->GetSpellCDExpireTime(catExpireTime);
+        bool foundCatCD = cdData->GetCatCDExpireTime(catExpireTime);
         if (foundCatCD || foundSpellCD)
         {
             expireTime = spellExpireTime > catExpireTime ? spellExpireTime : catExpireTime;
