@@ -828,6 +828,20 @@ namespace
         { DIMINISHING_CONTROL_ROOT, 3 },
         { DIMINISHING_POLYMORPH,    4 },
         { DIMINISHING_KNOCKOUT,     5 },
+
+        /*
+         * These three are NOT the ones above under another name. 1.12 gives each of them a clock
+         * of its own, so a warlock's fear does not diminish a priest's and a kidney shot does not
+         * diminish a hammer - and a row that folded them together would show one clock and hide
+         * the other, which is worse than not showing them at all.
+         *
+         * Warlock fear is the reason this matters rather than a curiosity: it is the most common
+         * control in the format, and while it had no category here the fear slot stayed empty for
+         * the whole of it.
+         */
+        { DIMINISHING_WARLOCK_FEAR, 6 },
+        { DIMINISHING_KIDNEYSHOT,   7 },
+        { DIMINISHING_FREEZE,       8 },
     };
 
     struct RankCollector
@@ -1377,7 +1391,22 @@ void Arena::PushFrameData(uint32 diff)
 
                 uint32 const level = uint32(player->GetDiminishing(category.group));
                 uint32 const by = player->GetDiminishingSpell(category.group);
-                entry << "," << category.id << "," << level << "," << left << "," << by;
+
+                /*
+                 * Measured like every other line here.
+                 *
+                 * Eight categories of four fields comes to about 142 bytes for the longest name a
+                 * 1.12 character can have, so this does not bite today - but the a| line was once
+                 * the only one without a cap, and that is exactly the shape of thing that stops
+                 * being true the next time a field is added.
+                 */
+                std::ostringstream one;
+                one << "," << category.id << "," << level << "," << left << "," << by;
+
+                if (size_t(entry.tellp()) + one.str().size() > ARENA_FRAME_MAX_PAYLOAD)
+                    break;
+
+                entry << one.str();
 
                 /*
                  * Named at once when it is new rather than on the next slow tick: unlike a class
