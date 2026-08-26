@@ -59,8 +59,21 @@ class CooldownData
             m_expireTime(duration ? std::chrono::milliseconds(duration) + clockNow : TimePoint()),
             m_catExpireTime(spellCategory && categoryDuration ? std::chrono::milliseconds(categoryDuration) + clockNow : TimePoint()),
             m_typePermanent(isPermanent),
-            m_itemId(itemId)
+            m_itemId(itemId),
+            m_duration(duration),
+            m_catDuration(spellCategory ? categoryDuration : 0)
         {}
+
+        /*
+         * How long the wait was to begin with, which the expiry alone cannot answer.
+         *
+         * The arena frames draw the clock sweep on an icon, and a sweep needs the whole of the
+         * wait rather than what is left of it. Working it back out of the spell would mean
+         * repeating the talent modifiers Player::AddCooldown already applied, and repeating that
+         * is how the two drift apart.
+         */
+        uint32 GetSpellCDDuration() const { return m_duration; }
+        uint32 GetCatCDDuration() const { return m_catDuration; }
 
         // return false if permanent
         bool GetSpellCDExpireTime(TimePoint& expireTime) const
@@ -121,6 +134,8 @@ class CooldownData
         TimePoint         m_catExpireTime;
         bool              m_typePermanent;
         uint32            m_itemId;
+        uint32            m_duration;
+        uint32            m_catDuration;
 };
 
 typedef std::unique_ptr<CooldownData> CooldownDataUPTR;
@@ -384,7 +399,7 @@ public:
      * IsSpellReady asks both maps for exactly this reason. It is off by default so that
      * LockOutSpells, the other caller, keeps deciding on the spell's own cooldown alone.
      */
-    bool GetExpireTime(SpellEntry const* spellEntry, TimePoint& expireTime, bool& isPermanent, bool includeCategory = false) const;
+    bool GetExpireTime(SpellEntry const* spellEntry, TimePoint& expireTime, bool& isPermanent, bool includeCategory = false, uint32* totalMs = nullptr) const;
     bool IsSpellOnPermanentCooldown(SpellEntry const* spellEntry) const;
     virtual void LockOutSpells(SpellSchoolMask schoolMask, uint32 duration);
     void PrintCooldownList(ChatHandler& chat) const;

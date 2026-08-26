@@ -2202,7 +2202,7 @@ bool SpellCaster::CheckLockout(SpellSchoolMask schoolMask) const
     return false;
 }
 
-bool SpellCaster::GetExpireTime(SpellEntry const* spellEntry, TimePoint& expireTime, bool& isPermanent, bool includeCategory /*= false*/) const
+bool SpellCaster::GetExpireTime(SpellEntry const* spellEntry, TimePoint& expireTime, bool& isPermanent, bool includeCategory /*= false*/, uint32* totalMs /*= nullptr*/) const
 {
     auto spellItr = m_cooldownMap.FindBySpellId(spellEntry->Id);
 
@@ -2231,7 +2231,13 @@ bool SpellCaster::GetExpireTime(SpellEntry const* spellEntry, TimePoint& expireT
         bool foundCatCD = cdData->GetCatCDExpireTime(catExpireTime);
         if (foundCatCD || foundSpellCD)
         {
-            expireTime = spellExpireTime > catExpireTime ? spellExpireTime : catExpireTime;
+            bool const spellWins = spellExpireTime > catExpireTime;
+            expireTime = spellWins ? spellExpireTime : catExpireTime;
+
+            // the duration belonging to whichever of the two answered
+            if (totalMs)
+                *totalMs = spellWins ? cdData->GetSpellCDDuration() : cdData->GetCatCDDuration();
+
             return true;
         }
     }

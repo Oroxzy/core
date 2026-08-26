@@ -874,6 +874,18 @@ namespace
          * so the slot travels with the entry and the AddOn puts it where it says.
          */
         uint8 slot;
+
+        /*
+         * The whole of the wait, in TENTHS of a second, so the AddOn can draw the clock sweep -
+         * it needs how far through this is, and the remaining time alone does not say.
+         *
+         * Tenths rather than milliseconds because this is the seventh field on the busiest line
+         * here. Seven entries of milliseconds comes to 189 bytes against a 200 byte cap, which
+         * would start dropping a fighter's last slot the first time everyone used everything at
+         * once; tenths costs 168 and a tenth of a second is far below what an eye reads off a
+         * sweep. Zero means there is nothing to sweep.
+         */
+        uint32 total;
     };
 
     /*
@@ -993,6 +1005,7 @@ namespace
             aura.remaining = controlLeft;
             aura.state = ARENA_AURA_CONTROL;
             aura.slot = 0;                      // the portrait, not the row
+            aura.total = 0;
             out.push_back(aura);
         }
 
@@ -1027,6 +1040,7 @@ namespace
             aura.remaining = 0;
             aura.state = ARENA_AURA_READY;
             aura.slot = slot + 1;
+            aura.total = 0;
 
             bool decided = false;
 
@@ -1054,6 +1068,7 @@ namespace
                     if (SpellAuraHolder const* holder = player->GetSpellAuraHolder(id))
                     {
                         aura.remaining = holder->GetAuraDuration();
+                        aura.total = uint32(holder->GetAuraMaxDuration()) / 100;
                         aura.state = ARENA_AURA_RUNNING;
                         decided = true;
                         break;
@@ -1077,6 +1092,7 @@ namespace
                         if (SpellAuraHolder const* holder = pet->GetSpellAuraHolder(id))
                         {
                             aura.remaining = holder->GetAuraDuration();
+                            aura.total = uint32(holder->GetAuraMaxDuration()) / 100;
                             aura.state = ARENA_AURA_RUNNING;
                             decided = true;
                             break;
@@ -1120,9 +1136,10 @@ namespace
 
                     TimePoint expire;
                     bool permanent = false;
+                    uint32 totalMs = 0;
                     // true: a sibling of a shared category counts, see GetExpireTime. Shield Wall
                     // puts Recklessness and Retaliation away too, and both used to read READY.
-                    if (!player->GetExpireTime(info, expire, permanent, true) || permanent)
+                    if (!player->GetExpireTime(info, expire, permanent, true, &totalMs) || permanent)
                         continue;
 
                     auto const now = player->GetMap()->GetCurrentClockTime();
@@ -1130,6 +1147,7 @@ namespace
                         continue;
 
                     aura.remaining = int32(std::chrono::duration_cast<std::chrono::milliseconds>(expire - now).count());
+                    aura.total = totalMs / 100;
                     aura.state = ARENA_AURA_COOLDOWN;
                     break;
                 }
@@ -1352,7 +1370,8 @@ void Arena::PushFrameData(uint32 diff)
             std::ostringstream one;
             // a duration of -1 is permanent; the AddOn shows the icon without a countdown
             one << "," << found[i].id << "," << found[i].remaining
-                << "," << uint32(found[i].state) << "," << uint32(found[i].slot);
+                << "," << uint32(found[i].state) << "," << uint32(found[i].slot)
+                << "," << found[i].total;
 
             if (size_t(entry.tellp()) + one.str().size() > ARENA_FRAME_MAX_PAYLOAD)
                 break;
