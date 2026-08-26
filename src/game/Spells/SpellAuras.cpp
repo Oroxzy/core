@@ -6771,9 +6771,9 @@ void SpellAuraHolder::_AddSpellAuraHolder()
     if (m_spellProto->HasAttribute(SPELL_ATTR_EX_PREVENTS_ANIM))
         m_target->SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PREVENT_ANIM);
 
-    // register aura diminishing on apply
+    // register aura diminishing on apply, and which spell it was - the arena frames draw it
     if (getDiminishGroup() != DIMINISHING_NONE)
-        m_target->ApplyDiminishingAura(getDiminishGroup(), true);
+        m_target->ApplyDiminishingAura(getDiminishGroup(), true, GetId());
 
     // Update Seals information
     if (GetSpellProto()->IsSealSpell())

@@ -643,6 +643,17 @@ class Arena : public BattleGround
          * them. Repeating slowly costs almost nothing and heals both cases by itself.
          */
         uint32 m_frameNameTick;
+
+        /*
+         * The spell ids already named this match, so a new one goes out at once.
+         *
+         * The ten second cadence was sized for the class rows, which do not change all match. The
+         * diminishing line's spell does - it is whatever last landed, and its slot lives fifteen
+         * seconds - so waiting for the next tick left the tooltip empty for most of the window
+         * that the tooltip exists for. Cleared on each tick, so the slow resend that heals a
+         * reload still carries everything.
+         */
+        std::set<uint32> m_frameNamesSent;
         bool m_castLineSent;                    // so the last cast can be cleared exactly once
 
         // teleports players that fell below the arena floor back to their team start location

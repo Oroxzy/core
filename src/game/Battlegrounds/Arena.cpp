@@ -518,6 +518,7 @@ Arena::Arena()
     m_underMapCheckTimer = 0;
     m_framePushTimer = 0;
     m_frameNameTick = 0;
+    m_frameNamesSent.clear();
     m_castLineSent = false;
     m_leaverIsParticipant = false;
     m_spectatorsRemoved = false;
@@ -618,6 +619,7 @@ void Arena::Reset()
     m_underMapCheckTimer = 0;
     m_framePushTimer = 0;
     m_frameNameTick = 0;
+    m_frameNamesSent.clear();
     m_castLineSent = false;
     m_leaverIsParticipant = false;
     m_spectatorsRemoved = false;
@@ -1189,6 +1191,7 @@ void Arena::PushFrameData(uint32 diff)
     std::set<uint32> nameIds;
     if (sendNames)
     {
+        m_frameNamesSent.clear();
         for (auto const& itr : GetPlayers())
         {
             Player* player = sObjectMgr.GetPlayer(itr.first);
@@ -1373,7 +1376,15 @@ void Arena::PushFrameData(uint32 diff)
                     continue;
 
                 uint32 const level = uint32(player->GetDiminishing(category.group));
-                entry << "," << category.id << "," << level << "," << left;
+                uint32 const by = player->GetDiminishingSpell(category.group);
+                entry << "," << category.id << "," << level << "," << left << "," << by;
+
+                /*
+                 * Named at once when it is new rather than on the next slow tick: unlike a class
+                 * row, this id changes during the match and its slot only lives fifteen seconds.
+                 */
+                if (by && (sendNames || m_frameNamesSent.find(by) == m_frameNamesSent.end()))
+                    nameIds.insert(by);
             }
 
             drLines.push_back(entry.str());
@@ -1499,6 +1510,9 @@ void Arena::PushFrameData(uint32 diff)
                 SendArenaAddon(receiver, "c|");
         }
     }
+
+    for (uint32 id : nameIds)
+        m_frameNamesSent.insert(id);
 
     m_castLineSent = !casts.empty();
 }

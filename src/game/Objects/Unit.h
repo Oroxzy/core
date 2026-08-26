@@ -89,8 +89,18 @@ struct PlayerMovementPendingChange
 struct DiminishingReturn
 {
     DiminishingReturn(DiminishingGroup group, uint32 t, uint32 count)
-        : DRGroup(group), stack(0), hitTime(t), hitCount(count)
+        : DRGroup(group), stack(0), hitTime(t), hitCount(count), spellId(0)
     {}
+
+    /**
+     * The last spell of this group that landed, or 0 if none has since the server started.
+     *
+     * The group alone says "he was stunned"; this says BY WHAT. The arena frames draw it, so the
+     * stun slot shows the paladin's hammer rather than a generic icon, and it outlives the aura
+     * on purpose - the fifteen seconds after it wears off are exactly when somebody wants to know
+     * what put him there.
+     */
+    uint32                  spellId;
 
     /**
      * Group that this diminishing return will affect
@@ -674,7 +684,15 @@ class Unit : public SpellCaster
          * @param group The group to affect
          * @param apply whether this aura is being added/removed
          */
-        void ApplyDiminishingAura(DiminishingGroup  group, bool apply);
+        void ApplyDiminishingAura(DiminishingGroup  group, bool apply, uint32 spellId = 0);
+
+        /*
+         * Which spell of this group last landed on him, or 0.
+         *
+         * m_Diminishing is private and the arena frames want to draw the spell rather than the
+         * category - the paladin's hammer in the stun slot, the warrior's shout in the fear slot.
+         */
+        uint32 GetDiminishingSpell(DiminishingGroup group) const;
         /**
          * Clears all the current diminishing returns for this Unit.
          */

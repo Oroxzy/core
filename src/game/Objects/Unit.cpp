@@ -8052,7 +8052,7 @@ void Unit::ApplyDiminishingToDuration(DiminishingGroup group, int32& duration, W
     duration = int32(duration * mod);
 }
 
-void Unit::ApplyDiminishingAura(DiminishingGroup group, bool apply)
+void Unit::ApplyDiminishingAura(DiminishingGroup group, bool apply, uint32 spellId /*= 0*/)
 {
     // Checking for existing in the table
     for (auto& i : m_Diminishing)
@@ -8061,7 +8061,13 @@ void Unit::ApplyDiminishingAura(DiminishingGroup group, bool apply)
             continue;
 
         if (apply)
+        {
             i.stack += 1;
+
+            // what put him there, kept until the next one of this group does
+            if (spellId)
+                i.spellId = spellId;
+        }
         else if (i.stack)
         {
             i.stack -= 1;
@@ -8071,6 +8077,15 @@ void Unit::ApplyDiminishingAura(DiminishingGroup group, bool apply)
         }
         break;
     }
+}
+
+uint32 Unit::GetDiminishingSpell(DiminishingGroup group) const
+{
+    for (auto const& i : m_Diminishing)
+        if (i.DRGroup == group)
+            return i.spellId;
+
+    return 0;
 }
 
 bool Unit::IsVisibleForInState(WorldObject const* pDetector, WorldObject const* viewPoint, bool inVisibleList) const
