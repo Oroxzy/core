@@ -7971,6 +7971,25 @@ bool Unit::SelectHostileTarget()
 //======================================================================
 //======================================================================
 
+bool Unit::IsDiminishing(DiminishingGroup group) const
+{
+    for (auto const& i : m_Diminishing)
+    {
+        if (i.DRGroup != group)
+            continue;
+
+        if (!i.hitCount || !i.hitTime)
+            return false;
+
+        // on him now, or inside the fifteen seconds that follow
+        if (i.stack)
+            return true;
+
+        return WorldTimer::getMSTimeDiff(i.hitTime, WorldTimer::getMSTime()) < 15 * IN_MILLISECONDS;
+    }
+    return false;
+}
+
 uint32 Unit::GetDiminishingReset(DiminishingGroup group) const
 {
     for (auto const& i : m_Diminishing)
@@ -7981,9 +8000,19 @@ uint32 Unit::GetDiminishingReset(DiminishingGroup group) const
         if (!i.hitCount || !i.hitTime)
             return 0;
 
-        // still on him: the fifteen seconds start when it falls off, not when it landed
+        /*
+         * Still on him: the clock has NOT started, so there is no number to give.
+         *
+         * This used to answer the full fifteen seconds, which was wrong twice over. The AddOn
+         * counts down locally between pushes, so a value that never moved was reset to fifteen
+         * twice a second and the number jumped 15.0, 14.5, 15.0 for as long as the effect lasted.
+         * And the number itself said nothing true: a polymorph runs fifty seconds, and a slot
+         * reading fifteen beside it is worse than a slot reading nothing.
+         *
+         * Zero here means "no countdown"; IsDiminishing is what says the slot belongs on screen.
+         */
         if (i.stack)
-            return 15 * IN_MILLISECONDS;
+            return 0;
 
         uint32 const elapsed = WorldTimer::getMSTimeDiff(i.hitTime, WorldTimer::getMSTime());
         if (elapsed >= 15 * IN_MILLISECONDS)

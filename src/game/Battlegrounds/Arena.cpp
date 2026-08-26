@@ -1404,9 +1404,15 @@ void Arena::PushFrameData(uint32 diff)
 
             for (DrCategory const& category : ARENA_DR_CATEGORIES)
             {
-                uint32 const left = player->GetDiminishingReset(category.group);
-                if (!left)
+                /*
+                 * IsDiminishing rather than a non-zero countdown: while the effect is still ON
+                 * him the clock has not started, so there is no number - but the slot belongs on
+                 * screen, lit in its colour, because that is precisely when it matters.
+                 */
+                if (!player->IsDiminishing(category.group))
                     continue;
+
+                uint32 const left = player->GetDiminishingReset(category.group);
 
                 uint32 const level = uint32(player->GetDiminishing(category.group));
                 uint32 const by = player->GetDiminishingSpell(category.group);

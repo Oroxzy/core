@@ -659,6 +659,14 @@ class Unit : public SpellCaster
          * the level, which is the colour without the number.
          */
         uint32 GetDiminishingReset(DiminishingGroup group) const;
+
+        /*
+         * Is this group diminished at all - on him now, or inside the fifteen seconds after?
+         *
+         * Separate from GetDiminishingReset because that answers zero for two different things:
+         * nothing here, and here but the clock has not started. This says which.
+         */
+        bool IsDiminishing(DiminishingGroup group) const;
         /**
          * Increases the level of the DiminishingGroup by one level up until
          * DIMINISHING_LEVEL_IMMUNE where the target becomes immune to spells of
