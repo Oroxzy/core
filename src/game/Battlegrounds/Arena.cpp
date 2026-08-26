@@ -1412,10 +1412,29 @@ void Arena::PushFrameData(uint32 diff)
                 if (!player->IsDiminishing(category.group))
                     continue;
 
-                uint32 const left = player->GetDiminishingReset(category.group);
+                uint32 const by = player->GetDiminishingSpell(category.group);
+
+                /*
+                 * NEGATIVE means "this is the effect running", positive "this is the wait after".
+                 *
+                 * The slot could only say one of the two and said the wrong one: it went quiet
+                 * while the effect was still on him, which is exactly when somebody is looking at
+                 * it, and the one number that matters then is how long he is held for. The sign
+                 * carries which of the two it is, so it costs no field on a line that is already
+                 * eight categories long.
+                 *
+                 * The duration comes from the aura itself, found through the spell this group
+                 * last recorded - the same id the icon is drawn from.
+                 */
+                int32 left = int32(player->GetDiminishingReset(category.group));
+                if (!left && by)
+                {
+                    if (SpellAuraHolder const* holder = player->GetSpellAuraHolder(by))
+                        left = -holder->GetAuraDuration();
+                }
 
                 uint32 const level = uint32(player->GetDiminishing(category.group));
-                uint32 const by = player->GetDiminishingSpell(category.group);
+
 
                 /*
                  * Measured like every other line here.
