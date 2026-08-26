@@ -972,6 +972,27 @@ namespace
             RankCollector collector{ &ranks };
             sSpellMgr.doForHighRanks(base, collector);
 
+            /*
+             * Only what he actually has.
+             *
+             * The row is per class, and a class is not a spec: Bestial Wrath is a Beast Mastery
+             * talent, so a Survival hunter would get an icon for a spell he can never press, and
+             * an icon that never changes is one the reader has to learn to ignore. HasSpell
+             * answers it exactly - talents, level, everything - and knowing any rank counts.
+             */
+            bool known = false;
+            for (uint32 id : ranks)
+            {
+                if (player->HasSpell(id))
+                {
+                    known = true;
+                    break;
+                }
+            }
+
+            if (!known)
+                continue;
+
             TrackedAura aura;
             aura.id = base;                     // always the first rank, so the AddOn keeps one icon
             aura.remaining = 0;
