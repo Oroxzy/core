@@ -741,6 +741,64 @@ namespace
     }
 
     /*
+     * SLOT SIX: his race, which is a row of its own for a good reason.
+     *
+     * A racial does not fit the class rows - it cuts across them - and it is exactly the kind of
+     * thing an arena player needs to know is down: Will of the Forsaken decides whether a fear
+     * lands at all, War Stomp is a two second stun nobody sees coming, Escape Artist walks out of
+     * a root. Giving them a fixed slot of their own keeps the class row read by position and puts
+     * the racial in the same place on every frame regardless of class.
+     *
+     * Only the ones with a cooldown worth a slot. Shadowmeld's is ten seconds, which is the same
+     * rule that keeps a ten second Kick out of the class rows: at that length it would spend its
+     * life blinking. The passive racials - Hardiness, Quickness, the resistances - have nothing
+     * to count down at all. Night elves therefore have no slot six, and that is not an oversight.
+     *
+     * ALTERNATES exist because Berserking is three separate spell ids rather than a rank chain:
+     * 20554, 26296 and 26297, all named Berserking, all icon 1661, and a troll knows exactly one
+     * of them. doForHighRanks cannot answer which, so all three are asked and whichever he has
+     * reports under the first, which is the id the AddOn draws.
+     *
+     * Every id and every icon came out of the world database and the client's own SpellIcon.dbc,
+     * not from memory - the one time this list was typed it put Sweeping Strikes in for Death
+     * Wish.
+     */
+    struct RaceRacial
+    {
+        uint8  raceId;
+        uint32 id;                              // what goes on the wire, and what the AddOn draws
+        uint32 alternates[2];                   // the same ability under another id, or 0
+    };
+
+    RaceRacial const ARENA_RACE_ROW[] =
+    {
+        { RACE_HUMAN,  20600, { 0,     0     } },   // Perception,           180s
+        { RACE_ORC,    20572, { 0,     0     } },   // Blood Fury,           120s
+        { RACE_DWARF,  20594, { 0,     0     } },   // Stoneform,            180s
+        { RACE_UNDEAD,  7744, { 0,     0     } },   // Will of the Forsaken, 120s
+        { RACE_TAUREN, 20549, { 0,     0     } },   // War Stomp,            120s
+        { RACE_GNOME,  20589, { 0,     0     } },   // Escape Artist,         60s
+        { RACE_TROLL,  20554, { 26296, 26297 } },   // Berserking,           180s
+    };
+
+    RaceRacial const* RacialFor(uint8 raceId)
+    {
+        for (RaceRacial const& racial : ARENA_RACE_ROW)
+            if (racial.raceId == raceId)
+                return &racial;
+        return nullptr;
+    }
+
+    // slots one to five are his class's, slot six is his race's
+    uint32 RowSpell(uint32 const* row, RaceRacial const* racial, uint8 slot)
+    {
+        if (slot < 5)
+            return row ? row[slot] : 0;
+
+        return racial ? racial->id : 0;
+    }
+
+    /*
      * DIMINISHING RETURNS, when Arena.FrameDiminishing is on.
      *
      * Five categories in a fixed order, for the same reason the cooldown row is fixed: the second
@@ -789,7 +847,7 @@ namespace
         uint8 state;
 
         /*
-         * Where in the row it belongs, 1..5, and 0 for the control effect, which has no row.
+         * Where in the row it belongs, 1..6, and 0 for the control effect, which has no row.
          *
          * The position used to be the arrival order, which was the same thing while every
          * fighter sent all five. He no longer does - a Survival hunter has no Bestial Wrath - and
@@ -832,21 +890,42 @@ namespace
          * and it is the same entry that stays behind afterwards to count the wait down, where the
          * mechanic would simply vanish with the aura. The portrait is for what is done TO him.
          */
-        std::set<uint32> ownRow;
-        if (row)
-        {
-            for (uint8 slot = 0; slot < 5; ++slot)
-            {
-                if (!row[slot])
-                    continue;
+        RaceRacial const* racial = RacialFor(player->GetRace());
 
-                ownRow.insert(row[slot]);
-                std::vector<uint32> higher;
-                RankCollector collector{ &higher };
-                sSpellMgr.doForHighRanks(row[slot], collector);
-                for (uint32 id : higher)
-                    ownRow.insert(id);
-            }
+        std::set<uint32> ownRow;
+        for (uint8 slot = 0; slot < 6; ++slot)
+        {
+            uint32 const base = RowSpell(row, racial, slot);
+            if (!base)
+                continue;
+
+            /*
+             * ONLY the ones that land on him.
+             *
+             * This set stops the portrait repeating what the row already reports, and that holds
+             * only for a spell whose aura sits on its own caster - Ice Block, Blessing of
+             * Protection, the racials that buff.
+             *
+             * Several row spells land on the ENEMY instead: War Stomp, Counterspell, Silence,
+             * Scatter Shot, Death Coil. Their aura on a man means somebody did it TO him, and it
+             * belongs on his portrait. Skipping it because the same spell happens to be in HIS
+             * row too is how a tauren stunned by another tauren showed no control effect at all.
+             */
+            SpellEntry const* info = sSpellMgr.GetSpellEntry(base);
+            if (!info || !info->IsPositiveSpell())
+                continue;
+
+            ownRow.insert(base);
+            std::vector<uint32> higher;
+            RankCollector collector{ &higher };
+            sSpellMgr.doForHighRanks(base, collector);
+            for (uint32 id : higher)
+                ownRow.insert(id);
+
+            if (slot == 5 && racial)
+                for (uint32 alt : racial->alternates)
+                    if (alt)
+                        ownRow.insert(alt);
         }
 
         // the control effect first, if there is one - it goes on the portrait
@@ -899,15 +978,13 @@ namespace
             out.push_back(aura);
         }
 
-        // then his class's row, in order, all of it
-        if (!row)
-            return;
+        // then his class's row, in order, all of it, and his racial after it
 
         bool const clearStart = sWorld.getConfig(CONFIG_BOOL_ARENA_RESET_ALL_COOLDOWNS);
 
-        for (uint8 slot = 0; slot < 5; ++slot)
+        for (uint8 slot = 0; slot < 6; ++slot)
         {
-            uint32 const base = row[slot];
+            uint32 const base = RowSpell(row, racial, slot);
             if (!base)
                 continue;
 
@@ -921,6 +998,12 @@ namespace
             RankCollector collector{ &ranks };
             sSpellMgr.doForHighRanks(base, collector);
 
+            // and Berserking's other two ids, which are not ranks of anything, see ARENA_RACE_ROW
+            if (slot == 5 && racial)
+                for (uint32 alt : racial->alternates)
+                    if (alt)
+                        ranks.push_back(alt);
+
             TrackedAura aura;
             aura.id = base;                     // always the first rank, so the AddOn keeps one icon
             aura.remaining = 0;
@@ -930,22 +1013,33 @@ namespace
             bool decided = false;
 
             /*
-             * Is it on him NOW - and this asks before anything else, without caring whether the
-             * spell is his.
+             * Is it on him NOW - and this asks before anything else, without caring WHO cast it.
              *
-             * The aura is on him whoever cast it. Fear Ward is a dwarf priest's racial, cast on
-             * whoever is about to be feared, and the man wearing it often does not have it in his
-             * own spellbook at all. Deciding this after the "does he know it" gate hid the buff
-             * from every frame in the match, which is the one thing the row exists to prevent.
+             * The aura is on him whoever put it there. Fear Ward is a dwarf priest's racial, cast
+             * on whoever is about to be feared, and the man wearing it often does not have it in
+             * his own spellbook at all. Deciding this after the "does he know it" gate hid the
+             * buff from every frame in the match.
+             *
+             * But it does care WHERE the spell lands. War Stomp, Counterspell, Silence, Scatter
+             * Shot and Death Coil only ever sit on their victim, so an aura of one on this man
+             * means he was hit by it, not that he is using it - and reading it as RUNNING put the
+             * stun on the stunned tauren's own slot while the tauren who pressed it read READY.
+             * For those the row says one thing only: whether it is off cooldown.
              */
-            for (uint32 id : ranks)
+            SpellEntry const* baseInfo = sSpellMgr.GetSpellEntry(base);
+            bool const landsOnHim = baseInfo && baseInfo->IsPositiveSpell();
+
+            if (landsOnHim)
             {
-                if (SpellAuraHolder const* holder = player->GetSpellAuraHolder(id))
+                for (uint32 id : ranks)
                 {
-                    aura.remaining = holder->GetAuraDuration();
-                    aura.state = ARENA_AURA_RUNNING;
-                    decided = true;
-                    break;
+                    if (SpellAuraHolder const* holder = player->GetSpellAuraHolder(id))
+                    {
+                        aura.remaining = holder->GetAuraDuration();
+                        aura.state = ARENA_AURA_RUNNING;
+                        decided = true;
+                        break;
+                    }
                 }
             }
 
@@ -956,7 +1050,7 @@ namespace
              * the hunter never carries the aura and the slot sat on READY through all eighteen
              * seconds of it, which is exactly the window somebody reading the frames needs.
              */
-            if (!decided)
+            if (!decided && landsOnHim)
             {
                 if (Pet* pet = player->GetPet())
                 {
