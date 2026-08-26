@@ -688,53 +688,7 @@ namespace
     }
 
     /*
-     * The cooldowns the frames report.
-     *
-     * Every id was read out of the client's own Spell.dbc rather than remembered, and one of them
-     * came back wrong when it was: 12292 is Sweeping Strikes, not Death Wish, which is 12328.
-     *
-     * These are buffs, not mechanics, so unlike the control effects there is no way round naming
-     * them one by one - and that is survivable here because almost every big cooldown in 1.12 has
-     * exactly one rank, which is the thing that makes a spell id list rot everywhere else.
-     */
-    // the immunities among the tracked cooldowns, so the sort still puts them first once they
-    // are reported by spell id rather than by mechanic
-    bool IsImmunitySpell(uint32 spellId)
-    {
-        switch (spellId)
-        {
-            case 11958:                         // Ice Block
-            case 642:                           // Divine Shield
-            case 1020:                          // Divine Shield
-            case 1022:                          // Blessing of Protection
-                return true;
-        }
-        return false;
-    }
-
-    /*
-     * FIRST RANKS only. Every rank is found from these, see ExpandRanks below.
-     *
-     * The interrupts were missing from the first version of this list, which was built around
-     * defensive and offensive cooldowns - and an interrupt is the thing an arena player most wants
-     * to know is down, because it is what decides whether he can cast at all.
-     */
-    uint32 const ARENA_TRACKED_COOLDOWNS[] =
-    {
-        1719,  20230, 871,   12975, 12328, 12292, 72,    18499,   // warrior (72 Shield Bash)
-        5277,  13877, 13750, 1766,  1856,  14185, 14177,          // rogue   (1766 Kick)
-        19263, 3045,  19574, 5384,  19503,                        // hunter
-        11958, 12051, 11129, 12042, 2139,  12472, 12043,          // mage    (2139 Counterspell)
-        14751, 6346,  15487,                                      // priest  (15487 Silence)
-        642,   1020,  498,   5573,  1022,  20216,                 // paladin
-        16188, 16166, 8042,                                       // shaman  (8042 Earth Shock)
-        22812, 17116, 29166,                                      // druid
-        6789,  6229,                                              // warlock
-        7744,  20589, 20594, 20600, 20554, 26296, 26297,          // racials
-    };
-
-    /*
-     * Every rank of every spell above, worked out once and kept.
+     * FIRST RANKS in the rows below. Every other rank is worked out from them at the point of use.
      *
      * This is the hole a hand written id list always falls into, and it was open: Kick is 1766,
      * 1767, 1768 and 1769, Shield Bash is 72, 1671 and 1672, and Earth Shock has seven. A rogue
@@ -742,10 +696,12 @@ namespace
      * Pummel showed how badly guessing goes - 8380, the obvious next id, is Sunder Armor.
      *
      * So the ranks are not typed. sSpellMgr walks the chain forward from each first rank, and
-     * every rank found maps BACK to that first rank, which is the id that goes on the wire. The
-     * AddOn's icon table therefore needs one entry per spell rather than one per rank.
-     */
-    /*
+     * what goes on the wire is always that first rank - so the AddOn's icon table needs one entry
+     * per spell rather than one per rank.
+     *
+     * Every id was read out of the client's own Spell.dbc rather than remembered, and one of them
+     * came back wrong when it was: 12292 is Sweeping Strikes, not Death Wish, which is 12328.
+     *
      * THE ROW: what each class always shows, in this order, whatever its state.
      *
      * Five slots at most and only long cooldowns - a ten second Kick and a six second Earth Shock
@@ -818,39 +774,6 @@ namespace
         void operator()(uint32 spellId) { out->push_back(spellId); }
     };
 
-    std::map<uint32, uint32> const& TrackedRanks()
-    {
-        static std::map<uint32, uint32> ranks;               // any rank -> its first rank
-        if (!ranks.empty())
-            return ranks;
-
-        for (uint32 base : ARENA_TRACKED_COOLDOWNS)
-        {
-            ranks[base] = base;
-
-            std::vector<uint32> higher;
-            RankCollector collector{ &higher };
-            sSpellMgr.doForHighRanks(base, collector);
-
-            for (uint32 id : higher)
-                ranks[id] = base;
-        }
-        return ranks;
-    }
-
-    /*
-     * Is this spell already covered by the cooldown list?
-     *
-     * Ice Block, Divine Shield and Blessing of Protection are in BOTH sets: they carry
-     * MECHANIC_IMMUNE_SHIELD, and they are big cooldowns. Without this the same aura went out
-     * twice - once as a mechanic and once as a spell - and the frames showed two icons for one
-     * bubble, which is exactly what it looked like in game.
-     *
-     * The cooldown entry is the one worth keeping. It names the spell rather than the category,
-     * and it is the same entry that stays behind afterwards to count the wait down; the mechanic
-     * would simply vanish when the aura did.
-     */
-
     enum ArenaAuraState
     {
         ARENA_AURA_RUNNING   = 0,               // it is on him now
@@ -878,25 +801,6 @@ namespace
     };
 
     /*
-     * Five, because the frames now have a row of five.
-     *
-     * It was one while the icon sat inside the health bar, two once it moved outside, and five
-     * now that the row from sArena's layout is there to fill. The row in sArena is a diminishing
-     * returns tracker with a fixed category per slot; ours holds what is actually happening to
-     * the man - control effects first, then cooldowns - because DR is a thing this server
-     * deliberately does not report.
-     */
-    size_t const ARENA_FRAME_MAX_AURAS = 5;
-
-    /*
-     * The effects on this player worth a place on his frame, best first.
-     *
-     * Not all of them: three or more at once is a wall of icons that says less than two do, and
-     * the two that matter are always at the front of this order. Immunity outranks control -
-     * being unable to hurt him matters more than his being unable to move - and among equals the
-     * one with the most time left wins, because that is the one still there when you reach him.
-     */
-    /*
      * Everything the frames show about one fighter.
      *
      * Three kinds go out together, and the STATE field tells them apart rather than the position:
@@ -922,8 +826,11 @@ namespace
          * Ice Block and Blessing of Protection are immunities AND row cooldowns. Without this the
          * same bubble goes out twice - once as a mechanic on the portrait, once as a spell in the
          * row - and because an immunity outranks every real control effect below, it also buries
-         * the fear that is the reason anyone pressed it. The row keeps them; the portrait is for
-         * what is being done TO him.
+         * the fear that is the reason anyone pressed it.
+         *
+         * The row entry is the one worth keeping: it names the spell rather than the category,
+         * and it is the same entry that stays behind afterwards to count the wait down, where the
+         * mechanic would simply vanish with the aura. The portrait is for what is done TO him.
          */
         std::set<uint32> ownRow;
         if (row)
