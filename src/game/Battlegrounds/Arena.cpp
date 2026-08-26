@@ -1208,6 +1208,34 @@ void Arena::PushFrameData(uint32 diff)
     m_framePushTimer = ARENA_FRAME_PUSH_INTERVAL;
 
     /*
+     * WHO MAY SEE WHOM.
+     *
+     * The frames used to report every fighter to every receiver, which handed a stealthed rogue
+     * to the other side the moment the gates opened - his name, his health, his cooldowns and his
+     * diminishing returns, all of it, while he was standing in a corner being invisible. That is
+     * not a display fault, it is the AddOn winning the opener.
+     *
+     * So every line is tagged with the man it is about and the question is asked once per pair.
+     * IsVisibleForOrDetect is the client's own rule, so a teammate still sees him, somebody with
+     * detection still sees him, and a vanish mid fight takes him off the frames again the same
+     * way it takes him off the screen.
+     */
+    struct FighterLine
+    {
+        Player* who;
+        std::string text;
+    };
+
+    auto const canSee = [](Player* fighter, Player* receiver) -> bool
+    {
+        if (!fighter || !receiver || fighter == receiver)
+            return true;
+
+        return fighter->IsVisibleForOrDetect(receiver, receiver, false);
+    };
+
+
+    /*
      * THE NAMES, every twentieth push.
      *
      * The 1.12 client cannot look a spell id up - there is no GetSpellInfo, and GetSpellName only
@@ -1239,10 +1267,7 @@ void Arena::PushFrameData(uint32 diff)
         }
     }
 
-    std::ostringstream payload;
-    payload << "a|";
-
-    bool any = false;
+    std::vector<FighterLine> unitEntries;
     for (auto const& itr : GetPlayers())
     {
         Player* player = sObjectMgr.GetPlayer(itr.first);
@@ -1275,20 +1300,14 @@ void Arena::PushFrameData(uint32 diff)
             << (player->IsAlive() ? 0 : 1) << ","
             << player->GetTalentSpecTab();
 
-        if (size_t(payload.tellp()) + one.str().size() + 2 > ARENA_FRAME_MAX_PAYLOAD)
-            break;
-
-        if (any)
-            payload << ";";
-        any = true;
-
-        payload << one.str();
+        FighterLine entry;
+        entry.who = player;
+        entry.text = one.str();
+        unitEntries.push_back(entry);
     }
 
-    if (!any)
+    if (unitEntries.empty())
         return;
-
-    std::string const line = payload.str();
 
     /*
      * Who is casting what.
@@ -1305,6 +1324,7 @@ void Arena::PushFrameData(uint32 diff)
      */
     struct CastInfo
     {
+        Player* who;
         std::string caster;
         SpellEntry const* spell;
         uint32 total;
@@ -1329,6 +1349,7 @@ void Arena::PushFrameData(uint32 diff)
             continue;                           // instant: there is no bar to draw
 
         CastInfo info;
+        info.who = player;
         info.caster = player->GetName();
         info.spell = spell->m_spellInfo;
         info.total = uint32(total);
@@ -1352,7 +1373,7 @@ void Arena::PushFrameData(uint32 diff)
      *
      * No localisation, unlike the casts: the AddOn draws an icon and a countdown, not a word.
      */
-    std::vector<std::string> auraLines;
+    std::vector<FighterLine> auraLines;
     for (auto const& itr : GetPlayers())
     {
         Player* player = sObjectMgr.GetPlayer(itr.first);
@@ -1379,7 +1400,10 @@ void Arena::PushFrameData(uint32 diff)
             entry << one.str();
         }
 
-        auraLines.push_back(entry.str());
+        FighterLine line;
+        line.who = player;
+        line.text = entry.str();
+        auraLines.push_back(line);
     }
 
     /*
@@ -1390,7 +1414,7 @@ void Arena::PushFrameData(uint32 diff)
      * shows those slots dimmed, and saying "this is at full" every half second would be several
      * hundred bytes a tick to say nothing.
      */
-    std::vector<std::string> drLines;
+    std::vector<FighterLine> drLines;
     if (sWorld.getConfig(CONFIG_BOOL_ARENA_FRAME_DIMINISHING))
     {
         for (auto const& itr : GetPlayers())
@@ -1460,7 +1484,10 @@ void Arena::PushFrameData(uint32 diff)
                     nameIds.insert(by);
             }
 
-            drLines.push_back(entry.str());
+            FighterLine line;
+            line.who = player;
+            line.text = entry.str();
+            drLines.push_back(line);
         }
     }
 
@@ -1478,13 +1505,39 @@ void Arena::PushFrameData(uint32 diff)
             LocaleConstant const locale = receiver->GetSession() ?
                                           receiver->GetSession()->GetSessionDbcLocale() : LOCALE_enUS;
 
-            SendArenaAddon(receiver, line);
+            /*
+             * Assembled here rather than once for everybody, because who is visible is a question
+             * about a PAIR. Measured against the cap the same way it was.
+             */
+            std::ostringstream payload;
+            payload << "a|";
+            bool any = false;
 
-            for (std::string const& line : auraLines)
-                SendArenaAddon(receiver, line);
+            for (FighterLine const& entry : unitEntries)
+            {
+                if (!canSee(entry.who, receiver))
+                    continue;
 
-            for (std::string const& line : drLines)
-                SendArenaAddon(receiver, line);
+                if (size_t(payload.tellp()) + entry.text.size() + 2 > ARENA_FRAME_MAX_PAYLOAD)
+                    break;
+
+                if (any)
+                    payload << ";";
+                any = true;
+
+                payload << entry.text;
+            }
+
+            // nobody he can see: an empty line clears his frames rather than freezing them
+            SendArenaAddon(receiver, payload.str());
+
+            for (FighterLine const& entry : auraLines)
+                if (canSee(entry.who, receiver))
+                    SendArenaAddon(receiver, entry.text);
+
+            for (FighterLine const& entry : drLines)
+                if (canSee(entry.who, receiver))
+                    SendArenaAddon(receiver, entry.text);
 
             /*
              * Batched up to the payload cap and never truncated in the middle of a name: a name
@@ -1562,6 +1615,9 @@ void Arena::PushFrameData(uint32 diff)
             size_t written = 0;
             for (size_t i = 0; i < casts.size(); ++i)
             {
+                if (!canSee(casts[i].who, receiver))
+                    continue;
+
                 std::string const& name = casts[i].spell->SpellName[locale].empty() ?
                                           casts[i].spell->SpellName[LOCALE_enUS] :
                                           casts[i].spell->SpellName[locale];
