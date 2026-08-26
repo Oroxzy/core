@@ -699,6 +699,21 @@ namespace
      * them one by one - and that is survivable here because almost every big cooldown in 1.12 has
      * exactly one rank, which is the thing that makes a spell id list rot everywhere else.
      */
+    // the immunities among the tracked cooldowns, so the sort still puts them first once they
+    // are reported by spell id rather than by mechanic
+    bool IsImmunitySpell(uint32 spellId)
+    {
+        switch (spellId)
+        {
+            case 11958:                         // Ice Block
+            case 642:                           // Divine Shield
+            case 1020:                          // Divine Shield
+            case 1022:                          // Blessing of Protection
+                return true;
+        }
+        return false;
+    }
+
     uint32 const ARENA_TRACKED_COOLDOWNS[] =
     {
         1719,  20230, 871,   12975, 12328, 12292,          // warrior
@@ -711,6 +726,27 @@ namespace
         22812, 17116, 29166,                               // druid
         7744,  20589, 20594, 20600, 20554, 26296, 26297,   // racials
     };
+
+    /*
+     * Is this spell already covered by the cooldown list?
+     *
+     * Ice Block, Divine Shield and Blessing of Protection are in BOTH sets: they carry
+     * MECHANIC_IMMUNE_SHIELD, and they are big cooldowns. Without this the same aura went out
+     * twice - once as a mechanic and once as a spell - and the frames showed two icons for one
+     * bubble, which is exactly what it looked like in game.
+     *
+     * The cooldown entry is the one worth keeping. It names the spell rather than the category,
+     * and it is the same entry that stays behind afterwards to count the wait down; the mechanic
+     * would simply vanish when the aura did.
+     */
+    bool IsTrackedCooldownSpell(uint32 spellId)
+    {
+        for (uint32 id : ARENA_TRACKED_COOLDOWNS)
+            if (id == spellId)
+                return true;
+        return false;
+    }
+
 
     struct TrackedAura
     {
@@ -742,6 +778,10 @@ namespace
 
             SpellEntry const* info = holder->GetSpellProto();
             if (!info)
+                continue;
+
+            // the cooldown pass below reports this one, and reports it better
+            if (IsTrackedCooldownSpell(info->Id))
                 continue;
 
             uint32 found = info->Mechanic;
@@ -815,8 +855,8 @@ namespace
             if (a.onCooldown != b.onCooldown)
                 return !a.onCooldown;
 
-            bool const ai = IsImmunityMechanic(a.id);
-            bool const bi = IsImmunityMechanic(b.id);
+            bool const ai = IsImmunityMechanic(a.id) || IsImmunitySpell(a.id);
+            bool const bi = IsImmunityMechanic(b.id) || IsImmunitySpell(b.id);
             if (ai != bi)
                 return ai;
 
