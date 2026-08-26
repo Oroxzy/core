@@ -1158,6 +1158,101 @@ namespace
     }
 
     /*
+     * THE GEAR HE CAN PRESS.
+     *
+     * Vanilla arena is decided by trinkets as much as by spells - the insignia against a fear,
+     * the engineer's gloves, whatever raid trinket somebody brought - and none of it was on the
+     * frames. It cannot be a written list the way the class rows are: two hundred and fifty
+     * trinkets carry a use effect and another hundred and forty pieces of other gear do, and what
+     * a man is wearing is his business and changes between rounds.
+     *
+     * So it is read off him instead, every push. That costs a walk of nineteen slots twice a
+     * second and buys two things a list could not: a trinket swapped mid match is on the frames
+     * half a second later, and nothing has to be maintained when a patch adds an item.
+     *
+     * What the ban list forbids in this bracket is left out. It cannot be pressed, and an icon
+     * for something nobody can use is worse than no icon - ArenaMgr already answers that question
+     * for the cast check, so the frames ask the same one.
+     *
+     * The ITEM id goes on the wire rather than the spell's, because the client can turn an item
+     * id into a picture and a name in the player's own language by itself, and there is no
+     * generated table anywhere that would have to keep up with the item database.
+     */
+    size_t const ARENA_MAX_ITEMS = 4;
+
+    struct TrackedItem
+    {
+        uint32 itemId;
+        int32 remaining;
+        uint8 state;
+        uint32 total;                           // tenths, as everywhere else on this wire
+    };
+
+    void FindUsableItems(Player* player, ArenaType type, std::vector<TrackedItem>& out)
+    {
+        bool const clearStart = sWorld.getConfig(CONFIG_BOOL_ARENA_RESET_ALL_COOLDOWNS);
+
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        {
+            if (out.size() >= ARENA_MAX_ITEMS)
+                break;
+
+            Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+            if (!item)
+                continue;
+
+            ItemPrototype const* proto = item->GetProto();
+            if (!proto)
+                continue;
+
+            for (int s = 0; s < MAX_ITEM_PROTO_SPELLS; ++s)
+            {
+                if (proto->Spells[s].SpellTrigger != ITEM_SPELLTRIGGER_ON_USE)
+                    continue;
+
+                uint32 const spellId = proto->Spells[s].SpellId;
+                if (!spellId)
+                    continue;
+
+                SpellEntry const* info = sSpellMgr.GetSpellEntry(spellId);
+                if (!info)
+                    continue;
+
+                // banned in this bracket: there is nothing for him to press
+                if (sArenaMgr.IsSpellDisabled(spellId, type, true))
+                    break;
+
+                TrackedItem entry;
+                entry.itemId = proto->ItemId;
+                entry.remaining = 0;
+                entry.state = ARENA_AURA_READY;
+                entry.total = 0;
+
+                if (clearStart)
+                {
+                    TimePoint expire;
+                    bool permanent = false;
+                    uint32 totalMs = 0;
+
+                    if (player->GetExpireTime(info, expire, permanent, true, &totalMs) && !permanent)
+                    {
+                        auto const now = player->GetMap()->GetCurrentClockTime();
+                        if (expire > now)
+                        {
+                            entry.remaining = int32(std::chrono::duration_cast<std::chrono::milliseconds>(expire - now).count());
+                            entry.total = totalMs / 100;
+                            entry.state = ARENA_AURA_COOLDOWN;
+                        }
+                    }
+                }
+
+                out.push_back(entry);
+                break;                          // one use effect an item is enough
+            }
+        }
+    }
+
+    /*
      * One addon message to one player.
      *
      * On 1.12 an addon message is marked by the LANGUAGE field, not by the message type:
@@ -1414,6 +1509,44 @@ void Arena::PushFrameData(uint32 diff)
      * shows those slots dimmed, and saying "this is at full" every half second would be several
      * hundred bytes a tick to say nothing.
      */
+    /*
+     * i|Name,itemId,remainingMs,state,totalTenths,...
+     *
+     * Its own line rather than more fields on the cooldown one: that is already seven entries and
+     * about 168 of the 200 bytes a payload may carry, and two trinkets on the end of it would
+     * push the racial off.
+     */
+    std::vector<FighterLine> itemLines;
+    for (auto const& itr : GetPlayers())
+    {
+        Player* player = sObjectMgr.GetPlayer(itr.first);
+        if (!player)
+            continue;
+
+        std::vector<TrackedItem> items;
+        FindUsableItems(player, GetArenaType(), items);
+
+        std::ostringstream entry;
+        entry << "i|" << player->GetName();
+
+        for (TrackedItem const& one : items)
+        {
+            std::ostringstream field;
+            field << "," << one.itemId << "," << one.remaining
+                  << "," << uint32(one.state) << "," << one.total;
+
+            if (size_t(entry.tellp()) + field.str().size() > ARENA_FRAME_MAX_PAYLOAD)
+                break;
+
+            entry << field.str();
+        }
+
+        FighterLine line;
+        line.who = player;
+        line.text = entry.str();
+        itemLines.push_back(line);
+    }
+
     std::vector<FighterLine> drLines;
     if (sWorld.getConfig(CONFIG_BOOL_ARENA_FRAME_DIMINISHING))
     {
@@ -1536,6 +1669,10 @@ void Arena::PushFrameData(uint32 diff)
                     SendArenaAddon(receiver, entry.text);
 
             for (FighterLine const& entry : drLines)
+                if (canSee(entry.who, receiver))
+                    SendArenaAddon(receiver, entry.text);
+
+            for (FighterLine const& entry : itemLines)
                 if (canSee(entry.who, receiver))
                     SendArenaAddon(receiver, entry.text);
 
