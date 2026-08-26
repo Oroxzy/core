@@ -999,17 +999,32 @@ void Arena::PushFrameData(uint32 diff)
         uint32 const maxPower = player->GetMaxPower(powerType);
         uint32 const power = maxPower ? uint32((uint64(player->GetPower(powerType)) * 100) / maxPower) : 0;
 
+        /*
+         * Measured, like the other two lines are.
+         *
+         * This one never was, on the reasoning that the bars are fixed width - and they are, per
+         * fighter. What is not fixed is how many fighters there are and how long their names run:
+         * five twelve character names come to about 150 bytes, which was fine when 5v5 was
+         * theoretical and is not something to leave resting on an assumption. A dropped fighter
+         * loses his bars; a dropped PAYLOAD loses everybody's.
+         */
+        std::ostringstream one;
+        one << player->GetName() << ","
+            << uint32(player->GetClass()) << ","
+            << (player->GetBGTeam() == ALLIANCE ? 0 : 1) << ","
+            << health << ","
+            << power << ","
+            << uint32(powerType) << ","
+            << (player->IsAlive() ? 0 : 1);
+
+        if (size_t(payload.tellp()) + one.str().size() + 2 > ARENA_FRAME_MAX_PAYLOAD)
+            break;
+
         if (any)
             payload << ";";
         any = true;
 
-        payload << player->GetName() << ","
-                << uint32(player->GetClass()) << ","
-                << (player->GetBGTeam() == ALLIANCE ? 0 : 1) << ","
-                << health << ","
-                << power << ","
-                << uint32(powerType) << ","
-                << (player->IsAlive() ? 0 : 1);
+        payload << one.str();
     }
 
     if (!any)
