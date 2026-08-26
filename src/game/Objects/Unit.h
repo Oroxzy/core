@@ -637,6 +637,18 @@ class Unit : public SpellCaster
          * @return The current diminishing level, up to DIMINISHING_LEVEL_IMMUNE
          */
         DiminishingLevels GetDiminishing(DiminishingGroup  group);
+
+        /*
+         * How long until this group's diminishing returns go back to full, in milliseconds.
+         *
+         * Zero means it is not diminished at all - either nothing of that kind has landed, or the
+         * window has already run out. While the effect is still ON him the clock has not started,
+         * so the full window is answered: that is what a player reads as "not yet".
+         *
+         * The arena frames report this. m_Diminishing is private and GetDiminishing only gives
+         * the level, which is the colour without the number.
+         */
+        uint32 GetDiminishingReset(DiminishingGroup group) const;
         /**
          * Increases the level of the DiminishingGroup by one level up until
          * DIMINISHING_LEVEL_IMMUNE where the target becomes immune to spells of

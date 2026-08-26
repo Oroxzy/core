@@ -7971,6 +7971,29 @@ bool Unit::SelectHostileTarget()
 //======================================================================
 //======================================================================
 
+uint32 Unit::GetDiminishingReset(DiminishingGroup group) const
+{
+    for (auto const& i : m_Diminishing)
+    {
+        if (i.DRGroup != group)
+            continue;
+
+        if (!i.hitCount || !i.hitTime)
+            return 0;
+
+        // still on him: the fifteen seconds start when it falls off, not when it landed
+        if (i.stack)
+            return 15 * IN_MILLISECONDS;
+
+        uint32 const elapsed = WorldTimer::getMSTimeDiff(i.hitTime, WorldTimer::getMSTime());
+        if (elapsed >= 15 * IN_MILLISECONDS)
+            return 0;
+
+        return (15 * IN_MILLISECONDS) - elapsed;
+    }
+    return 0;
+}
+
 DiminishingLevels Unit::GetDiminishing(DiminishingGroup group)
 {
     for (auto& i : m_Diminishing)

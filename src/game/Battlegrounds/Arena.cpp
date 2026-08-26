@@ -784,6 +784,34 @@ namespace
         return nullptr;
     }
 
+    /*
+     * DIMINISHING RETURNS, when Arena.FrameDiminishing is on.
+     *
+     * Five categories in a fixed order, for the same reason the cooldown row is fixed: the second
+     * icon is always fear, so it is read by position. These are the five that decide a vanilla
+     * arena - stun, fear, root, polymorph and the sap/gouge group. The enum has more (disarm,
+     * silence, and the trigger variants), but those either barely diminish in 1.12 or are not
+     * something a player plans around.
+     *
+     * This is off the beaten path for this server, which reports what a watcher could in
+     * principle have seen and DR is a hidden rule. It is behind a switch for exactly that reason:
+     * a realm that thinks it is the wrong thing to show turns it off and nothing else changes.
+     */
+    struct DrCategory
+    {
+        DiminishingGroup group;
+        uint32 id;                              // what goes on the wire
+    };
+
+    DrCategory const ARENA_DR_CATEGORIES[] =
+    {
+        { DIMINISHING_CONTROL_STUN, 1 },
+        { DIMINISHING_FEAR,         2 },
+        { DIMINISHING_CONTROL_ROOT, 3 },
+        { DIMINISHING_POLYMORPH,    4 },
+        { DIMINISHING_KNOCKOUT,     5 },
+    };
+
     struct RankCollector
     {
         std::vector<uint32>* out;
@@ -1181,6 +1209,40 @@ void Arena::PushFrameData(uint32 diff)
         auraLines.push_back(entry.str());
     }
 
+    /*
+     * The DR line, one per fighter, and only when the switch is on.
+     *
+     * Sent for everybody every tick like the others, so an empty one clears him and nothing has
+     * to be remembered. A category at level 0 with no time left is simply left out: the AddOn
+     * shows those slots dimmed, and saying "this is at full" every half second would be several
+     * hundred bytes a tick to say nothing.
+     */
+    std::vector<std::string> drLines;
+    if (sWorld.getConfig(CONFIG_BOOL_ARENA_FRAME_DIMINISHING))
+    {
+        for (auto const& itr : GetPlayers())
+        {
+            Player* player = sObjectMgr.GetPlayer(itr.first);
+            if (!player)
+                continue;
+
+            std::ostringstream entry;
+            entry << "d|" << player->GetName();
+
+            for (DrCategory const& category : ARENA_DR_CATEGORIES)
+            {
+                uint32 const left = player->GetDiminishingReset(category.group);
+                if (!left)
+                    continue;
+
+                uint32 const level = uint32(player->GetDiminishing(category.group));
+                entry << "," << category.id << "," << level << "," << left;
+            }
+
+            drLines.push_back(entry.str());
+        }
+    }
+
     // everybody on the map: the fighters and the visitors watching them
     if (Map* map = GetBgMap())
     {
@@ -1194,6 +1256,9 @@ void Arena::PushFrameData(uint32 diff)
             SendArenaAddon(receiver, line);
 
             for (std::string const& line : auraLines)
+                SendArenaAddon(receiver, line);
+
+            for (std::string const& line : drLines)
                 SendArenaAddon(receiver, line);
 
             if (casts.empty())

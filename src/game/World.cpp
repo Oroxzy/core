@@ -1332,6 +1332,7 @@ void World::LoadConfigSettings(bool reload)
     setConfig(CONFIG_BOOL_ARENA_1V1_BLOCK_HEALER_SPECS, "Arena.1v1.BlockHealerSpecs", false);
     setConfig(CONFIG_BOOL_ARENA_LEAVE_QUEUES_ON_LOGOUT, "Arena.LeaveQueuesOnLogout", true);
     setConfig(CONFIG_BOOL_ARENA_RESET_ALL_COOLDOWNS, "Arena.ResetAllCooldowns", true);
+    setConfig(CONFIG_BOOL_ARENA_FRAME_DIMINISHING, "Arena.FrameDiminishing", true);
 
     // Rating, per player and per bracket - there are no arena teams here (see ArenaRating.h).
     // Mode 1 rates a match only when both sides came as one full group, which for 1v1 is every
