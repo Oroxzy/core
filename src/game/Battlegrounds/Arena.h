@@ -654,6 +654,10 @@ class Arena : public BattleGround
          * reload still carries everything.
          */
         std::set<uint32> m_frameNamesSent;
+
+        // GetTalentSpecTab walks the whole talent map; asked once per fighter, refreshed with the
+        // slow name tick, cleared with it too
+        std::map<ObjectGuid, uint32> m_frameSpecCache;
         bool m_castLineSent;                    // so the last cast can be cleared exactly once
 
         // teleports players that fell below the arena floor back to their team start location

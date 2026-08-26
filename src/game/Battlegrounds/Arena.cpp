@@ -519,6 +519,7 @@ Arena::Arena()
     m_framePushTimer = 0;
     m_frameNameTick = 0;
     m_frameNamesSent.clear();
+    m_frameSpecCache.clear();
     m_castLineSent = false;
     m_leaverIsParticipant = false;
     m_spectatorsRemoved = false;
@@ -620,6 +621,7 @@ void Arena::Reset()
     m_framePushTimer = 0;
     m_frameNameTick = 0;
     m_frameNamesSent.clear();
+    m_frameSpecCache.clear();
     m_castLineSent = false;
     m_leaverIsParticipant = false;
     m_spectatorsRemoved = false;
@@ -1192,12 +1194,24 @@ namespace
     {
         bool const clearStart = sWorld.getConfig(CONFIG_BOOL_ARENA_RESET_ALL_COOLDOWNS);
 
-        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        /*
+         * Trinkets first. The four places fill in visit order, and visiting 0..18 put helmets and
+         * belts ahead of the trinket slots - so an engineer's headpiece could crowd the insignia,
+         * the one item every arena reads the frames FOR, off the line entirely.
+         */
+        static uint8 const slotOrder[] =
+        {
+            EQUIPMENT_SLOT_TRINKET1, EQUIPMENT_SLOT_TRINKET2,
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 14, 15, 16, 17, 18,
+        };
+
+        for (uint8 slot : slotOrder)
         {
             if (out.size() >= ARENA_MAX_ITEMS)
                 break;
 
             Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+
             if (!item)
                 continue;
 
@@ -1234,7 +1248,9 @@ namespace
                     bool permanent = false;
                     uint32 totalMs = 0;
 
-                    if (player->GetExpireTime(info, expire, permanent, true, &totalMs) && !permanent)
+                    // the proto rides along: potions and shared trinkets keep their cooldown in an
+                    // ITEM category the spell knows nothing about, see GetExpireTime
+                    if (player->GetExpireTime(info, expire, permanent, true, &totalMs, proto) && !permanent)
                     {
                         auto const now = player->GetMap()->GetCurrentClockTime();
                         if (expire > now)
@@ -1342,25 +1358,35 @@ void Arena::PushFrameData(uint32 diff)
      * property of the spell, not of the man holding it, and half the rows are shared anyway.
      * Localised per receiver like the cast line, with the same enUS fallback.
      */
+    /*
+     * The slow tick used to send the union of the FIGHTERS' rows, and that was a leak: the union
+     * arrived unfiltered, so a receiver could read a stealthed enemy's class and race out of
+     * which row spells were being named at him. The full table of every class row and every
+     * racial says nothing about anybody - it is identical in every match - so that is what goes
+     * out now, and only the DR names, which do point at a man, are filtered per receiver.
+     */
     bool const sendNames = (m_frameNameTick++ % 20) == 0;
     std::set<uint32> nameIds;
+    std::vector<std::pair<Player*, uint32>> drNamePairs;
     if (sendNames)
     {
         m_frameNamesSent.clear();
-        for (auto const& itr : GetPlayers())
+        m_frameSpecCache.clear();
+
+        static std::set<uint32> const allRowIds = []()
         {
-            Player* player = sObjectMgr.GetPlayer(itr.first);
-            if (!player)
-                continue;
-
-            uint32 const* row = ClassRowFor(player->GetClass());
-            RaceRacial const* racial = RacialFor(player->GetRace());
-
-            for (uint8 slot = 0; slot < 6; ++slot)
-                if (uint32 const id = RowSpell(row, racial, slot))
-                    nameIds.insert(id);
-        }
+            std::set<uint32> out;
+            for (ClassRow const& row : ARENA_CLASS_ROWS)
+                for (uint8 slot = 0; slot < 5; ++slot)
+                    if (row.spells[slot])
+                        out.insert(row.spells[slot]);
+            for (RaceRacial const& racial : ARENA_RACE_ROW)
+                out.insert(racial.id);
+            return out;
+        }();
+        nameIds = allRowIds;
     }
+
 
     std::vector<FighterLine> unitEntries;
     for (auto const& itr : GetPlayers())
@@ -1377,23 +1403,36 @@ void Arena::PushFrameData(uint32 diff)
         uint32 const power = maxPower ? uint32((uint64(player->GetPower(powerType)) * 100) / maxPower) : 0;
 
         /*
-         * Measured, like the other two lines are.
-         *
-         * This one never was, on the reasoning that the bars are fixed width - and they are, per
-         * fighter. What is not fixed is how many fighters there are and how long their names run:
-         * five twelve character names come to about 150 bytes, which was fine when 5v5 was
-         * theoretical and is not something to leave resting on an assumption. A dropped fighter
-         * loses his bars; a dropped PAYLOAD loses everybody's.
+         * ONE LINE PER FIGHTER, like every other per-fighter line here - because one line for the
+         * roster cannot hold a 5v5. Ten fighters at up to 33 bytes each come to 341 against the
+         * 200 byte cap, so the old single line silently dropped the tail every push - and when
+         * the receiver himself was in the dropped tail, his AddOn could not find its own name,
+         * decided it was spectating, and drew both teams mixed together. The client accumulates
+         * these by name and prunes what stops arriving.
          */
+        /*
+         * The spec tab walks the whole talent map, and talents do not change mid match - so it is
+         * asked once per fighter and remembered, refreshed with the slow name tick just in case.
+         */
+        uint32 spec;
+        auto const cached = m_frameSpecCache.find(itr.first);
+        if (cached != m_frameSpecCache.end())
+            spec = cached->second;
+        else
+        {
+            spec = player->GetTalentSpecTab();
+            m_frameSpecCache[itr.first] = spec;
+        }
+
         std::ostringstream one;
-        one << player->GetName() << ","
+        one << "a|" << player->GetName() << ","
             << uint32(player->GetClass()) << ","
             << (player->GetBGTeam() == ALLIANCE ? 0 : 1) << ","
             << health << ","
             << power << ","
             << uint32(powerType) << ","
             << (player->IsAlive() ? 0 : 1) << ","
-            << player->GetTalentSpecTab();
+            << spec;
 
         FighterLine entry;
         entry.who = player;
@@ -1569,7 +1608,7 @@ void Arena::PushFrameData(uint32 diff)
                 if (!player->IsDiminishing(category.group))
                     continue;
 
-                uint32 const by = player->GetDiminishingSpell(category.group);
+                uint32 by = player->GetDiminishingSpell(category.group);
 
                 /*
                  * NEGATIVE means "this is the effect running", positive "this is the wait after".
@@ -1584,9 +1623,34 @@ void Arena::PushFrameData(uint32 diff)
                  * last recorded - the same id the icon is drawn from.
                  */
                 int32 left = int32(player->GetDiminishingReset(category.group));
-                if (!left && by)
+                if (!left)
                 {
-                    if (SpellAuraHolder const* holder = player->GetSpellAuraHolder(by))
+                    /*
+                     * The recorded spell is the LAST one that landed, and with two controls of one
+                     * group overlapping it can wear off while the earlier one still holds him -
+                     * then its holder is gone and the slot went out lit but numberless. So when the
+                     * record answers nothing, whatever of that group is actually on him answers
+                     * instead, and the icon follows it: that is the spell doing the holding.
+                     */
+                    SpellAuraHolder const* holder = by ? player->GetSpellAuraHolder(by) : nullptr;
+                    if (!holder)
+                    {
+                        for (auto const& itrHolder : player->GetSpellAuraHolderMap())
+                        {
+                            SpellAuraHolder const* candidate = itrHolder.second;
+                            if (!candidate || !candidate->GetSpellProto())
+                                continue;
+                            if (candidate->GetSpellProto()->GetDiminishingReturnsGroup(false) != category.group)
+                                continue;
+                            if (!holder || candidate->GetAuraDuration() > holder->GetAuraDuration())
+                                holder = candidate;
+                        }
+
+                        if (holder)
+                            by = holder->GetSpellProto()->Id;
+                    }
+
+                    if (holder)
                         left = -holder->GetAuraDuration();
                 }
 
@@ -1612,9 +1676,12 @@ void Arena::PushFrameData(uint32 diff)
                 /*
                  * Named at once when it is new rather than on the next slow tick: unlike a class
                  * row, this id changes during the match and its slot only lives fifteen seconds.
+                 * As a PAIR, because a name that points at a man has to pass the same visibility
+                 * check his lines do - a receiver who missed one this way gets it with the next
+                 * slow tick, which resends every recorded id.
                  */
                 if (by && (sendNames || m_frameNamesSent.find(by) == m_frameNamesSent.end()))
-                    nameIds.insert(by);
+                    drNamePairs.push_back({ player, by });
             }
 
             FighterLine line;
@@ -1639,41 +1706,29 @@ void Arena::PushFrameData(uint32 diff)
                                           receiver->GetSession()->GetSessionDbcLocale() : LOCALE_enUS;
 
             /*
-             * Assembled here rather than once for everybody, because who is visible is a question
-             * about a PAIR. Measured against the cap the same way it was.
+             * Visibility is a question about a PAIR, and it used to be asked four or five times
+             * per pair - once per line kind. Asked once here, and every filter below reads the
+             * answer from the set.
              */
-            std::ostringstream payload;
-            payload << "a|";
-            bool any = false;
+            std::set<Player*> visible;
+            for (FighterLine const& entry : unitEntries)
+                if (canSee(entry.who, receiver))
+                    visible.insert(entry.who);
 
             for (FighterLine const& entry : unitEntries)
-            {
-                if (!canSee(entry.who, receiver))
-                    continue;
-
-                if (size_t(payload.tellp()) + entry.text.size() + 2 > ARENA_FRAME_MAX_PAYLOAD)
-                    break;
-
-                if (any)
-                    payload << ";";
-                any = true;
-
-                payload << entry.text;
-            }
-
-            // nobody he can see: an empty line clears his frames rather than freezing them
-            SendArenaAddon(receiver, payload.str());
+                if (visible.count(entry.who))
+                    SendArenaAddon(receiver, entry.text);
 
             for (FighterLine const& entry : auraLines)
-                if (canSee(entry.who, receiver))
+                if (visible.count(entry.who))
                     SendArenaAddon(receiver, entry.text);
 
             for (FighterLine const& entry : drLines)
-                if (canSee(entry.who, receiver))
+                if (visible.count(entry.who))
                     SendArenaAddon(receiver, entry.text);
 
             for (FighterLine const& entry : itemLines)
-                if (canSee(entry.who, receiver))
+                if (visible.count(entry.who))
                     SendArenaAddon(receiver, entry.text);
 
             /*
@@ -1681,13 +1736,18 @@ void Arena::PushFrameData(uint32 diff)
              * that does not fit starts the next line instead of being cut in half, because half a
              * name in a tooltip is worse than no tooltip.
              */
-            if (!nameIds.empty())
+            if (!nameIds.empty() || !drNamePairs.empty())
             {
+                std::set<uint32> receiverIds = nameIds;
+                for (auto const& pair : drNamePairs)
+                    if (visible.count(pair.first))
+                        receiverIds.insert(pair.second);
+
                 std::ostringstream nameLine;
                 nameLine << "n|";
                 size_t written = 0;
 
-                for (uint32 id : nameIds)
+                for (uint32 id : receiverIds)
                 {
                     SpellEntry const* info = sSpellMgr.GetSpellEntry(id);
                     if (!info)
@@ -1752,7 +1812,7 @@ void Arena::PushFrameData(uint32 diff)
             size_t written = 0;
             for (size_t i = 0; i < casts.size(); ++i)
             {
-                if (!canSee(casts[i].who, receiver))
+                if (!visible.count(casts[i].who))
                     continue;
 
                 std::string const& name = casts[i].spell->SpellName[locale].empty() ?
@@ -1779,6 +1839,8 @@ void Arena::PushFrameData(uint32 diff)
 
     for (uint32 id : nameIds)
         m_frameNamesSent.insert(id);
+    for (auto const& pair : drNamePairs)
+        m_frameNamesSent.insert(pair.second);
 
     m_castLineSent = !casts.empty();
 }

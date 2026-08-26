@@ -2202,15 +2202,33 @@ bool SpellCaster::CheckLockout(SpellSchoolMask schoolMask) const
     return false;
 }
 
-bool SpellCaster::GetExpireTime(SpellEntry const* spellEntry, TimePoint& expireTime, bool& isPermanent, bool includeCategory /*= false*/, uint32* totalMs /*= nullptr*/) const
+bool SpellCaster::GetExpireTime(SpellEntry const* spellEntry, TimePoint& expireTime, bool& isPermanent, bool includeCategory /*= false*/, uint32* totalMs /*= nullptr*/, ItemPrototype const* itemProto /*= nullptr*/) const
 {
     auto spellItr = m_cooldownMap.FindBySpellId(spellEntry->Id);
 
+    /*
+     * The item's own category outranks the spell's, exactly as IsSpellReady has it: a potion or
+     * a shared cooldown trinket keeps its recovery in a category the ITEM declares, and asking
+     * with the spell's alone read those as ready while they were locked out.
+     */
+    uint32 spellCategory = spellEntry->Category;
+    if (itemProto)
+    {
+        for (auto const& itemSpell : itemProto->Spells)
+        {
+            if (itemSpell.SpellId == spellEntry->Id)
+            {
+                spellCategory = itemSpell.SpellCategory;
+                break;
+            }
+        }
+    }
+
     // no entry of its own, but a sibling of its category may be holding it down
     bool viaCategory = false;
-    if (includeCategory && spellItr == m_cooldownMap.end() && spellEntry->Category)
+    if (includeCategory && spellItr == m_cooldownMap.end() && spellCategory)
     {
-        spellItr = m_cooldownMap.FindByCategory(spellEntry->Category);
+        spellItr = m_cooldownMap.FindByCategory(spellCategory);
         viaCategory = true;
     }
 

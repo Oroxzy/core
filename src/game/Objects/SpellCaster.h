@@ -85,9 +85,12 @@ class CooldownData
             return true;
         }
 
-        void SetCatCDExpireTime(TimePoint expireTime)
+        // expiry and duration together, or GetExpireTime's totalMs describes a wait that is not
+        // the one whose expiry it accompanies
+        void SetCatCDExpireTime(TimePoint expireTime, uint32 duration)
         {
             m_catExpireTime = expireTime;
+            m_catDuration = duration;
         }
 
         // return false if permanent
@@ -183,7 +186,7 @@ class CooldownContainer
                     // we must keep original category cd owner for sake of client sync
                     if (catItr != m_spellIdMap.end())
                     {
-                        catItr->second->SetCatCDExpireTime(std::chrono::milliseconds(categoryDuration) + clockNow);
+                        catItr->second->SetCatCDExpireTime(std::chrono::milliseconds(categoryDuration) + clockNow, categoryDuration);
                         catItr->second->m_typePermanent = false;
                         resultItr.first->second->m_category = 0;
                     }
@@ -399,7 +402,7 @@ public:
      * IsSpellReady asks both maps for exactly this reason. It is off by default so that
      * LockOutSpells, the other caller, keeps deciding on the spell's own cooldown alone.
      */
-    bool GetExpireTime(SpellEntry const* spellEntry, TimePoint& expireTime, bool& isPermanent, bool includeCategory = false, uint32* totalMs = nullptr) const;
+    bool GetExpireTime(SpellEntry const* spellEntry, TimePoint& expireTime, bool& isPermanent, bool includeCategory = false, uint32* totalMs = nullptr, ItemPrototype const* itemProto = nullptr) const;
     bool IsSpellOnPermanentCooldown(SpellEntry const* spellEntry) const;
     virtual void LockOutSpells(SpellSchoolMask schoolMask, uint32 duration);
     void PrintCooldownList(ChatHandler& chat) const;
