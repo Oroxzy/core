@@ -689,20 +689,26 @@ namespace
         return mechanic == MECHANIC_IMMUNE_SHIELD || mechanic == MECHANIC_INVULNERABILITY;
     }
 
-    /*
-     * The one effect on this player worth a place on his frame.
-     *
-     * One, not all of them. Two icons in a forty pixel row is a fight for space that the
-     * information does not win, and in practice the answer to "what is happening to him" is a
-     * single thing: he is immune, or he is held. Immunity outranks control - being unable to hurt
-     * him matters more than his being unable to move - and among equals the one with the most
-     * time left on it wins, because that is the one still there when you get to him.
-     */
-    void FindTrackedAura(Player const* player, uint32& mechanic, int32& remaining)
+    struct TrackedAura
     {
-        mechanic = 0;
-        remaining = 0;
+        uint32 mechanic;
+        int32 remaining;
+    };
 
+    // Two of them, and the frames have room for two beside the bar. The first version sent one
+    // because the icon sat INSIDE the health bar, where a second would have had nowhere to go.
+    size_t const ARENA_FRAME_MAX_AURAS = 2;
+
+    /*
+     * The effects on this player worth a place on his frame, best first.
+     *
+     * Not all of them: three or more at once is a wall of icons that says less than two do, and
+     * the two that matter are always at the front of this order. Immunity outranks control -
+     * being unable to hurt him matters more than his being unable to move - and among equals the
+     * one with the most time left wins, because that is the one still there when you reach him.
+     */
+    void FindTrackedAuras(Player const* player, std::vector<TrackedAura>& out)
+    {
         for (auto const& itr : player->GetSpellAuraHolderMap())
         {
             SpellAuraHolder const* holder = itr.second;
@@ -720,16 +726,26 @@ namespace
             if (!IsTrackedMechanic(found))
                 continue;
 
-            int32 const left = holder->GetAuraDuration();
-
-            if (!mechanic
-                || (IsImmunityMechanic(found) && !IsImmunityMechanic(mechanic))
-                || (IsImmunityMechanic(found) == IsImmunityMechanic(mechanic) && left > remaining))
-            {
-                mechanic = found;
-                remaining = left;
-            }
+            TrackedAura aura;
+            aura.mechanic = found;
+            aura.remaining = holder->GetAuraDuration();
+            out.push_back(aura);
         }
+
+        std::sort(out.begin(), out.end(), [](TrackedAura const& a, TrackedAura const& b)
+        {
+            if (IsImmunityMechanic(a.mechanic) != IsImmunityMechanic(b.mechanic))
+                return IsImmunityMechanic(a.mechanic);
+
+            // a permanent aura counts as the longest there is, not the shortest
+            if ((a.remaining < 0) != (b.remaining < 0))
+                return a.remaining < 0;
+
+            return a.remaining > b.remaining;
+        });
+
+        if (out.size() > ARENA_FRAME_MAX_AURAS)
+            out.resize(ARENA_FRAME_MAX_AURAS);
     }
 
     /*
@@ -878,11 +894,20 @@ void Arena::PushFrameData(uint32 diff)
         if (!player)
             continue;
 
-        uint32 mechanic = 0;
-        int32 remaining = 0;
-        FindTrackedAura(player, mechanic, remaining);
-        if (!mechanic)
+        std::vector<TrackedAura> found;
+        FindTrackedAuras(player, found);
+        if (found.empty())
             continue;
+
+        // measured against the same ceiling the cast line uses, and for the same reason: it is
+        // the tail that goes, not the packet
+        std::ostringstream entry;
+        entry << player->GetName();
+        for (size_t i = 0; i < found.size(); ++i)
+            entry << "," << found[i].mechanic << "," << found[i].remaining;
+
+        if (size_t(auras.tellp()) + entry.str().size() + 3 > ARENA_FRAME_MAX_PAYLOAD)
+            break;
 
         if (!anyAura)
             auras << "b|";
@@ -891,7 +916,7 @@ void Arena::PushFrameData(uint32 diff)
         anyAura = true;
 
         // a duration of -1 is permanent; the AddOn shows the icon without a countdown
-        auras << player->GetName() << "," << mechanic << "," << remaining;
+        auras << entry.str();
     }
     std::string const auraLine = anyAura ? auras.str() : std::string();
 

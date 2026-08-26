@@ -2701,9 +2701,28 @@ bool ChatHandler::HandleArenaMatchesCommand(char* /*args*/)
     if (!player)
         return false;
 
-    // sent first and unconditionally, so the tab can say "switched off" rather than "none running"
+    /*
+     * 0 off, 1 open, 2 not from where he is standing.
+     *
+     * Sent first and whatever the answer is, so the tab can tell three different things apart:
+     * spectating is switched off, nothing is running, and "you are in a match yourself". The
+     * third one used to be missing, and the list went out to a player in the middle of his own
+     * fight - SpectateArena would have refused the door, but the roster was already in his hands
+     * and he had no business reading it while fighting.
+     *
+     * A visitor is not "in" a battleground - a spectator has no bgInstanceID - so this stops the
+     * fighters without stopping somebody who is already watching from moving to another match.
+     */
     bool const mayWatch = sWorld.getConfig(CONFIG_BOOL_ARENA_SPECTATE);
-    PSendSysMessage("ARENA|wcfg|%u", mayWatch ? 1 : 0);
+    bool const inFight = player->InBattleGround();
+
+    PSendSysMessage("ARENA|wcfg|%u", !mayWatch ? 0 : (inFight ? 2 : 1));
+
+    if (inFight)
+    {
+        PSendSysMessage("ARENA|done|matches");
+        return true;
+    }
 
     /*
      * And nothing else when watching is off.
@@ -2762,6 +2781,13 @@ bool ChatHandler::HandleArenaWatchCommand(char* args)
     Player* player = m_session ? m_session->GetPlayer() : nullptr;
     if (!player)
         return false;
+
+    // a window left open from before the port would otherwise still have a live Watch button
+    if (player->InBattleGround())
+    {
+        PSendSysMessage("ARENA|wno|0");
+        return true;
+    }
 
     uint32 instanceId = 0;
     if (!ExtractUInt32(&args, instanceId) || !instanceId)
