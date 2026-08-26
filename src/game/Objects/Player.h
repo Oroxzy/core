@@ -1436,6 +1436,10 @@ class Player final: public Unit
         bool LearnTalent(uint32 talentId, uint32 talentRank);
         // Name of the talent tree with the most points spent ("Arms", "Holy", ...), "Undefined" if no talents.
         std::string GetTalentSpecName() const;
+        // The talent tab holding the most points, as its TalentTab.dbc id, or 0 when none are
+        // spent. The arena frames send this so the AddOn can draw a spec icon: TalentTab.dbc
+        // keys its icon by that id, and a name would only have to be mapped back to one.
+        uint32 GetTalentSpecTab() const;
         // Talent points spent per talent tab id.
         void GetTalentPointsPerTab(std::map<uint32, uint32>& pointsPerTab) const;
 

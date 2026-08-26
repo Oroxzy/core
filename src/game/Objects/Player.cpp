@@ -21081,6 +21081,28 @@ void Player::GetTalentPointsPerTab(std::map<uint32, uint32>& pointsPerTab) const
     }
 }
 
+uint32 Player::GetTalentSpecTab() const
+{
+    std::map<uint32, uint32> pointsPerTab;
+    GetTalentPointsPerTab(pointsPerTab);
+
+    uint32 bestTab = 0;
+    uint32 bestPoints = 0;
+    for (auto const& itr : pointsPerTab)
+    {
+        // strictly greater, so a tie leaves the FIRST tab standing rather than the last one
+        // the map happened to walk - two trees at fifteen points each is a real build, and it
+        // should at least answer the same way twice
+        if (itr.second > bestPoints)
+        {
+            bestPoints = itr.second;
+            bestTab = itr.first;
+        }
+    }
+
+    return bestTab;
+}
+
 std::string Player::GetTalentSpecName() const
 {
     // TalentTab.dbc ids of the 1.12 client (the tab names are not part of the server side dbc format)

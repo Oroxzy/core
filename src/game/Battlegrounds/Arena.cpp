@@ -745,6 +745,45 @@ namespace
      * every rank found maps BACK to that first rank, which is the id that goes on the wire. The
      * AddOn's icon table therefore needs one entry per spell rather than one per rank.
      */
+    /*
+     * THE ROW: what each class always shows, in this order, whatever its state.
+     *
+     * Five slots at most and only long cooldowns - a ten second Kick and a six second Earth Shock
+     * would spend their lives blinking, and a row that blinks is a row nobody reads. Counterspell
+     * at thirty seconds and Silence at forty-five are in because those are the ones a caster
+     * counts.
+     *
+     * Fixed ORDER matters as much as the contents. The point of always showing them is that the
+     * third icon is always the same spell, so it can be read by position without looking at it -
+     * which stops working the moment the row is sorted by what happens to be running.
+     */
+    struct ClassRow
+    {
+        uint8 classId;
+        uint32 spells[5];
+    };
+
+    ClassRow const ARENA_CLASS_ROWS[] =
+    {
+        {  1, { 871,   1719,  20230, 12328, 18499 } },   // warrior
+        {  2, { 642,   1022,  498,   20216, 0     } },   // paladin
+        {  3, { 19263, 5384,  19503, 3045,  19574 } },   // hunter
+        {  4, { 5277,  1856,  13877, 13750, 14185 } },   // rogue
+        {  5, { 15487, 14751, 6346,  0,     0     } },   // priest
+        {  7, { 16188, 16166, 0,     0,     0     } },   // shaman
+        {  8, { 11958, 2139,  12051, 12472, 12042 } },   // mage
+        {  9, { 6789,  6229,  0,     0,     0     } },   // warlock
+        { 11, { 22812, 17116, 29166, 0,     0     } },   // druid
+    };
+
+    uint32 const* ClassRowFor(uint8 classId)
+    {
+        for (ClassRow const& row : ARENA_CLASS_ROWS)
+            if (row.classId == classId)
+                return row.spells;
+        return nullptr;
+    }
+
     struct RankCollector
     {
         std::vector<uint32>* out;
@@ -783,26 +822,20 @@ namespace
      * and it is the same entry that stays behind afterwards to count the wait down; the mechanic
      * would simply vanish when the aura did.
      */
-    // 0 when this spell is not tracked, otherwise the FIRST rank of it - which is what the wire
-    // carries, so the AddOn needs one icon per spell and not one per rank
-    uint32 TrackedCooldownBase(uint32 spellId)
-    {
-        auto const& ranks = TrackedRanks();
-        auto const itr = ranks.find(spellId);
-        return itr != ranks.end() ? itr->second : 0;
-    }
 
-    bool IsTrackedCooldownSpell(uint32 spellId)
+    enum ArenaAuraState
     {
-        return TrackedCooldownBase(spellId) != 0;
-    }
-
+        ARENA_AURA_RUNNING   = 0,               // it is on him now
+        ARENA_AURA_COOLDOWN  = 1,               // used, and this is the wait
+        ARENA_AURA_READY     = 2,               // he has it and it is available
+        ARENA_AURA_CONTROL   = 3,               // a control effect: the AddOn puts it on the portrait
+    };
 
     struct TrackedAura
     {
         uint32 id;                              // a mechanic (1..30) or a spell id (498 and up)
         int32 remaining;
-        bool onCooldown;                        // false: happening now. true: used, and this is the wait
+        uint8 state;
     };
 
     /*
@@ -824,9 +857,28 @@ namespace
      * being unable to hurt him matters more than his being unable to move - and among equals the
      * one with the most time left wins, because that is the one still there when you reach him.
      */
+    /*
+     * Everything the frames show about one fighter.
+     *
+     * Three kinds go out together, and the STATE field tells them apart rather than the position:
+     *
+     *   CONTROL   a stun, a fear, a polymorph. The AddOn draws it on the portrait, over the spec
+     *             icon, which is what sArena does too - a man who is sheeped should read as
+     *             sheeped from his picture, not from an icon somewhere beside him.
+     *
+     *   RUNNING / COOLDOWN / READY   his class's row of long cooldowns, in a fixed order and
+     *             ALWAYS all of them. Ready ones are sent as well, because the whole point of the
+     *             row is that the third icon is the same spell every time, so it can be read by
+     *             position - and because "his Ice Block is up" is worth as much as "it is down".
+     *
+     * Only what his class actually has. A warrior has no line in the mage row and never gets one.
+     */
     void FindTrackedAuras(Player* player, std::vector<TrackedAura>& out)
     {
-        // what is on him right now
+        // the control effect first, if there is one - it goes on the portrait
+        uint32 control = 0;
+        int32 controlLeft = 0;
+
         for (auto const& itr : player->GetSpellAuraHolderMap())
         {
             SpellAuraHolder const* holder = itr.second;
@@ -837,10 +889,6 @@ namespace
             if (!info)
                 continue;
 
-            // the cooldown pass below reports this one, and reports it better
-            if (IsTrackedCooldownSpell(info->Id))
-                continue;
-
             uint32 found = info->Mechanic;
             for (uint32 i = 0; i < MAX_EFFECT_INDEX && !IsTrackedMechanic(found); ++i)
                 found = info->EffectMechanic[i];
@@ -848,93 +896,97 @@ namespace
             if (!IsTrackedMechanic(found))
                 continue;
 
+            int32 const left = holder->GetAuraDuration();
+
+            // immunity outranks control, and among equals the one with the most left on it: that
+            // is the one still there when you reach him. A permanent aura counts as the longest.
+            bool const better = !control
+                || (IsImmunityMechanic(found) && !IsImmunityMechanic(control))
+                || (IsImmunityMechanic(found) == IsImmunityMechanic(control)
+                    && (left < 0 || (controlLeft >= 0 && left > controlLeft)));
+
+            if (better)
+            {
+                control = found;
+                controlLeft = left;
+            }
+        }
+
+        if (control)
+        {
             TrackedAura aura;
-            aura.id = found;
-            aura.remaining = holder->GetAuraDuration();
-            aura.onCooldown = false;
+            aura.id = control;
+            aura.remaining = controlLeft;
+            aura.state = ARENA_AURA_CONTROL;
             out.push_back(aura);
         }
 
-        /*
-         * And the big cooldowns: running, or waiting to come back.
-         *
-         * Nothing is reported for a spell that has not been used, which is the whole rule - the
-         * frames must never claim something nobody watched. Arena.ResetAllCooldowns defaults to
-         * true, so a match starts with every cooldown clear and one that is running was started
-         * HERE, in front of the people looking at it. With that switch off this would leak what
-         * happened outside, so it is checked rather than assumed.
-         */
+        // then his class's row, in order, all of it
+        uint32 const* row = ClassRowFor(player->GetClass());
+        if (!row)
+            return;
+
         bool const clearStart = sWorld.getConfig(CONFIG_BOOL_ARENA_RESET_ALL_COOLDOWNS);
 
-        // every rank of every tracked spell, reported under its first rank
-        std::set<uint32> reported;
-        for (auto const& rank : TrackedRanks())
+        for (uint8 slot = 0; slot < 5; ++slot)
         {
-            uint32 const spellId = rank.first;
-            uint32 const base = rank.second;
-
-            if (reported.find(base) != reported.end())
-                continue;                       // one entry per spell, not one per rank
-
-            SpellEntry const* info = sSpellMgr.GetSpellEntry(spellId);
-            if (!info)
+            uint32 const base = row[slot];
+            if (!base)
                 continue;
 
-            if (SpellAuraHolder const* holder = player->GetSpellAuraHolder(spellId))
-            {
-                TrackedAura aura;
-                aura.id = base;
-                aura.remaining = holder->GetAuraDuration();
-                aura.onCooldown = false;
-                out.push_back(aura);
-                reported.insert(base);
-                continue;
-            }
-
-            if (!clearStart)
-                continue;
-
-            TimePoint expire;
-            bool permanent = false;
-            if (!player->GetExpireTime(info, expire, permanent) || permanent)
-                continue;
-
-            auto const now = player->GetMap()->GetCurrentClockTime();
-            if (expire <= now)
-                continue;
+            /*
+             * Any rank of it. Kick is four ids and Earth Shock is seven, so the ranks are walked
+             * rather than typed - a player with rank four of something matched nothing at all
+             * while this compared against rank one.
+             */
+            std::vector<uint32> ranks;
+            ranks.push_back(base);
+            RankCollector collector{ &ranks };
+            sSpellMgr.doForHighRanks(base, collector);
 
             TrackedAura aura;
-            aura.id = base;
-            aura.remaining = int32(std::chrono::duration_cast<std::chrono::milliseconds>(expire - now).count());
-            aura.onCooldown = true;
+            aura.id = base;                     // always the first rank, so the AddOn keeps one icon
+            aura.remaining = 0;
+            aura.state = ARENA_AURA_READY;
+
+            bool decided = false;
+
+            for (uint32 id : ranks)
+            {
+                if (SpellAuraHolder const* holder = player->GetSpellAuraHolder(id))
+                {
+                    aura.remaining = holder->GetAuraDuration();
+                    aura.state = ARENA_AURA_RUNNING;
+                    decided = true;
+                    break;
+                }
+            }
+
+            if (!decided && clearStart)
+            {
+                for (uint32 id : ranks)
+                {
+                    SpellEntry const* info = sSpellMgr.GetSpellEntry(id);
+                    if (!info)
+                        continue;
+
+                    TimePoint expire;
+                    bool permanent = false;
+                    if (!player->GetExpireTime(info, expire, permanent) || permanent)
+                        continue;
+
+                    auto const now = player->GetMap()->GetCurrentClockTime();
+                    if (expire <= now)
+                        continue;
+
+                    aura.remaining = int32(std::chrono::duration_cast<std::chrono::milliseconds>(expire - now).count());
+                    aura.state = ARENA_AURA_COOLDOWN;
+                    break;
+                }
+            }
+
             out.push_back(aura);
-            reported.insert(base);
         }
-
-        /*
-         * What is happening beats what is merely waiting, immunity beats the rest, and among
-         * equals the one with the most time left wins - it is the one still there when you reach
-         * him. A permanent aura counts as the longest there is, not as the shortest, which is
-         * what a -1 would otherwise sort as.
-         */
-        std::sort(out.begin(), out.end(), [](TrackedAura const& a, TrackedAura const& b)
-        {
-            if (a.onCooldown != b.onCooldown)
-                return !a.onCooldown;
-
-            bool const ai = IsImmunityMechanic(a.id) || IsImmunitySpell(a.id);
-            bool const bi = IsImmunityMechanic(b.id) || IsImmunitySpell(b.id);
-            if (ai != bi)
-                return ai;
-
-            if ((a.remaining < 0) != (b.remaining < 0))
-                return a.remaining < 0;
-
-            return a.remaining > b.remaining;
-        });
-
-        if (out.size() > ARENA_FRAME_MAX_AURAS)
-            out.resize(ARENA_FRAME_MAX_AURAS);
     }
 
     /*
@@ -1020,7 +1072,8 @@ void Arena::PushFrameData(uint32 diff)
             << health << ","
             << power << ","
             << uint32(powerType) << ","
-            << (player->IsAlive() ? 0 : 1);
+            << (player->IsAlive() ? 0 : 1) << ","
+            << player->GetTalentSpecTab();
 
         if (size_t(payload.tellp()) + one.str().size() + 2 > ARENA_FRAME_MAX_PAYLOAD)
             break;
@@ -1117,7 +1170,7 @@ void Arena::PushFrameData(uint32 diff)
             std::ostringstream one;
             // a duration of -1 is permanent; the AddOn shows the icon without a countdown
             one << "," << found[i].id << "," << found[i].remaining
-                << "," << (found[i].onCooldown ? 1 : 0);
+                << "," << uint32(found[i].state);
 
             if (size_t(entry.tellp()) + one.str().size() > ARENA_FRAME_MAX_PAYLOAD)
                 break;
