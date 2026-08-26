@@ -374,7 +374,17 @@ public:
     bool IsSpellReady(SpellEntry const* spellEntry, ItemPrototype const* itemProto = nullptr) const;
     // Remaining cooldown of one spell. Public because the arena frames report it - see
     // Arena::PushFrameData. A const getter, and it tells nothing its owner does not know.
-    bool GetExpireTime(SpellEntry const* spellEntry, TimePoint& expireTime, bool& isPermanent) const;
+    /*
+     * includeCategory also answers for a spell that is not itself on cooldown but whose
+     * CATEGORY is - which is a different question, and one only some callers want.
+     *
+     * Shield Wall, Recklessness and Retaliation are one category with no recovery of their
+     * own, so pressing any of them puts the other two away for half an hour; the wait is
+     * stored under the id that was actually cast and the siblings have no entry at all.
+     * IsSpellReady asks both maps for exactly this reason. It is off by default so that
+     * LockOutSpells, the other caller, keeps deciding on the spell's own cooldown alone.
+     */
+    bool GetExpireTime(SpellEntry const* spellEntry, TimePoint& expireTime, bool& isPermanent, bool includeCategory = false) const;
     bool IsSpellOnPermanentCooldown(SpellEntry const* spellEntry) const;
     virtual void LockOutSpells(SpellSchoolMask schoolMask, uint32 duration);
     void PrintCooldownList(ChatHandler& chat) const;

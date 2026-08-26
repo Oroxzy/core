@@ -2202,9 +2202,18 @@ bool SpellCaster::CheckLockout(SpellSchoolMask schoolMask) const
     return false;
 }
 
-bool SpellCaster::GetExpireTime(SpellEntry const* spellEntry, TimePoint& expireTime, bool& isPermanent) const
+bool SpellCaster::GetExpireTime(SpellEntry const* spellEntry, TimePoint& expireTime, bool& isPermanent, bool includeCategory /*= false*/) const
 {
     auto spellItr = m_cooldownMap.FindBySpellId(spellEntry->Id);
+
+    // no entry of its own, but a sibling of its category may be holding it down
+    bool viaCategory = false;
+    if (includeCategory && spellItr == m_cooldownMap.end() && spellEntry->Category)
+    {
+        spellItr = m_cooldownMap.FindByCategory(spellEntry->Category);
+        viaCategory = true;
+    }
+
     if (spellItr != m_cooldownMap.end())
     {
         auto& cdData = spellItr->second;
@@ -2216,7 +2225,9 @@ bool SpellCaster::GetExpireTime(SpellEntry const* spellEntry, TimePoint& expireT
 
         TimePoint spellExpireTime = TimePoint();
         TimePoint catExpireTime = TimePoint();
-        bool foundSpellCD = cdData->GetSpellCDExpireTime(spellExpireTime);
+        // the entry found through the category belongs to another spell: only its category
+        // recovery says anything about this one, its own spell cooldown says nothing at all
+        bool foundSpellCD = !viaCategory && cdData->GetSpellCDExpireTime(spellExpireTime);
         bool foundCatCD = cdData->GetCatCDExpireTime(catExpireTime);
         if (foundCatCD || foundSpellCD)
         {

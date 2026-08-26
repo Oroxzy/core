@@ -864,6 +864,17 @@ namespace
         uint32 id;                              // a mechanic (1..30) or a spell id (498 and up)
         int32 remaining;
         uint8 state;
+
+        /*
+         * Where in the row it belongs, 1..5, and 0 for the control effect, which has no row.
+         *
+         * The position used to be the arrival order, which was the same thing while every
+         * fighter sent all five. He no longer does - a Survival hunter has no Bestial Wrath - and
+         * without this the fourth icon would be Scatter Shot on one hunter's frame and Rapid Fire
+         * on the other's. The whole worth of a fixed order is that it survives being read fast,
+         * so the slot travels with the entry and the AddOn puts it where it says.
+         */
+        uint8 slot;
     };
 
     /*
@@ -903,6 +914,34 @@ namespace
      */
     void FindTrackedAuras(Player* player, std::vector<TrackedAura>& out)
     {
+        uint32 const* row = ClassRowFor(player->GetClass());
+
+        /*
+         * Everything his own row already reports, so the portrait does not repeat it.
+         *
+         * Ice Block and Blessing of Protection are immunities AND row cooldowns. Without this the
+         * same bubble goes out twice - once as a mechanic on the portrait, once as a spell in the
+         * row - and because an immunity outranks every real control effect below, it also buries
+         * the fear that is the reason anyone pressed it. The row keeps them; the portrait is for
+         * what is being done TO him.
+         */
+        std::set<uint32> ownRow;
+        if (row)
+        {
+            for (uint8 slot = 0; slot < 5; ++slot)
+            {
+                if (!row[slot])
+                    continue;
+
+                ownRow.insert(row[slot]);
+                std::vector<uint32> higher;
+                RankCollector collector{ &higher };
+                sSpellMgr.doForHighRanks(row[slot], collector);
+                for (uint32 id : higher)
+                    ownRow.insert(id);
+            }
+        }
+
         // the control effect first, if there is one - it goes on the portrait
         uint32 control = 0;
         int32 controlLeft = 0;
@@ -915,6 +954,9 @@ namespace
 
             SpellEntry const* info = holder->GetSpellProto();
             if (!info)
+                continue;
+
+            if (ownRow.find(info->Id) != ownRow.end())
                 continue;
 
             uint32 found = info->Mechanic;
@@ -946,11 +988,11 @@ namespace
             aura.id = control;
             aura.remaining = controlLeft;
             aura.state = ARENA_AURA_CONTROL;
+            aura.slot = 0;                      // the portrait, not the row
             out.push_back(aura);
         }
 
         // then his class's row, in order, all of it
-        uint32 const* row = ClassRowFor(player->GetClass());
         if (!row)
             return;
 
@@ -972,34 +1014,23 @@ namespace
             RankCollector collector{ &ranks };
             sSpellMgr.doForHighRanks(base, collector);
 
-            /*
-             * Only what he actually has.
-             *
-             * The row is per class, and a class is not a spec: Bestial Wrath is a Beast Mastery
-             * talent, so a Survival hunter would get an icon for a spell he can never press, and
-             * an icon that never changes is one the reader has to learn to ignore. HasSpell
-             * answers it exactly - talents, level, everything - and knowing any rank counts.
-             */
-            bool known = false;
-            for (uint32 id : ranks)
-            {
-                if (player->HasSpell(id))
-                {
-                    known = true;
-                    break;
-                }
-            }
-
-            if (!known)
-                continue;
-
             TrackedAura aura;
             aura.id = base;                     // always the first rank, so the AddOn keeps one icon
             aura.remaining = 0;
             aura.state = ARENA_AURA_READY;
+            aura.slot = slot + 1;
 
             bool decided = false;
 
+            /*
+             * Is it on him NOW - and this asks before anything else, without caring whether the
+             * spell is his.
+             *
+             * The aura is on him whoever cast it. Fear Ward is a dwarf priest's racial, cast on
+             * whoever is about to be feared, and the man wearing it often does not have it in his
+             * own spellbook at all. Deciding this after the "does he know it" gate hid the buff
+             * from every frame in the match, which is the one thing the row exists to prevent.
+             */
             for (uint32 id : ranks)
             {
                 if (SpellAuraHolder const* holder = player->GetSpellAuraHolder(id))
@@ -1009,6 +1040,55 @@ namespace
                     decided = true;
                     break;
                 }
+            }
+
+            /*
+             * ...or on his pet, for the ones that land there.
+             *
+             * Bestial Wrath is cast by the hunter and applies to the pet - implicit target 5 - so
+             * the hunter never carries the aura and the slot sat on READY through all eighteen
+             * seconds of it, which is exactly the window somebody reading the frames needs.
+             */
+            if (!decided)
+            {
+                if (Pet* pet = player->GetPet())
+                {
+                    for (uint32 id : ranks)
+                    {
+                        if (SpellAuraHolder const* holder = pet->GetSpellAuraHolder(id))
+                        {
+                            aura.remaining = holder->GetAuraDuration();
+                            aura.state = ARENA_AURA_RUNNING;
+                            decided = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            /*
+             * From here on, only what he actually has.
+             *
+             * The row is per class, and a class is not a spec: Bestial Wrath is a Beast Mastery
+             * talent, so a Survival hunter would get an icon for a spell he can never press, and
+             * one that never changes is one the eye learns to skip. HasSpell answers it exactly -
+             * talents, level, everything - and knowing any rank counts. It gates READY and
+             * COOLDOWN only: what is running on him is his business whoever gave it to him.
+             */
+            if (!decided)
+            {
+                bool known = false;
+                for (uint32 id : ranks)
+                {
+                    if (player->HasSpell(id))
+                    {
+                        known = true;
+                        break;
+                    }
+                }
+
+                if (!known)
+                    continue;
             }
 
             if (!decided && clearStart)
@@ -1021,7 +1101,9 @@ namespace
 
                     TimePoint expire;
                     bool permanent = false;
-                    if (!player->GetExpireTime(info, expire, permanent) || permanent)
+                    // true: a sibling of a shared category counts, see GetExpireTime. Shield Wall
+                    // puts Recklessness and Retaliation away too, and both used to read READY.
+                    if (!player->GetExpireTime(info, expire, permanent, true) || permanent)
                         continue;
 
                     auto const now = player->GetMap()->GetCurrentClockTime();
@@ -1219,7 +1301,7 @@ void Arena::PushFrameData(uint32 diff)
             std::ostringstream one;
             // a duration of -1 is permanent; the AddOn shows the icon without a countdown
             one << "," << found[i].id << "," << found[i].remaining
-                << "," << uint32(found[i].state);
+                << "," << uint32(found[i].state) << "," << uint32(found[i].slot);
 
             if (size_t(entry.tellp()) + one.str().size() > ARENA_FRAME_MAX_PAYLOAD)
                 break;
