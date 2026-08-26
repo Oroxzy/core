@@ -689,10 +689,34 @@ namespace
         return mechanic == MECHANIC_IMMUNE_SHIELD || mechanic == MECHANIC_INVULNERABILITY;
     }
 
+    /*
+     * The cooldowns the frames report.
+     *
+     * Every id was read out of the client's own Spell.dbc rather than remembered, and one of them
+     * came back wrong when it was: 12292 is Sweeping Strikes, not Death Wish, which is 12328.
+     *
+     * These are buffs, not mechanics, so unlike the control effects there is no way round naming
+     * them one by one - and that is survivable here because almost every big cooldown in 1.12 has
+     * exactly one rank, which is the thing that makes a spell id list rot everywhere else.
+     */
+    uint32 const ARENA_TRACKED_COOLDOWNS[] =
+    {
+        1719,  20230, 871,   12975, 12328, 12292,          // warrior
+        5277,  13877, 13750,                               // rogue
+        19263, 3045,  19574, 5384,                         // hunter
+        11958, 12051, 11129, 12042,                        // mage
+        14751, 6346,                                       // priest
+        642,   1020,  498,   5573,  1022,  20216,          // paladin
+        16188, 16166,                                      // shaman
+        22812, 17116, 29166,                               // druid
+        7744,  20589, 20594, 20600, 20554, 26296, 26297,   // racials
+    };
+
     struct TrackedAura
     {
-        uint32 mechanic;
+        uint32 id;                              // a mechanic (1..30) or a spell id (498 and up)
         int32 remaining;
+        bool onCooldown;                        // false: happening now. true: used, and this is the wait
     };
 
     // Two of them, and the frames have room for two beside the bar. The first version sent one
@@ -707,8 +731,9 @@ namespace
      * being unable to hurt him matters more than his being unable to move - and among equals the
      * one with the most time left wins, because that is the one still there when you reach him.
      */
-    void FindTrackedAuras(Player const* player, std::vector<TrackedAura>& out)
+    void FindTrackedAuras(Player* player, std::vector<TrackedAura>& out)
     {
+        // what is on him right now
         for (auto const& itr : player->GetSpellAuraHolderMap())
         {
             SpellAuraHolder const* holder = itr.second;
@@ -727,17 +752,74 @@ namespace
                 continue;
 
             TrackedAura aura;
-            aura.mechanic = found;
+            aura.id = found;
             aura.remaining = holder->GetAuraDuration();
+            aura.onCooldown = false;
             out.push_back(aura);
         }
 
+        /*
+         * And the big cooldowns: running, or waiting to come back.
+         *
+         * Nothing is reported for a spell that has not been used, which is the whole rule - the
+         * frames must never claim something nobody watched. Arena.ResetAllCooldowns defaults to
+         * true, so a match starts with every cooldown clear and one that is running was started
+         * HERE, in front of the people looking at it. With that switch off this would leak what
+         * happened outside, so it is checked rather than assumed.
+         */
+        bool const clearStart = sWorld.getConfig(CONFIG_BOOL_ARENA_RESET_ALL_COOLDOWNS);
+
+        for (uint32 spellId : ARENA_TRACKED_COOLDOWNS)
+        {
+            SpellEntry const* info = sSpellMgr.GetSpellEntry(spellId);
+            if (!info)
+                continue;
+
+            if (SpellAuraHolder const* holder = player->GetSpellAuraHolder(spellId))
+            {
+                TrackedAura aura;
+                aura.id = spellId;
+                aura.remaining = holder->GetAuraDuration();
+                aura.onCooldown = false;
+                out.push_back(aura);
+                continue;
+            }
+
+            if (!clearStart)
+                continue;
+
+            TimePoint expire;
+            bool permanent = false;
+            if (!player->GetExpireTime(info, expire, permanent) || permanent)
+                continue;
+
+            auto const now = player->GetMap()->GetCurrentClockTime();
+            if (expire <= now)
+                continue;
+
+            TrackedAura aura;
+            aura.id = spellId;
+            aura.remaining = int32(std::chrono::duration_cast<std::chrono::milliseconds>(expire - now).count());
+            aura.onCooldown = true;
+            out.push_back(aura);
+        }
+
+        /*
+         * What is happening beats what is merely waiting, immunity beats the rest, and among
+         * equals the one with the most time left wins - it is the one still there when you reach
+         * him. A permanent aura counts as the longest there is, not as the shortest, which is
+         * what a -1 would otherwise sort as.
+         */
         std::sort(out.begin(), out.end(), [](TrackedAura const& a, TrackedAura const& b)
         {
-            if (IsImmunityMechanic(a.mechanic) != IsImmunityMechanic(b.mechanic))
-                return IsImmunityMechanic(a.mechanic);
+            if (a.onCooldown != b.onCooldown)
+                return !a.onCooldown;
 
-            // a permanent aura counts as the longest there is, not the shortest
+            bool const ai = IsImmunityMechanic(a.id);
+            bool const bi = IsImmunityMechanic(b.id);
+            if (ai != bi)
+                return ai;
+
             if ((a.remaining < 0) != (b.remaining < 0))
                 return a.remaining < 0;
 
@@ -904,7 +986,8 @@ void Arena::PushFrameData(uint32 diff)
         std::ostringstream entry;
         entry << player->GetName();
         for (size_t i = 0; i < found.size(); ++i)
-            entry << "," << found[i].mechanic << "," << found[i].remaining;
+            entry << "," << found[i].id << "," << found[i].remaining
+                  << "," << (found[i].onCooldown ? 1 : 0);
 
         if (size_t(auras.tellp()) + entry.str().size() + 3 > ARENA_FRAME_MAX_PAYLOAD)
             break;

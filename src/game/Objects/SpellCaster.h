@@ -372,6 +372,9 @@ public:
     virtual void RemoveSpellCategoryCooldown(uint32 category, bool updateClient = true);
     virtual void RemoveAllCooldowns(bool /*sendOnly*/ = false) { m_GCDCatMap.clear(); m_cooldownMap.clear(); m_lockoutMap.clear(); }
     bool IsSpellReady(SpellEntry const* spellEntry, ItemPrototype const* itemProto = nullptr) const;
+    // Remaining cooldown of one spell. Public because the arena frames report it - see
+    // Arena::PushFrameData. A const getter, and it tells nothing its owner does not know.
+    bool GetExpireTime(SpellEntry const* spellEntry, TimePoint& expireTime, bool& isPermanent) const;
     bool IsSpellOnPermanentCooldown(SpellEntry const* spellEntry) const;
     virtual void LockOutSpells(SpellSchoolMask schoolMask, uint32 duration);
     void PrintCooldownList(ChatHandler& chat) const;
@@ -383,8 +386,6 @@ public:
 protected:
     explicit SpellCaster() = default;
 
-    // cooldown system
-    bool GetExpireTime(SpellEntry const* spellEntry, TimePoint& expireTime, bool& isPermanent) const;
 
     GCDMap            m_GCDCatMap;
     LockoutMap        m_lockoutMap;
