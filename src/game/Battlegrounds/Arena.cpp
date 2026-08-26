@@ -517,6 +517,7 @@ Arena::Arena()
     m_waterfallState = WATERFALL_OFF;
     m_underMapCheckTimer = 0;
     m_framePushTimer = 0;
+    m_frameNameTick = 0;
     m_castLineSent = false;
     m_leaverIsParticipant = false;
     m_spectatorsRemoved = false;
@@ -616,6 +617,7 @@ void Arena::Reset()
     m_waterfallState = WATERFALL_OFF;
     m_underMapCheckTimer = 0;
     m_framePushTimer = 0;
+    m_frameNameTick = 0;
     m_castLineSent = false;
     m_leaverIsParticipant = false;
     m_spectatorsRemoved = false;
@@ -1171,6 +1173,37 @@ void Arena::PushFrameData(uint32 diff)
     }
     m_framePushTimer = ARENA_FRAME_PUSH_INTERVAL;
 
+    /*
+     * THE NAMES, every twentieth push.
+     *
+     * The 1.12 client cannot look a spell id up - there is no GetSpellInfo, and GetSpellName only
+     * reaches the player's own spellbook, which is no use at all for an opponent's spells. So the
+     * AddOn has an id and nothing to call it, and the only way it gets a name for a tooltip is if
+     * the server spells it out. Same reason the cast bar carries its own name.
+     *
+     * What goes out is the union of every fighter's row, once, not per fighter: a name is a
+     * property of the spell, not of the man holding it, and half the rows are shared anyway.
+     * Localised per receiver like the cast line, with the same enUS fallback.
+     */
+    bool const sendNames = (m_frameNameTick++ % 20) == 0;
+    std::set<uint32> nameIds;
+    if (sendNames)
+    {
+        for (auto const& itr : GetPlayers())
+        {
+            Player* player = sObjectMgr.GetPlayer(itr.first);
+            if (!player)
+                continue;
+
+            uint32 const* row = ClassRowFor(player->GetClass());
+            RaceRacial const* racial = RacialFor(player->GetRace());
+
+            for (uint8 slot = 0; slot < 6; ++slot)
+                if (uint32 const id = RowSpell(row, racial, slot))
+                    nameIds.insert(id);
+        }
+    }
+
     std::ostringstream payload;
     payload << "a|";
 
@@ -1357,6 +1390,10 @@ void Arena::PushFrameData(uint32 diff)
             if (!receiver)
                 continue;
 
+            // his language, for the two lines that carry words: the names and the cast bar
+            LocaleConstant const locale = receiver->GetSession() ?
+                                          receiver->GetSession()->GetSessionDbcLocale() : LOCALE_enUS;
+
             SendArenaAddon(receiver, line);
 
             for (std::string const& line : auraLines)
@@ -1364,6 +1401,52 @@ void Arena::PushFrameData(uint32 diff)
 
             for (std::string const& line : drLines)
                 SendArenaAddon(receiver, line);
+
+            /*
+             * Batched up to the payload cap and never truncated in the middle of a name: a name
+             * that does not fit starts the next line instead of being cut in half, because half a
+             * name in a tooltip is worse than no tooltip.
+             */
+            if (!nameIds.empty())
+            {
+                std::ostringstream nameLine;
+                nameLine << "n|";
+                size_t written = 0;
+
+                for (uint32 id : nameIds)
+                {
+                    SpellEntry const* info = sSpellMgr.GetSpellEntry(id);
+                    if (!info)
+                        continue;
+
+                    std::string name = info->SpellName[locale].empty() ?
+                                       info->SpellName[LOCALE_enUS] : info->SpellName[locale];
+                    if (name.empty())
+                        continue;
+
+                    // a comma in a name would split the field, and the AddOn splits on commas
+                    std::replace(name.begin(), name.end(), ',', ' ');
+
+                    std::ostringstream one;
+                    one << id << "," << name << ",";
+
+                    if (size_t(nameLine.tellp()) + one.str().size() > ARENA_FRAME_MAX_PAYLOAD)
+                    {
+                        if (written)
+                            SendArenaAddon(receiver, nameLine.str());
+                        nameLine.str("");
+                        nameLine.clear();
+                        nameLine << "n|";
+                        written = 0;
+                    }
+
+                    nameLine << one.str();
+                    ++written;
+                }
+
+                if (written)
+                    SendArenaAddon(receiver, nameLine.str());
+            }
 
             if (casts.empty())
             {
@@ -1378,9 +1461,6 @@ void Arena::PushFrameData(uint32 diff)
              * where two watchers legitimately need different bytes. It costs nothing worth
              * counting: at most a couple of casters and a handful of watchers, twice a second.
              */
-            LocaleConstant const locale = receiver->GetSession() ?
-                                          receiver->GetSession()->GetSessionDbcLocale() : LOCALE_enUS;
-
             /*
              * Capped, because this is the one line that can run away.
              *

@@ -633,6 +633,16 @@ class Arena : public BattleGround
 
         uint32 m_underMapCheckTimer;
         uint32 m_framePushTimer;
+
+        /*
+         * Counts pushes, so the spell NAME table goes out every twentieth one - ten seconds.
+         *
+         * The names never change during a match, so sending them twice a second with everything
+         * else would be pure waste. They cannot be sent once at the start either: somebody who
+         * reloads mid-match, or a visitor who walks in late, would have icons and nothing to call
+         * them. Repeating slowly costs almost nothing and heals both cases by itself.
+         */
+        uint32 m_frameNameTick;
         bool m_castLineSent;                    // so the last cast can be cleared exactly once
 
         // teleports players that fell below the arena floor back to their team start location
