@@ -192,6 +192,21 @@ class SpellAuraHolder
         int32 GetAuraMaxDuration() const { return m_maxDuration; }
         void SetAuraMaxDuration(int32 duration);
         int32 GetAuraDuration() const { return m_duration; }
+
+        /*
+         * How long this really has left, heartbeat included.
+         *
+         * Long control on a player does not run its nominal length: patch 1.2 gave the victim an
+         * increasing chance to break free "such that it is unlikely the effect will last more
+         * than 15 seconds", and Update implements that with a random value rolled ONCE when the
+         * aura lands. Rolled once means the break time is already decided - so it can be solved
+         * for instead of waited for, and something that wants to show a countdown can show the
+         * one that will actually happen rather than the fifty seconds that will not.
+         *
+         * Equal to GetAuraDuration for everything without a heartbeat, which is everything short,
+         * everything permanent, and everything on a creature.
+         */
+        int32 GetEffectiveDuration() const;
         void SetAuraDuration(int32 duration) { m_duration = duration; };
 
         uint8 GetAuraSlot() const { return m_auraSlot; }

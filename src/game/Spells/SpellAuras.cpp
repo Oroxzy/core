@@ -7209,6 +7209,46 @@ SpellAuraHolder::~SpellAuraHolder()
     delete _pveHeartBeatData;
 }
 
+/*
+ * The heartbeat break time, solved rather than awaited.
+ *
+ * Update breaks the aura when its once-rolled random value r is reached by the logistic curve
+ *
+ *     v(t) = 100 / (1 + exp(coeff * (average - t)))
+ *
+ * so the break happens at the t where v(t) == r, which rearranges to
+ *
+ *     t = average - ln(100/r - 1) / coeff
+ *
+ * The same three constants are read from the same place the breaking code reads them, so the two
+ * cannot drift apart: change the curve and this follows it.
+ */
+int32 SpellAuraHolder::GetEffectiveDuration() const
+{
+    if (_heartBeatRandValue <= 0.0f || _heartBeatRandValue >= 100.0f || m_duration <= 0)
+        return m_duration;
+
+    float const diminishRate = GetDiminishingRate(m_AuraDRLevel);
+    float const averageBreakTime = 12.0f * diminishRate;
+    float const maxBreakTime = 15.0f * diminishRate;
+    static float const chanceBreakAtMax = 1.0f;
+    static float const chanceBreakAtMaxLog = log((100 - chanceBreakAtMax) / chanceBreakAtMax);
+    float const coeff = (1.0f / (maxBreakTime - averageBreakTime)) * chanceBreakAtMaxLog;
+
+    float const ratio = (100.0f / _heartBeatRandValue) - 1.0f;
+    if (ratio <= 0.0f)
+        return 0;
+
+    float const breakAt = averageBreakTime - (log(ratio) / coeff);
+    int32 const elapsed = m_maxDuration - m_duration;
+    int32 const untilBreak = int32(breakAt * 1000.0f) - elapsed;
+
+    if (untilBreak <= 0)
+        return 0;
+
+    return untilBreak < m_duration ? untilBreak : m_duration;
+}
+
 void SpellAuraHolder::Update(uint32 diff)
 {
     // Heartbeats for 2 different cases

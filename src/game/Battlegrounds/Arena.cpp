@@ -984,7 +984,9 @@ namespace
             if (!IsTrackedMechanic(found))
                 continue;
 
-            int32 const left = holder->GetAuraDuration();
+            // heartbeat included: a polymorph reports the ten seconds it will really last, not
+            // the fifty it nominally has - see SpellAuraHolder::GetEffectiveDuration
+            int32 const left = holder->GetEffectiveDuration();
 
             // immunity outranks control, and among equals the one with the most left on it: that
             // is the one still there when you reach him. A permanent aura counts as the longest.
@@ -1069,7 +1071,7 @@ namespace
                 {
                     if (SpellAuraHolder const* holder = player->GetSpellAuraHolder(id))
                     {
-                        aura.remaining = holder->GetAuraDuration();
+                        aura.remaining = holder->GetEffectiveDuration();
                         aura.total = uint32(holder->GetAuraMaxDuration()) / 100;
                         aura.state = ARENA_AURA_RUNNING;
                         decided = true;
@@ -1093,7 +1095,7 @@ namespace
                     {
                         if (SpellAuraHolder const* holder = pet->GetSpellAuraHolder(id))
                         {
-                            aura.remaining = holder->GetAuraDuration();
+                            aura.remaining = holder->GetEffectiveDuration();
                             aura.total = uint32(holder->GetAuraMaxDuration()) / 100;
                             aura.state = ARENA_AURA_RUNNING;
                             decided = true;
@@ -1642,7 +1644,7 @@ void Arena::PushFrameData(uint32 diff)
                                 continue;
                             if (candidate->GetSpellProto()->GetDiminishingReturnsGroup(false) != category.group)
                                 continue;
-                            if (!holder || candidate->GetAuraDuration() > holder->GetAuraDuration())
+                            if (!holder || candidate->GetEffectiveDuration() > holder->GetEffectiveDuration())
                                 holder = candidate;
                         }
 
@@ -1651,7 +1653,7 @@ void Arena::PushFrameData(uint32 diff)
                     }
 
                     if (holder)
-                        left = -holder->GetAuraDuration();
+                        left = -holder->GetEffectiveDuration();
                 }
 
                 uint32 const level = uint32(player->GetDiminishing(category.group));
