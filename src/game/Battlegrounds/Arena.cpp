@@ -2021,14 +2021,30 @@ void Arena::PushFrameData(uint32 diff)
                                           casts[i].spell->SpellName[LOCALE_enUS] :
                                           casts[i].spell->SpellName[locale];
 
-                if (castLine.tellp() + std::streamoff(name.size() + casts[i].caster.size() + 16)
+                // 22: four commas, two times in milliseconds, and the icon id
+                if (castLine.tellp() + std::streamoff(name.size() + casts[i].caster.size() + 22)
                     > std::streamoff(ARENA_FRAME_MAX_PAYLOAD))
                     break;
 
                 if (written)
                     castLine << ";";
+                /*
+                 * THE ICON ID RIDES WITH THE NAME, and it is the id from SpellIcon.dbc rather
+                 * than the spell's own.
+                 *
+                 * The bar had a question mark on it since the day it was written, and no amount
+                 * of client side work could have fixed that: 1.12 cannot look a foreign spell up
+                 * at all - no GetSpellInfo, and GetSpellName reaches only your own book. Which is
+                 * the same reason the NAME has to travel, and it has travelled from the start.
+                 *
+                 * The icon id and not the spell id, because the AddOn's table is then the whole
+                 * of SpellIcon.dbc - a thousand rows that cannot go stale. A spell-keyed table
+                 * would have to guess which spells get cast, and a guessed table is exactly how
+                 * Blind went missing from the cooldown row for weeks.
+                 */
                 castLine << casts[i].caster << "," << name << ","
-                         << casts[i].total << "," << casts[i].remaining;
+                         << casts[i].total << "," << casts[i].remaining
+                         << "," << casts[i].spell->SpellIconID;
                 ++written;
             }
 
