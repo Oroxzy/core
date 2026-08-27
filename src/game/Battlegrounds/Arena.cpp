@@ -42,6 +42,7 @@
 
 #include <sstream>
 #include <algorithm>
+#include <map>
 #include <set>
 
 INSTANTIATE_SINGLETON_1(ArenaMgr);
@@ -824,15 +825,35 @@ namespace
     uint32 const ARENA_ROW_MIN_COOLDOWN = 30 * IN_MILLISECONDS;
     uint32 const ARENA_ROW_MAX_COOLDOWN = 60 * MINUTE * IN_MILLISECONDS;
     /*
-     * Six, and the number comes from the wire rather than from taste.
+     * Eight, and the number is now arithmetic rather than habit.
      *
-     * A row entry is at worst 25 bytes - a five digit id, an hour in milliseconds, the state, the
-     * slot and the total in tenths - and one line carries the control effect ahead of them. Seven
-     * entries plus "b|" and a twelve character name is 189 against the 200 byte cap; eight would
-     * be 214 and the last spells would be silently dropped, which is exactly the fault the roster
-     * line was just fixed for.
+     * It was six, and six was blamed on the wire while the wire was innocent - the worst line any
+     * character on this server produced was 151 bytes against a 200 cap. Two things bought the
+     * other two slots, both below in EmitRowEntry: the countdown travels in TENTHS instead of
+     * milliseconds, and the row position went away because nothing on the far side ever read it.
+     * That took a worst entry from 25 bytes to 20.
+     *
+     * The budget, worst case, spelled out so the next person can check it rather than guess:
+     *
+     *     "b|" and a twelve character name                     14
+     *     the control entry, ",30167,36000,3,36000"            20
+     *     eight row entries at 20                             160
+     *                                                    ---------
+     *                                                         194  of 200
+     *
+     * Nine would be 214 and would not fit. If the row ever has to grow past eight, the honest way
+     * is a second message with a sequence number, not a bigger constant here.
+     *
+     * TWO INVARIANTS, and both have been broken before:
+     *
+     *     ARENA_FRAME_MAX_PAYLOAD >= 14 + (1 + ARENA_MAX_ROW_SPELLS) * 20
+     *     MAX_AURAS >= ARENA_MAX_ROW_SPELLS + MAX_ITEMS        (on the AddOn side)
+     *
+     * The second is the quiet one. The client fills spells first and gear afterwards out of one
+     * counter, so raising this without raising MAX_AURAS does not truncate the row - it eats his
+     * trinkets instead, silently, and only on the men wearing four.
      */
-    size_t const ARENA_MAX_ROW_SPELLS = 6;
+    size_t const ARENA_MAX_ROW_SPELLS = 8;
 
     uint32 SpellRowCooldown(SpellEntry const* info)
     {
@@ -840,6 +861,157 @@ namespace
                info->RecoveryTime : info->CategoryRecoveryTime;
     }
 
+    /*
+     * WHAT MATTERS MORE, when eight slots have to hold ten or thirteen things.
+     *
+     * The row used to be ordered by cooldown alone, longest first, on the reasoning that a long
+     * wait means a big effect. In 1.12 that is close to inverted, and the frames showed it: a
+     * warlock's first two icons were Ritual of Doom and Inferno - one of them needs five players
+     * and cannot physically be cast in a 3v3 - while Howl of Terror sat below the cut. A druid led
+     * with Tree Form. A mage's Counterspell, the single most important button he owns, has the
+     * SHORTEST cooldown of anything he can put here and sorted dead last of eleven.
+     *
+     * So the tier decides and the cooldown only breaks ties inside it. Read off the spell the same
+     * way everything else here is read off the man - by mechanic and effect, not by a list of ids
+     * somebody has to remember to update.
+     */
+    /*
+     * WHAT COMES FIRST, when eight slots have to hold ten or thirteen things.
+     *
+     * The row was ordered by cooldown alone, longest first, on the reasoning that a long wait
+     * means a big effect. In 1.12 that is close to inverted at the top and at the bottom both: a
+     * warlock led with Ritual of Doom, which needs five players and cannot physically be cast in a
+     * 3v3, and a druid led with Tree Form - while Counterspell, the single most important button a
+     * mage owns, has the SHORTEST cooldown of anything he can put here.
+     *
+     * The first attempt at a cure was eight tiers deep - immunity, control, mitigation, dispel,
+     * mobility, power, sustain, filler - scored off mechanics and auras. Measured against all nine
+     * classes it was NOT better than what it replaced. It called Vanish and Preparation filler
+     * because neither carries an aura that names what it does, ranked Blade Flurry above Vanish,
+     * and still cut Berserking. It moved the arbitrariness around rather than removing it.
+     *
+     * So: three tiers, and the middle one is simply "a spell". Cooldown still does the ordering,
+     * which is a rule anybody can check by looking; the tiers only lift the handful of things that
+     * decide a fight above it, and drop the handful that cannot happen in an arena below it.
+     */
+    enum RowPriority
+    {
+        ROW_PRIORITY_ELSEWHERE = 0,     // summons, shapeshifts, tracking: not in this fight
+        ROW_PRIORITY_NORMAL    = 1,     // a spell with a cooldown, which is most of them
+        ROW_PRIORITY_DECIDES   = 2,     // control, immunity, interrupt, and surviving the burst
+    };
+
+    bool HasAnyMechanic(SpellEntry const* info, bool (*test)(uint32))
+    {
+        if (test(info->Mechanic))
+            return true;
+
+        for (uint32 i = 0; i < MAX_EFFECT_INDEX; ++i)
+            if (test(info->EffectMechanic[i]))
+                return true;
+
+        return false;
+    }
+
+    uint32 SpellRowPriority(SpellEntry const* info)
+    {
+        /*
+         * THE ONES THAT DECIDE IT, and this question is asked FIRST so that nothing below can
+         * demote a control effect on a technicality - Earthbind's root is a persistent area aura
+         * like Hurricane is, and only the order of these two blocks keeps them apart.
+         *
+         * CONTROL is IsTrackedMechanic, the same question the diminishing half of this file
+         * already asks, so the two cannot drift apart on what counts as crowd control.
+         *
+         * IMMUNITY twice over: the MECHANIC catches Ice Block and Divine Shield, and the AURA
+         * catches the ones that are immune to only one thing - Fear Ward, Berserker Rage, Death
+         * Wish. Cooldown still orders them inside the tier, so a thirty second fear break sits
+         * below a half hour Shield Wall rather than above it, which is the trap the first draft
+         * fell into.
+         *
+         * MITIGATION because Shield Wall and Ice Barrier and Evasion are the answer to being
+         * trained, and being trained is how people die in a 1.12 arena. Reduce it, absorb it or
+         * dodge it. Barkskin is the one this cannot see: in this database its reduction is an
+         * ADD_FLAT_MODIFIER rather than a damage aura, so it stays an ordinary spell.
+         *
+         * INTERRUPT because a Counterspell at thirty seconds is worth more than anything a mage
+         * waits half an hour for, and the old sort put it dead last of eleven.
+         */
+        if (HasAnyMechanic(info, IsTrackedMechanic) ||
+            HasAnyMechanic(info, IsImmunityMechanic) ||
+            info->HasAura(SPELL_AURA_MOD_ROOT) ||
+            info->HasAura(SPELL_AURA_SCHOOL_IMMUNITY) ||
+            info->HasAura(SPELL_AURA_MECHANIC_IMMUNITY) ||
+            info->HasAura(SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN) ||
+            info->HasAura(SPELL_AURA_SCHOOL_ABSORB) ||
+            info->HasAura(SPELL_AURA_MOD_DODGE_PERCENT) ||
+            info->HasEffect(SPELL_EFFECT_INTERRUPT_CAST))
+            return ROW_PRIORITY_DECIDES;
+
+        /*
+         * Not in this fight.
+         *
+         * Three different effects summon things and the obvious one catches none of the three
+         * that mattered: Inferno is SUMMON_DEMON, Ritual of Doom and Lightwell are TRANS_DOOR.
+         * Ritual of Doom is the clearest case in the game for this tier existing - it requires
+         * five players and cannot physically be cast in a 3v3, and it was the warlock's FIRST
+         * icon. Totems are deliberately not here: they summon through the totem-slot effects and
+         * a Grounding Totem is very much in this fight.
+         *
+         * PERSISTENT_AREA_AURA is Hurricane and Volley, ground you stand outside of rather than a
+         * cooldown anybody plays around. Asked after control, because a root can be one too.
+         */
+        if (info->HasEffect(SPELL_EFFECT_SUMMON) ||
+            info->HasEffect(SPELL_EFFECT_SUMMON_DEMON) ||
+            info->HasEffect(SPELL_EFFECT_SUMMON_WILD) ||
+            info->HasEffect(SPELL_EFFECT_SUMMON_GUARDIAN) ||
+            info->HasEffect(SPELL_EFFECT_TRANS_DOOR) ||
+            info->HasEffect(SPELL_EFFECT_PERSISTENT_AREA_AURA) ||
+            info->HasAura(SPELL_AURA_MOD_SHAPESHIFT) ||
+            info->HasAura(SPELL_AURA_TRACK_CREATURES) ||
+            info->HasAura(SPELL_AURA_TRACK_RESOURCES))
+            return ROW_PRIORITY_ELSEWHERE;
+
+        return ROW_PRIORITY_NORMAL;
+    }
+
+    /*
+     * WHAT EARNS A PLACE IN HIS ROW.
+     *
+     * This used to be nine hand written lists of five, and hand written lists rot: the rogue row
+     * carried Blade Flurry at two minutes and not Blind at five, the warrior had no Intimidating
+     * Shout, the hunter no Readiness. Eight of the nine were missing something, and every one of
+     * those was somebody forgetting rather than deciding.
+     *
+     * So it is read off the man instead, the same way his gear is. The rules, each of them there
+     * to keep something specific out:
+     *
+     *   THIRTY SECONDS at the bottom. Not two minutes, which was the obvious threshold and would
+     *   have thrown away Counterspell - thirty seconds, and the single most important thing a
+     *   mage presses. A Kick at ten seconds would spend its life blinking and stays out.
+     *
+     *   AN HOUR at the top, which is where utility stops being a fight and starts being a
+     *   ceremony. Lay on Hands sits just under it and belongs; nothing above it does.
+     *
+     *   NOT PEACEFUL-ONLY. This is what keeps the six mage portals out, and they were the worst
+     *   of the noise - the client's own attribute says a spell cannot be cast in combat, so it
+     *   cannot matter in an arena. It also takes every hunter trap, which is a real loss and is
+     *   written down at the call site rather than pretended away.
+     *
+     *   NOT A RESURRECTION. Rebirth and Reincarnation are half an hour and an hour of nothing
+     *   anybody plays around.
+     *
+     *   NOT A TAUNT. A taunt cannot do anything to a player, and the old sort promoted them
+     *   anyway: Challenging Shout at ten minutes took a warrior's fourth slot and Mocking Blow his
+     *   sixth, while Challenging Roar took a druid's FIRST.
+     *
+     *   NOT PASSIVE, and not banned in this bracket - ArenaMgr already answers the second for the
+     *   cast check, so the frames ask the same question rather than holding a second opinion.
+     *
+     * Racials come through this by themselves: Will of the Forsaken and Blood Fury are two minute
+     * spells in his book like any other. Talents too, which is what a table could never do - the
+     * spell list in the world database does not know that this rogue took Preparation.
+     */
     bool WorthARowSlot(SpellEntry const* info, ArenaType type)
     {
         if (!info || info->IsPassiveSpell() || info->IsNonCombatSpell())
@@ -848,6 +1020,9 @@ namespace
         if (info->HasEffect(SPELL_EFFECT_RESURRECT) ||
             info->HasEffect(SPELL_EFFECT_SELF_RESURRECT) ||
             info->HasEffect(SPELL_EFFECT_RESURRECT_NEW))
+            return false;
+
+        if (info->HasEffect(SPELL_EFFECT_ATTACK_ME) || info->HasAura(SPELL_AURA_MOD_TAUNT))
             return false;
 
         uint32 const cooldown = SpellRowCooldown(info);
@@ -859,19 +1034,32 @@ namespace
     }
 
     /*
-     * His row, longest wait first.
+     * His row, what matters most first, one entry per ability.
      *
-     * Descending because the long ones are the ones a fight is planned around - a Shield Wall
-     * decides a whole opener in a way a thirty second interrupt does not - and because it puts
-     * the cut at the bottom, where the least is lost when somebody has more than eight.
+     * The order used to be the cooldown alone and that is what SpellRowPriority above replaces;
+     * the cooldown now only separates two spells of the same worth, longest first, because
+     * between two stuns the one he waits longer for is the one worth watching.
      *
-     * Only what his spellbook calls ACTIVE, which is how ranks sort themselves out: learning
-     * Vanish rank two marks rank one inactive, so the highest he has is the one that arrives and
-     * nothing has to walk a rank chain.
+     * ONE ENTRY PER ABILITY is the part that had to be learned twice. This used to trust the
+     * spellbook to sort ranks out by itself, on the grounds that learning rank two marks rank one
+     * inactive. That is true, and it is true for a FIFTH of the game: the flag is only ever
+     * written where SkillLineAbility names the successor, and 1241 of 6164 rows do. Sprint and
+     * Vanish are in that fifth, which is why the rogue looked correct and hid the fault for weeks.
+     *
+     * Everything else kept every rank, all of them active, all with the identical cooldown - and
+     * since the tie below breaks by ascending id, the LOWEST rank won the slot. A shaman's row was
+     * five Stoneclaw Totems, ranks one through five, and the rank six he actually casts was the
+     * one spell the cut threw away. A druid showed Tranquility three times and lost Bash and
+     * Barkskin for it; a hunter showed Volley three times.
+     *
+     * So the two are folded together here. The chain table covers precisely the families the
+     * successor field does not, and the successor field covers the ones the chain table has never
+     * heard of - Vanish has no chain rows at all. Neither alone is enough; both together close it.
      */
     void FindRowSpells(Player* player, ArenaType type, std::vector<uint32>& out)
     {
-        std::vector<std::pair<uint32, uint32>> found;    // cooldown, spell
+        // keyed by the family's first rank, so every chain contributes exactly one icon
+        std::map<uint32, std::pair<uint32, uint32>> best;    // family -> cooldown, spell
 
         for (auto const& itr : player->GetSpellMap())
         {
@@ -883,23 +1071,65 @@ namespace
             if (!WorthARowSlot(info, type))
                 continue;
 
-            found.push_back({ SpellRowCooldown(info), itr.first });
+            uint32 const family = sSpellMgr.GetFirstSpellInChain(itr.first);
+            uint32 const cooldown = SpellRowCooldown(info);
+
+            auto const seen = best.find(family);
+            if (seen == best.end())
+            {
+                best[family] = std::make_pair(cooldown, itr.first);
+                continue;
+            }
+
+            /*
+             * Which rank represents the family: the one he presses, which is the highest he has.
+             * A longer wait wins outright first, because a few chains lengthen with rank and the
+             * frame should promise the wait he will actually sit through.
+             */
+            if (cooldown > seen->second.first ||
+                (cooldown == seen->second.first &&
+                 sSpellMgr.GetSpellRank(itr.first) > sSpellMgr.GetSpellRank(seen->second.second)))
+                seen->second = std::make_pair(cooldown, itr.first);
+        }
+
+        struct RowCandidate
+        {
+            uint32 priority;
+            uint32 cooldown;
+            uint32 spell;
+        };
+
+        std::vector<RowCandidate> found;
+        found.reserve(best.size());
+        for (auto const& one : best)
+        {
+            SpellEntry const* info = sSpellMgr.GetSpellEntry(one.second.second);
+            if (!info)
+                continue;
+
+            RowCandidate candidate;
+            candidate.priority = SpellRowPriority(info);
+            candidate.cooldown = one.second.first;
+            candidate.spell    = one.second.second;
+            found.push_back(candidate);
         }
 
         std::sort(found.begin(), found.end(),
-                  [](std::pair<uint32, uint32> const& a, std::pair<uint32, uint32> const& b)
+                  [](RowCandidate const& a, RowCandidate const& b)
                   {
-                      // the id breaks ties, so the order is the same on every frame every push
-                      if (a.first != b.first)
-                          return a.first > b.first;
-                      return a.second < b.second;
+                      if (a.priority != b.priority)
+                          return a.priority > b.priority;
+                      if (a.cooldown != b.cooldown)
+                          return a.cooldown > b.cooldown;
+                      // the id breaks the last tie, so the order is the same every push
+                      return a.spell < b.spell;
                   });
 
         for (auto const& one : found)
         {
             if (out.size() >= ARENA_MAX_ROW_SPELLS)
                 break;
-            out.push_back(one.second);
+            out.push_back(one.spell);
         }
     }
 
@@ -1006,10 +1236,13 @@ namespace
             uint32 const base = rowSpells[slot];
 
             /*
-             * One id, not a rank chain. The spellbook already answered which rank he has - it
-             * marks the superseded ones inactive - so this is the one he can actually press, and
-             * the walk that used to be needed here is gone with the hand written list that
-             * needed it.
+             * One id, not a rank chain, and now that is actually earned. FindRowSpells folds each
+             * family down to the single rank he presses, using the chain table where the
+             * spellbook's inactive flag is not written - which is four times out of five.
+             *
+             * Safe for the reading below: every family that collapses shares one spell category
+             * across all its ranks, and GetExpireTime is asked with the category flag set, so the
+             * wait comes back the same whichever rank went on the wire.
              */
             std::vector<uint32> ranks;
             ranks.push_back(base);
@@ -1477,10 +1710,25 @@ void Arena::PushFrameData(uint32 diff)
 
         for (size_t i = 0; i < found.size(); ++i)
         {
+            /*
+             * FOUR fields, and both of the savings are here.
+             *
+             * The countdown goes in TENTHS. An hour in milliseconds is seven digits and in tenths
+             * it is five, and the AddOn never drew finer than a tenth anyway - FormatTime stops at
+             * one decimal below ten seconds and whole seconds above it. A permanent aura still
+             * travels as -1 and must not be divided into a 0, which would turn "forever" into
+             * "gone" on every immunity on screen.
+             *
+             * The row position is gone. It was added so the fourth icon would mean the same thing
+             * on two different hunters, and then the AddOn packed the icons by arrival order
+             * anyway and never read the field once in three thousand lines. The order it wanted is
+             * a property of the SORT, which is deterministic to the last tie - not of a number
+             * riding along beside it.
+             */
             std::ostringstream one;
-            // a duration of -1 is permanent; the AddOn shows the icon without a countdown
-            one << "," << found[i].id << "," << found[i].remaining
-                << "," << uint32(found[i].state) << "," << uint32(found[i].slot)
+            one << "," << found[i].id
+                << "," << (found[i].remaining < 0 ? -1 : found[i].remaining / 100)
+                << "," << uint32(found[i].state)
                 << "," << found[i].total;
 
             if (size_t(entry.tellp()) + one.str().size() > ARENA_FRAME_MAX_PAYLOAD)
