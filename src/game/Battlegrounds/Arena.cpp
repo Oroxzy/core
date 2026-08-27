@@ -694,117 +694,6 @@ namespace
     }
 
     /*
-     * FIRST RANKS in the rows below. Every other rank is worked out from them at the point of use.
-     *
-     * This is the hole a hand written id list always falls into, and it was open: Kick is 1766,
-     * 1767, 1768 and 1769, Shield Bash is 72, 1671 and 1672, and Earth Shock has seven. A rogue
-     * with rank four Kick on cooldown matched nothing at all against a list holding rank one.
-     * Pummel showed how badly guessing goes - 8380, the obvious next id, is Sunder Armor.
-     *
-     * So the ranks are not typed. sSpellMgr walks the chain forward from each first rank, and
-     * what goes on the wire is always that first rank - so the AddOn's icon table needs one entry
-     * per spell rather than one per rank.
-     *
-     * Every id was read out of the client's own Spell.dbc rather than remembered, and one of them
-     * came back wrong when it was: 12292 is Sweeping Strikes, not Death Wish, which is 12328.
-     *
-     * THE ROW: what each class always shows, in this order, whatever its state.
-     *
-     * Five slots at most and only long cooldowns - a ten second Kick and a six second Earth Shock
-     * would spend their lives blinking, and a row that blinks is a row nobody reads. Counterspell
-     * at thirty seconds and Silence at forty-five are in because those are the ones a caster
-     * counts.
-     *
-     * Fixed ORDER matters as much as the contents. The point of always showing them is that the
-     * third icon is always the same spell, so it can be read by position without looking at it -
-     * which stops working the moment the row is sorted by what happens to be running.
-     */
-    struct ClassRow
-    {
-        uint8 classId;
-        uint32 spells[5];
-    };
-
-    ClassRow const ARENA_CLASS_ROWS[] =
-    {
-        {  1, { 871,   1719,  20230, 12328, 18499 } },   // warrior
-        {  2, { 642,   1022,  498,   20216, 0     } },   // paladin
-        {  3, { 19263, 5384,  19503, 3045,  19574 } },   // hunter
-        {  4, { 5277,  1856,  13877, 13750, 14185 } },   // rogue
-        {  5, { 15487, 14751, 6346,  0,     0     } },   // priest
-        {  7, { 16188, 16166, 0,     0,     0     } },   // shaman
-        {  8, { 11958, 2139,  12051, 12472, 12042 } },   // mage
-        {  9, { 6789,  6229,  0,     0,     0     } },   // warlock
-        { 11, { 22812, 17116, 29166, 0,     0     } },   // druid
-    };
-
-    uint32 const* ClassRowFor(uint8 classId)
-    {
-        for (ClassRow const& row : ARENA_CLASS_ROWS)
-            if (row.classId == classId)
-                return row.spells;
-        return nullptr;
-    }
-
-    /*
-     * SLOT SIX: his race, which is a row of its own for a good reason.
-     *
-     * A racial does not fit the class rows - it cuts across them - and it is exactly the kind of
-     * thing an arena player needs to know is down: Will of the Forsaken decides whether a fear
-     * lands at all, War Stomp is a two second stun nobody sees coming, Escape Artist walks out of
-     * a root. Giving them a fixed slot of their own keeps the class row read by position and puts
-     * the racial in the same place on every frame regardless of class.
-     *
-     * Only the ones with a cooldown worth a slot. Shadowmeld's is ten seconds, which is the same
-     * rule that keeps a ten second Kick out of the class rows: at that length it would spend its
-     * life blinking. The passive racials - Hardiness, Quickness, the resistances - have nothing
-     * to count down at all. Night elves therefore have no slot six, and that is not an oversight.
-     *
-     * ALTERNATES exist because Berserking is three separate spell ids rather than a rank chain:
-     * 20554, 26296 and 26297, all named Berserking, all icon 1661, and a troll knows exactly one
-     * of them. doForHighRanks cannot answer which, so all three are asked and whichever he has
-     * reports under the first, which is the id the AddOn draws.
-     *
-     * Every id and every icon came out of the world database and the client's own SpellIcon.dbc,
-     * not from memory - the one time this list was typed it put Sweeping Strikes in for Death
-     * Wish.
-     */
-    struct RaceRacial
-    {
-        uint8  raceId;
-        uint32 id;                              // what goes on the wire, and what the AddOn draws
-        uint32 alternates[2];                   // the same ability under another id, or 0
-    };
-
-    RaceRacial const ARENA_RACE_ROW[] =
-    {
-        { RACE_HUMAN,  20600, { 0,     0     } },   // Perception,           180s
-        { RACE_ORC,    20572, { 0,     0     } },   // Blood Fury,           120s
-        { RACE_DWARF,  20594, { 0,     0     } },   // Stoneform,            180s
-        { RACE_UNDEAD,  7744, { 0,     0     } },   // Will of the Forsaken, 120s
-        { RACE_TAUREN, 20549, { 0,     0     } },   // War Stomp,            120s
-        { RACE_GNOME,  20589, { 0,     0     } },   // Escape Artist,         60s
-        { RACE_TROLL,  20554, { 26296, 26297 } },   // Berserking,           180s
-    };
-
-    RaceRacial const* RacialFor(uint8 raceId)
-    {
-        for (RaceRacial const& racial : ARENA_RACE_ROW)
-            if (racial.raceId == raceId)
-                return &racial;
-        return nullptr;
-    }
-
-    // slots one to five are his class's, slot six is his race's
-    uint32 RowSpell(uint32 const* row, RaceRacial const* racial, uint8 slot)
-    {
-        if (slot < 5)
-            return row ? row[slot] : 0;
-
-        return racial ? racial->id : 0;
-    }
-
-    /*
      * DIMINISHING RETURNS, when Arena.FrameDiminishing is on.
      *
      * Five categories in a fixed order, for the same reason the cooldown row is fixed: the second
@@ -844,12 +733,6 @@ namespace
         { DIMINISHING_WARLOCK_FEAR, 6 },
         { DIMINISHING_KIDNEYSHOT,   7 },
         { DIMINISHING_FREEZE,       8 },
-    };
-
-    struct RankCollector
-    {
-        std::vector<uint32>* out;
-        void operator()(uint32 spellId) { out->push_back(spellId); }
     };
 
     enum ArenaAuraState
@@ -906,10 +789,122 @@ namespace
      *
      * Only what his class actually has. A warrior has no line in the mage row and never gets one.
      */
-    void FindTrackedAuras(Player* player, std::vector<TrackedAura>& out)
-    {
-        uint32 const* row = ClassRowFor(player->GetClass());
+    /*
+     * WHAT EARNS A PLACE IN HIS ROW.
+     *
+     * This used to be nine hand written lists of five, and hand written lists rot: the rogue row
+     * carried Blade Flurry at two minutes and not Blind at five, the warrior had no Intimidating
+     * Shout, the hunter no Readiness. Eight of the nine were missing something, and every one of
+     * those was somebody forgetting rather than deciding.
+     *
+     * So it is read off the man instead, the same way his gear is. The rules, each of them there
+     * to keep something specific out:
+     *
+     *   THIRTY SECONDS at the bottom. Not two minutes, which was the obvious threshold and would
+     *   have thrown away Counterspell - thirty seconds, and the single most important thing a
+     *   mage presses. A Kick at ten seconds would spend its life blinking and stays out.
+     *
+     *   AN HOUR at the top, which is where utility stops being a fight and starts being a
+     *   ceremony. Lay on Hands sits just under it and belongs; nothing above it does.
+     *
+     *   NOT PEACEFUL-ONLY. This is what keeps the six mage portals out, and they were the worst
+     *   of the noise - the client's own attribute says a spell cannot be cast in combat, so it
+     *   cannot matter in an arena.
+     *
+     *   NOT A RESURRECTION. Rebirth and Reincarnation are half an hour and an hour of nothing
+     *   anybody plays around.
+     *
+     *   NOT PASSIVE, and not banned in this bracket - ArenaMgr already answers the second for the
+     *   cast check, so the frames ask the same question rather than holding a second opinion.
+     *
+     * Racials come through this by themselves: Will of the Forsaken and Blood Fury are two minute
+     * spells in his book like any other. Talents too, which is what a table could never do - the
+     * spell list in the world database does not know that this rogue took Preparation.
+     */
+    uint32 const ARENA_ROW_MIN_COOLDOWN = 30 * IN_MILLISECONDS;
+    uint32 const ARENA_ROW_MAX_COOLDOWN = 60 * MINUTE * IN_MILLISECONDS;
+    /*
+     * Six, and the number comes from the wire rather than from taste.
+     *
+     * A row entry is at worst 25 bytes - a five digit id, an hour in milliseconds, the state, the
+     * slot and the total in tenths - and one line carries the control effect ahead of them. Seven
+     * entries plus "b|" and a twelve character name is 189 against the 200 byte cap; eight would
+     * be 214 and the last spells would be silently dropped, which is exactly the fault the roster
+     * line was just fixed for.
+     */
+    size_t const ARENA_MAX_ROW_SPELLS = 6;
 
+    uint32 SpellRowCooldown(SpellEntry const* info)
+    {
+        return info->RecoveryTime > info->CategoryRecoveryTime ?
+               info->RecoveryTime : info->CategoryRecoveryTime;
+    }
+
+    bool WorthARowSlot(SpellEntry const* info, ArenaType type)
+    {
+        if (!info || info->IsPassiveSpell() || info->IsNonCombatSpell())
+            return false;
+
+        if (info->HasEffect(SPELL_EFFECT_RESURRECT) ||
+            info->HasEffect(SPELL_EFFECT_SELF_RESURRECT) ||
+            info->HasEffect(SPELL_EFFECT_RESURRECT_NEW))
+            return false;
+
+        uint32 const cooldown = SpellRowCooldown(info);
+        if (cooldown < ARENA_ROW_MIN_COOLDOWN || cooldown > ARENA_ROW_MAX_COOLDOWN)
+            return false;
+
+        // banned here means he cannot press it, and an icon for that is a lie
+        return !sArenaMgr.IsSpellDisabled(info->Id, type, false);
+    }
+
+    /*
+     * His row, longest wait first.
+     *
+     * Descending because the long ones are the ones a fight is planned around - a Shield Wall
+     * decides a whole opener in a way a thirty second interrupt does not - and because it puts
+     * the cut at the bottom, where the least is lost when somebody has more than eight.
+     *
+     * Only what his spellbook calls ACTIVE, which is how ranks sort themselves out: learning
+     * Vanish rank two marks rank one inactive, so the highest he has is the one that arrives and
+     * nothing has to walk a rank chain.
+     */
+    void FindRowSpells(Player* player, ArenaType type, std::vector<uint32>& out)
+    {
+        std::vector<std::pair<uint32, uint32>> found;    // cooldown, spell
+
+        for (auto const& itr : player->GetSpellMap())
+        {
+            PlayerSpell const& known = itr.second;
+            if (known.state == PLAYERSPELL_REMOVED || known.disabled || !known.active)
+                continue;
+
+            SpellEntry const* info = sSpellMgr.GetSpellEntry(itr.first);
+            if (!WorthARowSlot(info, type))
+                continue;
+
+            found.push_back({ SpellRowCooldown(info), itr.first });
+        }
+
+        std::sort(found.begin(), found.end(),
+                  [](std::pair<uint32, uint32> const& a, std::pair<uint32, uint32> const& b)
+                  {
+                      // the id breaks ties, so the order is the same on every frame every push
+                      if (a.first != b.first)
+                          return a.first > b.first;
+                      return a.second < b.second;
+                  });
+
+        for (auto const& one : found)
+        {
+            if (out.size() >= ARENA_MAX_ROW_SPELLS)
+                break;
+            out.push_back(one.second);
+        }
+    }
+
+    void FindTrackedAuras(Player* player, ArenaType type, std::vector<TrackedAura>& out)
+    {
         /*
          * Everything his own row already reports, so the portrait does not repeat it.
          *
@@ -922,14 +917,13 @@ namespace
          * and it is the same entry that stays behind afterwards to count the wait down, where the
          * mechanic would simply vanish with the aura. The portrait is for what is done TO him.
          */
-        RaceRacial const* racial = RacialFor(player->GetRace());
+        std::vector<uint32> rowSpells;
+        FindRowSpells(player, type, rowSpells);
 
         std::set<uint32> ownRow;
-        for (uint8 slot = 0; slot < 6; ++slot)
+        for (size_t slot = 0; slot < rowSpells.size(); ++slot)
         {
-            uint32 const base = RowSpell(row, racial, slot);
-            if (!base)
-                continue;
+            uint32 const base = rowSpells[slot];
 
             /*
              * ONLY the ones that land on him.
@@ -948,16 +942,6 @@ namespace
                 continue;
 
             ownRow.insert(base);
-            std::vector<uint32> higher;
-            RankCollector collector{ &higher };
-            sSpellMgr.doForHighRanks(base, collector);
-            for (uint32 id : higher)
-                ownRow.insert(id);
-
-            if (slot == 5 && racial)
-                for (uint32 alt : racial->alternates)
-                    if (alt)
-                        ownRow.insert(alt);
         }
 
         // the control effect first, if there is one - it goes on the portrait
@@ -1013,37 +997,28 @@ namespace
             out.push_back(aura);
         }
 
-        // then his class's row, in order, all of it, and his racial after it
+        // his own spells, longest wait first, however many of them he has
 
         bool const clearStart = sWorld.getConfig(CONFIG_BOOL_ARENA_RESET_ALL_COOLDOWNS);
 
-        for (uint8 slot = 0; slot < 6; ++slot)
+        for (size_t slot = 0; slot < rowSpells.size(); ++slot)
         {
-            uint32 const base = RowSpell(row, racial, slot);
-            if (!base)
-                continue;
+            uint32 const base = rowSpells[slot];
 
             /*
-             * Any rank of it. Kick is four ids and Earth Shock is seven, so the ranks are walked
-             * rather than typed - a player with rank four of something matched nothing at all
-             * while this compared against rank one.
+             * One id, not a rank chain. The spellbook already answered which rank he has - it
+             * marks the superseded ones inactive - so this is the one he can actually press, and
+             * the walk that used to be needed here is gone with the hand written list that
+             * needed it.
              */
             std::vector<uint32> ranks;
             ranks.push_back(base);
-            RankCollector collector{ &ranks };
-            sSpellMgr.doForHighRanks(base, collector);
-
-            // and Berserking's other two ids, which are not ranks of anything, see ARENA_RACE_ROW
-            if (slot == 5 && racial)
-                for (uint32 alt : racial->alternates)
-                    if (alt)
-                        ranks.push_back(alt);
 
             TrackedAura aura;
             aura.id = base;                     // always the first rank, so the AddOn keeps one icon
             aura.remaining = 0;
             aura.state = ARENA_AURA_READY;
-            aura.slot = slot + 1;
+            aura.slot = uint8(slot + 1);
             aura.total = 0;
 
             bool decided = false;
@@ -1103,31 +1078,6 @@ namespace
                         }
                     }
                 }
-            }
-
-            /*
-             * From here on, only what he actually has.
-             *
-             * The row is per class, and a class is not a spec: Bestial Wrath is a Beast Mastery
-             * talent, so a Survival hunter would get an icon for a spell he can never press, and
-             * one that never changes is one the eye learns to skip. HasSpell answers it exactly -
-             * talents, level, everything - and knowing any rank counts. It gates READY and
-             * COOLDOWN only: what is running on him is his business whoever gave it to him.
-             */
-            if (!decided)
-            {
-                bool known = false;
-                for (uint32 id : ranks)
-                {
-                    if (player->HasSpell(id))
-                    {
-                        known = true;
-                        break;
-                    }
-                }
-
-                if (!known)
-                    continue;
             }
 
             if (!decided && clearStart)
@@ -1347,7 +1297,6 @@ void Arena::PushFrameData(uint32 diff)
         return fighter->IsVisibleForOrDetect(receiver, receiver, false);
     };
 
-
     /*
      * THE NAMES, every twentieth push.
      *
@@ -1375,20 +1324,24 @@ void Arena::PushFrameData(uint32 diff)
         m_frameNamesSent.clear();
         m_frameSpecCache.clear();
 
-        static std::set<uint32> const allRowIds = []()
+        /*
+         * Every id any fighter's row could hold, which is now whatever they actually know rather
+         * than a fixed table - so it is gathered from them. The union across BOTH sides says
+         * nothing about who is stealthed: it is the same set whether he is visible or not, since
+         * every fighter contributes his own regardless.
+         */
+        for (auto const& itr : GetPlayers())
         {
-            std::set<uint32> out;
-            for (ClassRow const& row : ARENA_CLASS_ROWS)
-                for (uint8 slot = 0; slot < 5; ++slot)
-                    if (row.spells[slot])
-                        out.insert(row.spells[slot]);
-            for (RaceRacial const& racial : ARENA_RACE_ROW)
-                out.insert(racial.id);
-            return out;
-        }();
-        nameIds = allRowIds;
-    }
+            Player* player = sObjectMgr.GetPlayer(itr.first);
+            if (!player)
+                continue;
 
+            std::vector<uint32> theirs;
+            FindRowSpells(player, GetArenaType(), theirs);
+            for (uint32 id : theirs)
+                nameIds.insert(id);
+        }
+    }
 
     std::vector<FighterLine> unitEntries;
     for (auto const& itr : GetPlayers())
@@ -1517,7 +1470,7 @@ void Arena::PushFrameData(uint32 diff)
             continue;
 
         std::vector<TrackedAura> found;
-        FindTrackedAuras(player, found);
+        FindTrackedAuras(player, GetArenaType(), found);
 
         std::ostringstream entry;
         entry << "b|" << player->GetName();
@@ -1657,7 +1610,6 @@ void Arena::PushFrameData(uint32 diff)
                 }
 
                 uint32 const level = uint32(player->GetDiminishing(category.group));
-
 
                 /*
                  * Measured like every other line here.
