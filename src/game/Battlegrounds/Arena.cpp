@@ -1583,12 +1583,18 @@ void Arena::PushFrameData(uint32 diff)
         if (!player)
             continue;
 
+        /*
+         * CURRENT AND MAXIMUM, not a percentage. The AddOn shows "2719/2832" on the bar the way
+         * the default frames do, and a percentage cannot be turned back into that. Four numbers
+         * instead of two costs about twelve bytes on a line that is nowhere near its cap, and
+         * the client derives the percent for the bar fill itself.
+         */
         uint32 const maxHealth = player->GetMaxHealth();
-        uint32 const health = maxHealth ? uint32((uint64(player->GetHealth()) * 100) / maxHealth) : 0;
+        uint32 const health = player->GetHealth();
 
         Powers const powerType = player->GetPowerType();
         uint32 const maxPower = player->GetMaxPower(powerType);
-        uint32 const power = maxPower ? uint32((uint64(player->GetPower(powerType)) * 100) / maxPower) : 0;
+        uint32 const power = player->GetPower(powerType);
 
         /*
          * ONE LINE PER FIGHTER, like every other per-fighter line here - because one line for the
@@ -1616,8 +1622,8 @@ void Arena::PushFrameData(uint32 diff)
         one << "a|" << player->GetName() << ","
             << uint32(player->GetClass()) << ","
             << (player->GetBGTeam() == ALLIANCE ? 0 : 1) << ","
-            << health << ","
-            << power << ","
+            << health << "," << maxHealth << ","
+            << power << "," << maxPower << ","
             << uint32(powerType) << ","
             << (player->IsAlive() ? 0 : 1) << ","
             << spec;
