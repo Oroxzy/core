@@ -308,7 +308,38 @@ void ChargeMovementGenerator<T>::ComputePath(T& attacker, Unit& victim)
 
         if (victimPlayer->ExtrapolateMovement(victimPlayer->m_movementInfo, m_extrapolateDelay, victimPos.x, victimPos.y, victimPos.z, o))
         {
+            float const predictedZ = victimPos.z;
             victim.UpdateAllowedPositionZ(victimPos.x, victimPos.y, victimPos.z);
+
+            /*
+             * A PREDICTION THAT SAYS HE IS ABOUT TO LEAVE THE WORLD IS NOT A PREDICTION.
+             *
+             * The extrapolation walks him forward along his heading and then asks the map how high
+             * the ground is where he lands (Unit::ExtrapolateMovement, the GetHeight call). That is
+             * a vertical ray, and the Blade's Edge ropes are four tenths of a yard wide with the
+             * lower fight floor nine and a half yards beneath them: two degrees of heading error
+             * over two yards of lead is enough for the ray to miss the rope and answer with the
+             * floor. What comes back is then not a guess about where he is going, it is a different
+             * place entirely - and the whole charge is built to it. That is a warrior landing under
+             * the rope instead of on it, with no error anywhere and a perfectly normal path.
+             *
+             * Only DOWNWARD, and only when it is large. The ray may look two yards up
+             * (GridMap: z + 2) so a correction upwards is bounded by construction, while a drop
+             * falls back to a ten thousand yard search and is not bounded at all. Measured on this
+             * geometry the largest honest correction is the rope's own sag at 0.64 yards, and the
+             * step at the Ruins of Lordaeron tomb - the case UpdateForMelee's clamp was written
+             * for - is 1.15. Two yards sits above both and far below the 9.6 yard failure.
+             *
+             * Both halves of the test earn their place: predictedZ catches the snap inside the
+             * extrapolation, the second catches the same snap from UpdateAllowedPositionZ on the
+             * paths that skip it (jumping, falling, swimming). Guarding one leaves the other live.
+             *
+             * Not fixed inside ExtrapolateMovement: four other callers want its raw answer, the
+             * anticheat above all.
+             */
+            if (predictedZ < victim.GetPositionZ() - 2.0f || victimPos.z < victim.GetPositionZ() - 2.0f)
+                victim.GetPosition(victimPos.x, victimPos.y, victimPos.z);
+
             path.calculate(victimPos.x, victimPos.y, victimPos.z, m_forceDestination);
             path.UpdateForMelee(&victim, m_meleeReach);
         }
