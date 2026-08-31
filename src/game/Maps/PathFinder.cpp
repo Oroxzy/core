@@ -1103,6 +1103,7 @@ bool PathInfo::UpdateForMelee(Unit* pTarget, float meleeReach)
             float targetDist = pTarget->GetDistance(m_pathPoints[i - 1].x, m_pathPoints[i - 1].y, m_pathPoints[i - 1].z, SizeFactor::None);
             targetDist -= meleeReach;
             float directionLength = sqrt(dirVect.squaredLength());
+            Vector3 const meshPoint = m_pathPoints[i];      // what the navmesh actually offered here
             m_pathPoints[i] = m_pathPoints[i - 1] + dirVect * targetDist / directionLength;
             /*
              * And back onto the ground, the way BuildPointPath treats every other point of the path.
@@ -1114,6 +1115,26 @@ bool PathInfo::UpdateForMelee(Unit* pTarget, float meleeReach)
              * building with the terrain punched out beneath it, downwards is a long way.
              */
             m_sourceUnit->UpdateAllowedPositionZ(m_pathPoints[i].x, m_pathPoints[i].y, m_pathPoints[i].z);
+
+            /*
+             * AND NOT ACROSS A CHASM. When the segment being trimmed is an off-mesh link - the
+             * Blade's Edge ropes are one, deck to pillar with nine and a half yards of air under
+             * them - the straight line from the previous point toward the target hangs over the
+             * void, and the ground query above has nothing to find but the floor of the pit. The
+             * grounding is then not a correction, it is a relocation: the charge is built to a
+             * point far beneath everyone involved, with no error raised anywhere.
+             *
+             * The tell is the size of the drop. Trimming on honest ground moves the point down by
+             * fractions of a yard - the largest measured on the rope's own sag is 0.64, the
+             * Lordaeron tomb step this clamp was written for is 1.15. A drop past two yards means
+             * the query answered about a DIFFERENT surface, and the navmesh point this trim
+             * replaced is the better destination: it was grounded by BuildPointPath, it lies on
+             * the target's side of the gap, and ending a charge on it is at worst a step short -
+             * never a storey down.
+             */
+            if (meshPoint.z - m_pathPoints[i].z > 2.0f)
+                m_pathPoints[i] = meshPoint;
+
             m_pathPoints.resize(i + 1);
             return false;
         }
