@@ -522,6 +522,25 @@ Arena::Arena()
     m_frameNamesSent.clear();
     m_frameSpecCache.clear();
     m_castLineSent = false;
+
+    /*
+     * HERE, at the two points that begin a match, and NOT beside the other m_frameSpecCache
+     * clear inside PushFrameData's slow name tick - that one fires every ten seconds and would
+     * wipe the log all match long. The constructor and Reset are textually identical and both
+     * are a beginning, so both get it.
+     */
+    m_combatLog.clear();
+    m_logRoster.clear();
+    m_logClass.clear();
+    m_logSlot.clear();
+    m_logCursor.clear();
+    m_logHeaderSent.clear();
+    m_logTrailerSent.clear();
+    m_logSpells.clear();
+    m_logDictCursor.clear();
+    m_logDrainTimer = 0;
+    m_logDropped = 0;
+
     m_leaverIsParticipant = false;
     m_spectatorsRemoved = false;
     m_rated = false;
@@ -624,6 +643,25 @@ void Arena::Reset()
     m_frameNamesSent.clear();
     m_frameSpecCache.clear();
     m_castLineSent = false;
+
+    /*
+     * HERE, at the two points that begin a match, and NOT beside the other m_frameSpecCache
+     * clear inside PushFrameData's slow name tick - that one fires every ten seconds and would
+     * wipe the log all match long. The constructor and Reset are textually identical and both
+     * are a beginning, so both get it.
+     */
+    m_combatLog.clear();
+    m_logRoster.clear();
+    m_logClass.clear();
+    m_logSlot.clear();
+    m_logCursor.clear();
+    m_logHeaderSent.clear();
+    m_logTrailerSent.clear();
+    m_logSpells.clear();
+    m_logDictCursor.clear();
+    m_logDrainTimer = 0;
+    m_logDropped = 0;
+
     m_leaverIsParticipant = false;
     m_spectatorsRemoved = false;
     m_rated = false;
@@ -2159,6 +2197,14 @@ void Arena::Update(uint32 diff)
     }
 
     // must be the last call, the base class may delete the battleground
+    /*
+     * The log goes out after the gates close, over the leave window, at the cadence the frames
+     * used. It cannot ride m_framePushTimer: that one is only touched inside PushFrameData,
+     * which is unreachable once the status leaves IN_PROGRESS, so it would tick once and stop.
+     */
+    if (GetStatus() == STATUS_WAIT_LEAVE && !m_combatLog.empty())
+        DrainCombatLog(diff);
+
     BattleGround::Update(diff);
 }
 
@@ -2913,6 +2959,264 @@ void Arena::RemoveSpectators()
 /***                   FIGHT / SCORES                  ***/
 /*********************************************************/
 
+/*
+ * WHO GETS A SLOT IN THE LOG.
+ *
+ * Append only. m_players loses a man the moment he leaves, so anything derived from its order
+ * renumbers everybody still in it - a log written half before and half after a leaver would
+ * silently reassign names. A slot handed out here is never handed out again.
+ */
+uint8 Arena::LogSlotFor(Unit* who)
+{
+    if (!who)
+        return 0xFF;
+
+    ObjectGuid const guid = who->GetObjectGuid();
+    auto const found = m_logSlot.find(guid);
+    if (found != m_logSlot.end())
+        return found->second;
+
+    if (m_logRoster.size() >= 0xFE)             // 0xFF is reserved for "nobody"
+        return 0xFF;
+
+    uint8 const slot = uint8(m_logRoster.size());
+    m_logRoster.push_back(who->GetName() ? who->GetName() : "?");
+
+    // nought for anything that is not a player - a Voidwalker has a class field but not one
+    // RAID_CLASS_COLORS knows, and the AddOn paints slot class 0 in neutral grey
+    m_logClass.push_back(who->IsPlayer() ? uint8(who->GetClass()) : uint8(0));
+
+    m_logSlot[guid] = slot;
+    return slot;
+}
+
+/*
+ * One event. Called from the spell hook and from HandleKillPlayer, both on the map's own thread.
+ *
+ * The cap is a real cap and a dropped event is counted rather than ignored: the trailer carries
+ * the number so the AddOn can say the log is short instead of pretending it is whole.
+ */
+void Arena::LogEvent(Unit* actor, Unit* victim, SpellEntry const* info, uint8 kind)
+{
+    if (GetStatus() != STATUS_IN_PROGRESS || !actor)
+        return;
+
+    if (m_combatLog.size() >= ARENA_LOG_MAX_EVENTS)
+    {
+        ++m_logDropped;
+        return;
+    }
+
+    ArenaLogEvent one;
+    one.atDeci  = m_matchTimer / 100;
+    one.spellId = info ? info->Id : 0;
+    one.icon    = info ? uint16(info->SpellIconID) : 0;
+    one.kind    = kind;
+    one.actor   = LogSlotFor(actor);
+    one.victim  = LogSlotFor(victim);
+
+    if (one.actor == 0xFF)
+        return;
+
+    m_combatLog.push_back(one);
+}
+
+/*
+ * SENDING IT, once the gates have closed.
+ *
+ * The cursor is PER RECEIVER. A single shared position is the easy way to get this quietly
+ * wrong: somebody who drops and comes back inside the leave window, or a spectator who walks in
+ * halfway through the drain, would receive a fragment and never know. An unknown guid defaults
+ * to nought and simply gets the whole thing.
+ *
+ * No visibility filter here, unlike every line the frames send. That is safe only because this
+ * is after the match - the scoreboard is public by then. It would NOT be safe live: a running
+ * feed would hand back exactly what the stealth filter exists to withhold.
+ *
+ * Three things go out, in order: the roster, the spell names, then the events. The AddOn can
+ * render an event only once it holds both of the first two, and they are small enough to be
+ * gone within a second or two of the gates closing.
+ */
+void Arena::DrainCombatLog(uint32 diff)
+{
+    if (m_logDrainTimer > diff)
+    {
+        m_logDrainTimer -= diff;
+        return;
+    }
+    m_logDrainTimer = ARENA_FRAME_PUSH_INTERVAL;
+
+    /*
+     * THE DISTINCT SPELLS, collected once on the first tick after the gates close.
+     *
+     * The events carry a spell id and an icon but no NAME, and the 1.12 client cannot turn an
+     * id into a name - there is no GetSpellInfo, and GetSpellName reaches only your own book.
+     * Putting the name in every event would be the obvious fix and the wrong one: thirty
+     * characters times seven hundred events is fourteen kilobytes of mostly the same words.
+     *
+     * A dictionary instead. A 3v3 uses perhaps eighty distinct spells, so this is under two
+     * kilobytes and each name travels once.
+     */
+    if (m_logSpells.empty() && !m_combatLog.empty())
+    {
+        std::set<uint32> distinct;
+        for (size_t i = 0; i < m_combatLog.size(); ++i)
+            if (m_combatLog[i].spellId && distinct.insert(m_combatLog[i].spellId).second)
+                m_logSpells.push_back(m_combatLog[i].spellId);
+    }
+
+    BattleGroundMap* map = GetBgMap();
+    if (!map)
+        return;
+
+    for (auto const& itr : map->GetPlayers())
+    {
+        Player* receiver = itr.getSource();
+        if (!receiver || !receiver->GetSession())
+            continue;
+
+        ObjectGuid const guid = receiver->GetObjectGuid();
+        uint32 budget = ARENA_LOG_LINES_PER_TICK;
+
+        /*
+         * THE ROSTER, and only once: the a| line stops when the match does, so somebody arriving
+         * now has no names and no class colours without it. It goes out whole and off budget -
+         * it is one or two lines, and nothing at all can be drawn before it lands.
+         *
+         * THE STARTING SLOT IS IN THE LINE, and that is not decoration. A 5v5 with pets overruns
+         * ARENA_FRAME_MAX_PAYLOAD, the header splits, and a second line carrying no offset would
+         * be read as slots nought upward - every name after the split attributed to the wrong
+         * man. So it says where it begins.
+         */
+        if (m_logHeaderSent.find(guid) == m_logHeaderSent.end())
+        {
+            size_t s = 0;
+            do
+            {
+                size_t const began = s;
+                std::ostringstream head;
+                head << "g|" << (m_matchTimer / 100) << "," << s;
+
+                while (s < m_logRoster.size())
+                {
+                    std::ostringstream one;
+                    one << ";" << m_logRoster[s] << "," << uint32(m_logClass[s]);
+
+                    // the first entry of a line always goes in, even if it alone is over the
+                    // limit: refusing it would leave s standing still and spin this loop forever
+                    if (s > began &&
+                        size_t(head.tellp()) + one.str().size() > ARENA_FRAME_MAX_PAYLOAD)
+                        break;
+
+                    head << one.str();
+                    ++s;
+                }
+
+                SendArenaAddon(receiver, head.str());
+            }
+            while (s < m_logRoster.size());
+
+            m_logHeaderSent.insert(guid);
+        }
+
+        // his language, because these are words and two watchers legitimately need different bytes
+        LocaleConstant const locale = receiver->GetSession()->GetSessionDbcLocale();
+
+        size_t& dict = m_logDictCursor[guid];
+        while (dict < m_logSpells.size() && budget)
+        {
+            size_t const began = dict;
+            std::ostringstream line;
+            line << "y|";
+
+            while (dict < m_logSpells.size())
+            {
+                SpellEntry const* info = sSpellMgr.GetSpellEntry(m_logSpells[dict]);
+                if (!info)
+                {
+                    ++dict;                     // it went away since the cast; skip it silently
+                    continue;
+                }
+
+                std::string const& name = info->SpellName[locale].empty() ?
+                                          info->SpellName[LOCALE_enUS] : info->SpellName[locale];
+
+                std::ostringstream one;
+                one << ";" << m_logSpells[dict] << "," << name;
+
+                if (dict > began &&
+                    size_t(line.tellp()) + one.str().size() > ARENA_FRAME_MAX_PAYLOAD)
+                    break;
+
+                line << one.str();
+                ++dict;
+            }
+
+            if (line.str().size() > 2)          // a run of missing spells writes an empty line
+                SendArenaAddon(receiver, line.str());
+            --budget;
+        }
+
+        if (!budget)
+            continue;
+
+        size_t& cursor = m_logCursor[guid];
+        while (cursor < m_combatLog.size() && budget)
+        {
+            /*
+             * An absolute base per line and a small delta inside it. That saves bytes, and more
+             * usefully it means a line that never arrives cannot shift the timeline of the ones
+             * that do - every line carries its own anchor.
+             */
+            size_t const began = cursor;
+            uint32 const base = m_combatLog[cursor].atDeci;
+            std::ostringstream line;
+            line << "l|" << base;
+
+            while (cursor < m_combatLog.size())
+            {
+                ArenaLogEvent const& ev = m_combatLog[cursor];
+
+                // out of the delta reach; the next line anchors again
+                if (cursor > began && ev.atDeci - base > 999)
+                    break;
+
+                std::ostringstream one;
+                one << ";" << (ev.atDeci - base) << ","
+                    << uint32(ev.actor) << ","
+                    << (ev.victim == 0xFF ? std::string() : std::to_string(uint32(ev.victim))) << ","
+                    << uint32(ev.icon) << ","
+                    << ev.spellId << ","
+                    << uint32(ev.kind);
+
+                if (cursor > began &&
+                    size_t(line.tellp()) + one.str().size() > ARENA_FRAME_MAX_PAYLOAD)
+                    break;
+
+                line << one.str();
+                ++cursor;
+            }
+
+            SendArenaAddon(receiver, line.str());
+            --budget;
+        }
+
+        /*
+         * The trailer, ONCE - it used to go out on every tick once the cursor ran dry, which is
+         * two minutes of it. Its ABSENCE is load bearing: a log with no z| is an incomplete one,
+         * and the count inside lets the AddOn say so instead of pretending it is whole.
+         */
+        if (cursor >= m_combatLog.size() && dict >= m_logSpells.size() &&
+            m_logTrailerSent.find(guid) == m_logTrailerSent.end())
+        {
+            std::ostringstream tail;
+            tail << "z|" << m_combatLog.size() << "," << m_logDropped;
+            SendArenaAddon(receiver, tail.str());
+            m_logTrailerSent.insert(guid);
+        }
+    }
+}
+
 void Arena::HandleKillPlayer(Player* pVictim, Player* pKiller)
 {
     if (GetStatus() != STATUS_IN_PROGRESS)
@@ -2925,6 +3229,17 @@ void Arena::HandleKillPlayer(Player* pVictim, Player* pKiller)
 
     // no self resurrection (Reincarnation, Twisting Nether ...): dead is dead in the arena
     pVictim->SetUInt32Value(PLAYER_SELF_RES_SPELL, 0);
+
+    /*
+     * A Spirit of Redemption priest reaches this twice for one death - once when he falls and
+     * once when the form ends, the second time with no killer. Only the first is a death.
+     *
+     * No killer at all is also the environmental and self-inflicted case, which arrives here:
+     * he is recorded as his own actor, and the AddOn renders that as "died".
+     */
+    if (!pVictim->HasAura(27827))
+        LogEvent(pKiller ? static_cast<Unit*>(pKiller) : static_cast<Unit*>(pVictim),
+                 pVictim, nullptr, 7);
 
     PlaySoundToAll(SOUND_ARENA_KILL);
     CheckWinConditions();

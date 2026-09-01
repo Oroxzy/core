@@ -660,6 +660,67 @@ class Arena : public BattleGround
         std::map<ObjectGuid, uint32> m_frameSpecCache;
         bool m_castLineSent;                    // so the last cast can be cleared exactly once
 
+        /*
+         * THE POST-MATCH COMBAT LOG.
+         *
+         * Buffered for the whole match and sent only when it is over, and that is a SECURITY
+         * decision rather than a bandwidth one. The frames withhold a stealthed fighter on
+         * purpose - every line is filtered per receiver by IsVisibleForOrDetect - and a live
+         * feed saying "Stabby cast Cheap Shot on Healbot" would hand back exactly what that
+         * filter exists to keep. After the gates close the scoreboard is public anyway, so the
+         * drain needs no filter at all.
+         *
+         * It also happens to be what makes a reconnect work: the cursor is per receiver, so
+         * somebody who drops and comes back inside the leave window is simply unknown to the
+         * map and starts again at nought.
+         */
+        enum { ARENA_LOG_MAX_EVENTS = 4096 };   // 64 KB an instance, more than a long 5v5 fills
+
+        /*
+         * Four lines per half second, so a 3v3 of some seven hundred events is with him inside
+         * twelve seconds of the gates closing. Eight events a line, so that is sixty-four a
+         * second against a leave window of a hundred and twenty.
+         */
+        enum { ARENA_LOG_LINES_PER_TICK = 4 };
+
+        struct ArenaLogEvent
+        {
+            uint32 atDeci;                      // deciseconds since the gates opened
+            uint32 spellId;
+            uint16 icon;                        // SpellEntry::SpellIconID, the AddOn has the table
+            uint8  kind;                        // 1 landed, 2 missed or immune, 7 death
+            uint8  actor;                       // index into m_logRoster
+            uint8  victim;                      // index into m_logRoster, 0xFF for none
+        };
+
+        /*
+         * Indices in here, NAMES on the wire. m_players is erased when somebody leaves, so any
+         * index derived from its order renumbers everyone still in it - m_logRoster is
+         * append-only instead and a departed man's slot is never handed out again.
+         */
+        std::vector<ArenaLogEvent> m_combatLog;
+        std::vector<std::string> m_logRoster;
+        std::vector<uint8> m_logClass;          // parallel to the roster, 0 for a pet
+        std::map<ObjectGuid, uint8> m_logSlot;
+        std::map<ObjectGuid, size_t> m_logCursor;   // per receiver, which is the reconnect fix
+        std::set<ObjectGuid> m_logHeaderSent;
+        std::set<ObjectGuid> m_logTrailerSent;      // or z| repeats for two solid minutes
+
+        // the distinct spells of the match, so each NAME travels once instead of per event
+        std::vector<uint32> m_logSpells;
+        std::map<ObjectGuid, size_t> m_logDictCursor;
+        uint32 m_logDrainTimer;
+        uint32 m_logDropped;
+
+        uint8 LogSlotFor(Unit* who);
+        void DrainCombatLog(uint32 diff);
+
+    public:
+        // called from Spell::DoAllEffectOnTarget and from HandleKillPlayer
+        void LogEvent(Unit* actor, Unit* victim, SpellEntry const* info, uint8 kind);
+
+    private:
+
         // teleports players that fell below the arena floor back to their team start location
         void CheckPlayersUnderMap();
 };

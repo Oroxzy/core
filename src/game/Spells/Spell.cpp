@@ -1130,6 +1130,39 @@ void Spell::DoAllEffectOnTarget(TargetInfo *target)
     SpellCaster* pRealCaster = pRealUnitCaster ? pRealUnitCaster : m_caster;
 
     SpellMissInfo missInfo = target->missCondition;
+
+    /*
+     * THE ARENA COMBAT LOG, taken here and not in SendSpellGo, for three reasons.
+     *
+     * This runs exactly once per cast and unit target - target->processed guards the top of the
+     * function - where SendSpellGo has several call sites and one of them fires before a
+     * Frostbolt has landed, so missCondition would not be final yet. Here a delayed spell
+     * arrives at impact, with its outcome decided.
+     *
+     * SendSpellGo also drops a whole class of casts outright: IsNeedSendToClient returns false
+     * for a silent triggered spell, so it would never see them.
+     *
+     * Its sibling HandleDelayedSpellLaunch is deliberately NOT hooked. That is the launch pass
+     * of the same delayed spell, it sets no processed flag, and hooking it too would enter
+     * every ranged cast in the log twice.
+     *
+     * THE TRIGGERED TEST IS FIRST because it is the cheapest and throws away the most. A
+     * SPELL_AURA_PERIODIC_TRIGGER_SPELL aura performs a real cast on every tick, and those are
+     * what would otherwise bury the log under Rain of Fire. Filtering on "periodic" would not
+     * catch them; filtering on "triggered" does.
+     *
+     * The arena is reached through the MAP rather than through the caster's battleground
+     * pointer, because that one reads a container the world thread mutates while this runs on a
+     * map thread.
+     */
+    if (!m_IsTriggeredSpell && !m_triggeredByAuraSpell && m_casterUnit && unit->IsPlayer())
+        if (Map* onMap = m_caster->FindMap())
+            if (onMap->IsBattleGround())
+                if (BattleGround* bg = static_cast<BattleGroundMap*>(onMap)->GetBG())
+                    if (bg->IsArena())
+                        static_cast<Arena*>(bg)->LogEvent(m_casterUnit, unit, m_spellInfo,
+                                                          missInfo == SPELL_MISS_NONE ? 1 : 2);
+
     // Need init unitTarget by default unit (can changed in code on reflect)
     // Or on missInfo!=SPELL_MISS_NONE unitTarget undefined (but need in trigger subsystem)
     unitTarget = unit;
