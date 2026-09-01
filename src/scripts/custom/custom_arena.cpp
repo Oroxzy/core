@@ -550,8 +550,23 @@ namespace
             return false;
         }
 
-        if (player->InBattleGround() || player->IsInCombat())
+        /*
+         * Separated, and both of them say so. This was one silent "return false": the gossip
+         * handler has already closed the menu by the time it gets here, so a player in combat
+         * clicked a match, the window vanished, and nothing at all told him why. Every other
+         * refusal in this function names its reason.
+         */
+        if (player->InBattleGround())
+        {
+            Refuse(player, orb, LANG_ARENA_ORB_IN_BG);
             return false;
+        }
+
+        if (player->IsInCombat())
+        {
+            Refuse(player, orb, LANG_ARENA_ORB_IN_COMBAT);
+            return false;
+        }
 
         // a free status slot lets the client show the "leave battleground" button - without one the visitor
         // could not get out before the match ends (arena queues are left below, so their slots count as free)
@@ -971,6 +986,15 @@ static bool HandleArenaOrbSelect(Player* player, GameObject* orb, uint32 sender,
         }
         case SENDER_SPECTATE_LIST:
         {
+            // re-checked when the action ARRIVES, the way every other action in this switch is:
+            // a menu kept open across the switch being turned off would otherwise still list the
+            // running matches. SpectateArena says the same thing about the entry below it.
+            if (!sWorld.getConfig(CONFIG_BOOL_ARENA_SPECTATE))
+            {
+                Refuse(player, orb, LANG_ARENA_ORB_NO_SPECTATE);
+                return true;
+            }
+
             player->PlayerTalkClass->ClearMenus();
             uint32 shownMatches = 0;
             for (uint32 bgTypeId = BATTLEGROUND_ARENA_FIRST; bgTypeId <= BATTLEGROUND_ARENA_LAST && shownMatches < ARENA_SPECTATE_LIST_MAX; ++bgTypeId)
@@ -1186,6 +1210,15 @@ static bool ShowWatcherWeatherMenu(Player* player, Creature* creature, Arena* ar
     toggle << "Arena.RandomWeather = " << (sWorld.getConfig(CONFIG_BOOL_ARENA_RANDOM_WEATHER) ? "on" : "off");
     player->ADD_GOSSIP_ITEM(GOSSIP_ICON_INTERACT_1, toggle.str().c_str(), GOSSIP_SENDER_MAIN, WATCHER_ACTION_WEATHER_TOGGLE);
 
+    /*
+     * The way out, which this menu never had. WATCHER_ACTION_BACK was written, handled in the
+     * switch and offered by nothing - so the only submenu in the file was a dead end: every
+     * entry in it leads back to itself, and an administrator who opened it had to close the
+     * whole gossip window and talk to the watcher again.
+     */
+    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, ArenaMgr::Text(player, LANG_ARENA_MENU_BACK),
+                            GOSSIP_SENDER_MAIN, WATCHER_ACTION_BACK);
+
     player->SEND_GOSSIP_MENU(WATCHER_NPC_TEXT_HELLO, creature->GetObjectGuid());
     return true;
 }
@@ -1255,13 +1288,26 @@ bool GossipSelect_ArenaWatcher(Player* player, Creature* creature, uint32 /*send
                     ++readyAlliance;
             }
 
+            /*
+             * DECIDED FROM THE SIDE THAT JUST CHANGED, and on the click that completed it.
+             *
+             * These were three tests on the running totals, so a side that was already full
+             * stayed full for every later click of the OTHER side: in a 3v3 the watcher yelled
+             * "The Green Team is ready to fight!" again when the first gold player readied, and
+             * again when the second did. The green team heard its own announcement three times
+             * and the gold team never heard one at all until the very last man.
+             *
+             * "==" and not ">=", so it fires on the click that filled his side and on no other.
+             */
+            Team const hisSide = player->GetBGTeam();
+            uint32 const readyHisSide = (hisSide == HORDE) ? readyHorde : readyAlliance;
+
             char const* announce = nullptr;
             if (readyAlliance + readyHorde >= bg->GetMaxPlayers())
                 announce = "Both teams are ready to fight!";
-            else if (readyHorde >= bg->GetMaxPlayersPerTeam())
-                announce = "The Green Team is ready to fight!";
-            else if (readyAlliance >= bg->GetMaxPlayersPerTeam())
-                announce = "The Gold Team is ready to fight!";
+            else if (readyHisSide == bg->GetMaxPlayersPerTeam())
+                announce = (hisSide == HORDE) ? "The Green Team is ready to fight!"
+                                              : "The Gold Team is ready to fight!";
 
             if (announce)
             {

@@ -127,8 +127,18 @@ bool ArenaRatingMgr::HasPlayed(ObjectGuid guid, ArenaType type) const
     if (type == ARENA_TYPE_NONE)
         return false;
 
+    /*
+     * ASKED OF THE GAMES, not of whether a row exists.
+     *
+     * Those were the same thing until Set() - the .arena setrating and setmmr override - started
+     * creating a row for a character who had never entered that bracket. From then on he counted
+     * as having played it: the ladder listed him, he was given a rank, and the arena window
+     * offered him a rating he had never earned. Any administrator who set a starting value on a
+     * fresh character put him on the ladder by doing it.
+     */
     std::lock_guard<std::mutex> guard(m_lock);
-    return m_ratings.find(MakeKey(guid, type)) != m_ratings.end();
+    auto const itr = m_ratings.find(MakeKey(guid, type));
+    return itr != m_ratings.end() && itr->second.games > 0;
 }
 
 uint32 ArenaRatingMgr::GetAverageMatchmakerRating(std::vector<ObjectGuid> const& guids, ArenaType type) const
@@ -256,35 +266,6 @@ uint32 ArenaRatingMgr::Reset(ArenaType type)
     return removed;
 }
 
-void ArenaRatingMgr::GetRank(ObjectGuid guid, ArenaType type, uint32& rank, uint32& total) const
-{
-    rank = 0;
-    total = 0;
-    if (type == ARENA_TYPE_NONE)
-        return;
-
-    std::lock_guard<std::mutex> guard(m_lock);
-
-    // MakeKey packs the bracket into the low byte, so the map can be filtered without unpacking
-    uint64 const index = uint64(GetArenaTypeIndex(type));
-    auto const own = m_ratings.find(MakeKey(guid, type));
-
-    uint32 above = 0;
-    for (auto const& itr : m_ratings)
-    {
-        if ((itr.first & 0xFF) != index)
-            continue;
-
-        ++total;
-        if (own != m_ratings.end() && itr.second.rating > own->second.rating)
-            ++above;
-    }
-
-    // no row means he has never played this bracket, and there is no place to report
-    if (own != m_ratings.end())
-        rank = above + 1;
-}
-
 void ArenaRatingMgr::GetRanks(ObjectGuid guid, uint32* rank, uint32* total) const
 {
     uint32 own[ARENA_TYPES_COUNT];
@@ -305,8 +286,10 @@ void ArenaRatingMgr::GetRanks(ObjectGuid guid, uint32* rank, uint32* total) cons
     // his own rating in each bracket first, so the single pass below has something to compare to
     for (uint8 i = 0; i < ARENA_TYPES_COUNT; ++i)
     {
+        // the same "played means games, not a row" rule as HasPlayed: a row written by the
+        // .arena setrating override is not a bracket he has entered
         auto const itr = m_ratings.find(MakeKey(guid, GetArenaTypeByIndex(i)));
-        if (itr != m_ratings.end())
+        if (itr != m_ratings.end() && itr->second.games > 0)
         {
             own[i] = itr->second.rating;
             played[i] = true;
@@ -318,6 +301,11 @@ void ArenaRatingMgr::GetRanks(ObjectGuid guid, uint32* rank, uint32* total) cons
     {
         uint8 const index = uint8(itr.first & 0xFF);
         if (index >= ARENA_TYPES_COUNT)
+            continue;
+
+        // a set-but-never-played row is not part of the ladder, so it must not swell its size
+        // either - "rank 7 of 40" where nine of the forty never fought is a number nobody can check
+        if (!itr.second.games)
             continue;
 
         ++total[index];

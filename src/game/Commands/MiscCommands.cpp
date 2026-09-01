@@ -2544,11 +2544,13 @@ bool ChatHandler::HandleArenaKickSpectatorsCommand(char* args)
  * SEC_PLAYER, and it only ever reports on the caller himself - there is nothing here that another
  * player's name could be substituted into.
  *
- *   ARENA|qb|<index>|<token>|<open>|<rating>|<best>|<games>|<wins>|<waiting>|<queued>
+ *   ARENA|qb|<index>|<token>|<open>|<rating>|<best>|<games>|<wins>|<waiting>|<queued>|<rank>|<total>
  *       one line per bracket, index 0..3 = 1v1 2v2 3v3 5v5
  *       token   the bracket in the player's own language ("2v2", "2c2", "2對2" ...)
  *       open    1 when this realm has that bracket set up at all
  *       queued  1 when he is standing in that queue right now
+ *       rank    where he stands on that ladder, and 0 when he has never played the bracket
+ *       total   how many characters are on it, which is the size of the ladder, not of the realm
  *   ARENA|qi|<enabled>|<minLevel>|<ratedMinLevel>|<ratedMode>|<myLevel>|<inBg>
  *   ARENA|done|info
  */

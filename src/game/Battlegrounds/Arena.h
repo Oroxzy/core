@@ -508,7 +508,8 @@ class Arena : public BattleGround
         void EndBattleGround(Team winner) override;
         void UpdatePlayerScore(Player* source, uint32 type, uint32 value) override;
         void FillInitialWorldStates(WorldPacket& data, uint32& count) override;
-        // no graveyards in arenas, dead players become spectators (see Player::SetArenaSpectator)
+        // no graveyards in arenas: returning nullptr leaves a dead fighter where he fell, as an
+        // ordinary ghost. He does NOT become a spectator - that flag is for orb visitors only.
         WorldSafeLocsEntry const* GetClosestGraveYard(Player* /*player*/) override { return nullptr; }
 
         ArenaType GetArenaType() const { return GetArenaTypeForBattleGroundTypeId(GetTypeID()); }
@@ -728,6 +729,10 @@ class Arena : public BattleGround
         std::map<ObjectGuid, size_t> m_logCursor;   // per receiver, which is the reconnect fix
         std::set<ObjectGuid> m_logHeaderSent;
         std::set<ObjectGuid> m_logTrailerSent;      // or z| repeats for two solid minutes
+
+        // who has already been recorded as dead. HandleKillPlayer arrives twice for a Spirit of
+        // Redemption priest and only the first call carries the killer - see HandleKillPlayer
+        std::set<ObjectGuid> m_logDeaths;
 
         // the distinct spells of the match, so each NAME travels once instead of per event
         std::vector<uint32> m_logSpells;

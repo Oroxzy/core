@@ -331,6 +331,22 @@ bool ArenaMgr::SetSpellDisabled(uint32 spellId, bool const perType[ARENA_TYPES_C
         }
 
         /*
+         * AND WHETHER THE CLASS OWNS IT IN ITS OWN RIGHT - the same rule BuildSpellItemMap
+         * applies when the table is read at startup, which this path did not.
+         *
+         * A ban made from the panel or from .arena ban therefore behaved differently from the
+         * identical ban read out of the table: m_itemOnlySpells stayed empty for it, and
+         * IsSpellDisabled's last line then refused the spell to the CLASS as well. The Magic
+         * Candle casts Fireball (Rank 1) and the Sprouted Frond casts Lesser Heal (Rank 2), so
+         * banning either trinket in the panel took a mage's and a priest's own spell away with
+         * it - until the next restart, when the table was re-read and it silently came back.
+         */
+        if (m_spellItem.find(spellId) != m_spellItem.end() && sSpellMgr.GetSpellRank(spellId))
+            m_itemOnlySpells.insert(spellId);
+        else
+            m_itemOnlySpells.erase(spellId);
+
+        /*
          * Only the four flags are written on a row that already exists. The descriptions in the
          * table were written by hand and say which item a spell belongs to ("CONSUMABLE Free Action
          * Potion"); REPLACE would have thrown that away and left the bare spell name behind every
@@ -349,6 +365,7 @@ bool ArenaMgr::SetSpellDisabled(uint32 spellId, bool const perType[ARENA_TYPES_C
     {
         m_disabledSpells.erase(spellId);
         m_spellItem.erase(spellId);
+        m_itemOnlySpells.erase(spellId);
         // only the entries this spell put there - two spells can apply the same enchantment, and the
         // other one may still be banned
         for (uint32 enchantId : enchants)
@@ -537,6 +554,7 @@ void Arena::ResetArenaState()
     m_logTrailerSent.clear();
     m_logSpells.clear();
     m_logDictCursor.clear();
+    m_logDeaths.clear();
     m_logDrainTimer = 0;
     m_logDropped = 0;
 
@@ -703,11 +721,16 @@ namespace
     /*
      * DIMINISHING RETURNS, when Arena.FrameDiminishing is on.
      *
-     * Five categories in a fixed order, for the same reason the cooldown row is fixed: the second
-     * icon is always fear, so it is read by position. These are the five that decide a vanilla
-     * arena - stun, fear, root, polymorph and the sap/gouge group. The enum has more (disarm,
-     * silence, and the trigger variants), but those either barely diminish in 1.12 or are not
-     * something a player plans around.
+     * EIGHT categories in a fixed ORDER - which is not the same thing as a fixed position, and
+     * this block said it was for as long as there were five of them. The client packs the hits
+     * together and skips the categories that are not running, so the third icon is whatever the
+     * third RUNNING category happens to be; each slot is identified by the category id in its own
+     * field, which is why that id travels at all.
+     *
+     * Five of them are the ones that decide a vanilla arena - stun, fear, root, polymorph and the
+     * sap/gouge group - and the three below them exist because 1.12 gives them clocks of their
+     * own. The enum has more (disarm, silence, and the trigger variants), but those either barely
+     * diminish here or are not something a player plans around.
      *
      * This is off the beaten path for this server, which reports what a watcher could in
      * principle have seen and DR is a hidden rule. It is behind a switch for exactly that reason:
@@ -1132,6 +1155,7 @@ namespace
         // the control effect first, if there is one - it goes on the portrait
         uint32 control = 0;
         int32 controlLeft = 0;
+        int32 controlWhole = 0;                 // the winner's full duration, for the portrait sweep
 
         for (auto const& itr : player->GetSpellAuraHolderMap())
         {
@@ -1168,6 +1192,7 @@ namespace
             {
                 control = found;
                 controlLeft = left;
+                controlWhole = holder->GetAuraMaxDuration();
             }
         }
 
@@ -1177,7 +1202,17 @@ namespace
             aura.id = control;
             aura.remaining = controlLeft;
             aura.state = ARENA_AURA_CONTROL;
-            aura.total = 0;
+
+            /*
+             * The sweep over the portrait needs how far through the effect is, and this field was
+             * hard-wired to nought - so SetSweep, whose first test is "total <= 0", returned
+             * without drawing anything. The wedge that shows a fear running out has never once
+             * appeared; the icon simply sat there until it vanished.
+             *
+             * Tenths like every other total on this wire, and nought for a permanent aura, which
+             * has nothing to sweep.
+             */
+            aura.total = controlWhole > 0 ? uint32(controlWhole) / 100 : 0;
             out.push_back(aura);
         }
 
@@ -1554,14 +1589,21 @@ void Arena::PushFrameData(uint32 diff)
      * Localised per receiver like the cast line, with the same enUS fallback.
      */
     /*
-     * The slow tick used to send the union of the FIGHTERS' rows, and that was a leak: the union
-     * arrived unfiltered, so a receiver could read a stealthed enemy's class and race out of
-     * which row spells were being named at him. The full table of every class row and every
-     * racial says nothing about anybody - it is identical in every match - so that is what goes
-     * out now, and only the DR names, which do point at a man, are filtered per receiver.
+     * AND THEY ARE FILTERED PER RECEIVER, exactly like the lines they name.
+     *
+     * A row name points at the man who holds it. Sent as one union to everybody, it said "one of
+     * the ten people here knows Vanish and Preparation" - and since you know your own side, that
+     * reads as "the enemy has a rogue" while the a| line is still deliberately withholding him.
+     * A weaker channel than his health bar, but the same channel, and the frames exist to close
+     * exactly this one.
+     *
+     * A comment here used to claim the cure was a fixed table of every class row and every
+     * racial, identical in every match. That table was never written - the union below is what
+     * the code has always sent. Carrying the pairs instead makes the strict version true, and
+     * costs one std::set per receiver on a tick that happens once every ten seconds.
      */
     bool const sendNames = (m_frameNameTick++ % 20) == 0;
-    std::set<uint32> nameIds;
+    std::vector<std::pair<Player*, uint32>> rowNamePairs;
     std::vector<std::pair<Player*, uint32>> drNamePairs;
     if (sendNames)
     {
@@ -1569,15 +1611,11 @@ void Arena::PushFrameData(uint32 diff)
         m_frameSpecCache.clear();
         m_frameRowCache.clear();
 
-        /*
-         * Every id any fighter's row could hold, which is now whatever they actually know rather
-         * than a fixed table - so it is gathered from them. The union across BOTH sides says
-         * nothing about who is stealthed: it is the same set whether he is visible or not, since
-         * every fighter contributes his own regardless.
-         */
+        // every id any fighter's row could hold, gathered WITH the man it came from so the
+        // receiver loop can drop the ones he is not allowed to know about
         for (Player* player : fighters)
             for (uint32 const id : rowOf(player))
-                nameIds.insert(id);
+                rowNamePairs.push_back({ player, id });
     }
 
     std::vector<FighterLine> unitEntries;
@@ -1885,9 +1923,12 @@ void Arena::PushFrameData(uint32 diff)
         }
     }
 
-    // everybody on the map: the fighters and the visitors watching them
-    if (Map* map = GetBgMap())
+    // everybody on the map: the fighters and the visitors watching them.
+    // HasBgMap and not a null test on GetBgMap, which ASSERTS rather than returning nullptr - the
+    // old condition was always true and guarded nothing. Same correction as in DrainCombatLog.
+    if (HasBgMap())
     {
+        Map* map = GetBgMap();
         Map::PlayerList const& players = map->GetPlayers();
         for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
         {
@@ -1930,9 +1971,12 @@ void Arena::PushFrameData(uint32 diff)
              * that does not fit starts the next line instead of being cut in half, because half a
              * name in a tooltip is worse than no tooltip.
              */
-            if (!nameIds.empty() || !drNamePairs.empty())
+            if (!rowNamePairs.empty() || !drNamePairs.empty())
             {
-                std::set<uint32> receiverIds = nameIds;
+                std::set<uint32> receiverIds;
+                for (auto const& pair : rowNamePairs)
+                    if (visible.count(pair.first))
+                        receiverIds.insert(pair.second);
                 for (auto const& pair : drNamePairs)
                     if (visible.count(pair.first))
                         receiverIds.insert(pair.second);
@@ -2047,8 +2091,8 @@ void Arena::PushFrameData(uint32 diff)
         }
     }
 
-    for (uint32 id : nameIds)
-        m_frameNamesSent.insert(id);
+    for (auto const& pair : rowNamePairs)
+        m_frameNamesSent.insert(pair.second);
     for (auto const& pair : drNamePairs)
         m_frameNamesSent.insert(pair.second);
 
@@ -2587,7 +2631,9 @@ void Arena::RemovePlayer(Player* player, ObjectGuid guid)
         m_keptScore = nullptr;
     }
 
-    // spectators (visitors and dead participants) leave silently, fighters are announced
+    // visitors leave silently, participants are announced - including a dead one. IsArenaSpectator
+    // is set only for an orb visitor these days (Player::SetArenaSpectator has the same note): a
+    // fighter who dies stays an ordinary ghost and is still part of the match.
     bool const announce = GetStatus() < STATUS_WAIT_LEAVE && (!player || !player->IsArenaSpectator());
     if (announce)
     {
@@ -2972,16 +3018,30 @@ void Arena::LogEvent(Unit* actor, Unit* victim, SpellEntry const* info, uint8 ki
         return;
     }
 
+    /*
+     * THE ACTOR FIRST, AND A REFUSAL IS COUNTED.
+     *
+     * LogSlotFor hands back 0xFF once the roster is full, and dropping the event on that used to
+     * happen silently - so a saturated roster threw work away while the trailer still reported
+     * the log as whole, and the AddOn would have shown a truncated log with no warning on it.
+     *
+     * The victim is resolved only after the actor has a slot, so an event that is about to be
+     * discarded cannot spend the last free slot on a name nothing will ever refer to.
+     */
+    uint8 const actorSlot = LogSlotFor(actor);
+    if (actorSlot == 0xFF)
+    {
+        ++m_logDropped;
+        return;
+    }
+
     ArenaLogEvent one;
     one.atDeci  = m_matchTimer / 100;
     one.spellId = info ? info->Id : 0;
     one.icon    = info ? uint16(info->SpellIconID) : 0;
     one.kind    = kind;
-    one.actor   = LogSlotFor(actor);
+    one.actor   = actorSlot;
     one.victim  = LogSlotFor(victim);
-
-    if (one.actor == 0xFF)
-        return;
 
     m_combatLog.push_back(one);
 }
@@ -3202,13 +3262,26 @@ void Arena::HandleKillPlayer(Player* pVictim, Player* pKiller)
     pVictim->SetUInt32Value(PLAYER_SELF_RES_SPELL, 0);
 
     /*
-     * A Spirit of Redemption priest reaches this twice for one death - once when he falls and
-     * once when the form ends, the second time with no killer. Only the first is a death.
+     * ONCE PER MAN, and the FIRST time is the one worth having.
      *
-     * No killer at all is also the environmental and self-inflicted case, which arrives here:
-     * he is recorded as his own actor, and the AddOn renders that as "died".
+     * A Spirit of Redemption priest reaches this twice for one death. Unit::Kill casts the form
+     * (27827) and then falls through to HandleKillPlayer at the bottom of the same function, so
+     * the first call arrives WITH the killer and with the form already on him; fifteen seconds
+     * later the form ends, 27965 kills him for real, and the second call arrives with no killer
+     * at all.
+     *
+     * This used to test "does he NOT have 27827", which kept exactly the wrong one of the two:
+     * the killing blow was thrown away and the log showed the priest dying alone, fifteen seconds
+     * after he actually fell.
+     *
+     * A set rather than another aura test, because it does not care WHY the second call happens -
+     * a death is a once-per-man event in an arena, where there is no resurrection at all
+     * (PLAYER_SELF_RES_SPELL is cleared two lines above).
+     *
+     * No killer is also the environmental and self-inflicted case: he is recorded as his own
+     * actor, and the AddOn renders that as "died".
      */
-    if (!pVictim->HasAura(27827))
+    if (m_logDeaths.insert(pVictim->GetObjectGuid()).second)
         LogEvent(pKiller ? static_cast<Unit*>(pKiller) : static_cast<Unit*>(pVictim),
                  pVictim, nullptr, 7);
 
@@ -3260,8 +3333,18 @@ uint32 Arena::GetTeamDamageDone(Team team) const
 uint32 Arena::GetRemainingTime() const
 {
     uint32 const limit = sWorld.getConfig(CONFIG_UINT32_ARENA_TIME_LIMIT_MINUTES) * MINUTE * IN_MILLISECONDS;
-    if (GetStatus() != STATUS_IN_PROGRESS)
+
+    /*
+     * BEFORE the match, not "any time it is not running".
+     *
+     * EndBattleGround sets STATUS_WAIT_LEAVE and then calls UpdateWorldStates, so with the old
+     * test the very last clock the players saw was the FULL time limit - a fight decided at
+     * 1:40 ended with 25:00 on the screen. m_matchTimer stops advancing at the same moment, so
+     * after the gates close it already holds the answer.
+     */
+    if (GetStatus() < STATUS_IN_PROGRESS)
         return limit;
+
     return m_matchTimer < limit ? limit - m_matchTimer : 0;
 }
 
@@ -3409,9 +3492,25 @@ void Arena::DetermineRated()
         return;
     }
 
+    /*
+     * BOTH SIDES ARE ASKED, ALWAYS - and && would not do it.
+     *
+     * IsSidePremade writes the party through its out parameter even when it returns FALSE, and
+     * that party is the whole point of the second call. Written as one && expression, a
+     * non-premade alliance side short-circuited the horde call away, so hordeParty kept the
+     * nullptr from the line above and the "one party on both sides" test below compared a real
+     * group against nothing and never fired.
+     *
+     * It failed in exactly the case it exists for. Four friends in one party queue SEPARATELY:
+     * each entry is one man, so StampArenaRating marks none of them as a full arena group,
+     * neither side is premade, and mode 2 rates the match without ever looking at parties. They
+     * could hand each other rating for as long as they liked.
+     */
     Group* allianceParty = nullptr;
     Group* hordeParty = nullptr;
-    bool const bothPremade = IsSidePremade(ALLIANCE, &allianceParty) && IsSidePremade(HORDE, &hordeParty);
+    bool const alliancePremade = IsSidePremade(ALLIANCE, &allianceParty);
+    bool const hordePremade = IsSidePremade(HORDE, &hordeParty);
+    bool const bothPremade = alliancePremade && hordePremade;
 
     /*
      * One party standing on both sides is not a match, it is a transfer, and the premade rule can
