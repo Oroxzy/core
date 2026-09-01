@@ -701,18 +701,45 @@ class Arena : public BattleGround
         enum { ARENA_LOG_MAX_EVENTS = 4096 };   // 64 KB an instance, more than a long 5v5 fills
 
         /*
-         * Four lines per half second, so a 3v3 of some seven hundred events is with him inside
-         * twelve seconds of the gates closing. Eight events a line, so that is sixty-four a
-         * second against a leave window of a hundred and twenty.
+         * SIX lines per half second, and the arithmetic is worth writing down because it moved.
+         *
+         * An entry is at worst 28 bytes: ";" + 3 delta + 2 actor + 2 victim + 5 spell + 1 kind
+         * + 4 amount + 4 health, and six commas. Six of those plus "l|" and a five digit base is
+         * 175 of the 200 a payload may carry; a seventh would be 203 and does not fit.
+         *
+         * Six lines a tick is 36 events a second. A 3v3 of some seven hundred events is with him
+         * ten seconds after the gates close, and even a log that hits the 4096 cap is out in
+         * under sixty - against a leave window of a hundred and twenty.
+         *
+         * That the numbers went UP while the entries got bigger is the icon's doing: it used to
+         * ride on every event and is now sent once per spell in the dictionary, where it belongs.
          */
-        enum { ARENA_LOG_LINES_PER_TICK = 4 };
+        enum { ARENA_LOG_LINES_PER_TICK = 6 };
 
         struct ArenaLogEvent
         {
             uint32 atDeci;                      // deciseconds since the gates opened
             uint32 spellId;
-            uint16 icon;                        // SpellEntry::SpellIconID, the AddOn has the table
-            uint8  kind;                        // 1 landed, 2 missed or immune, 7 death
+
+            /*
+             * How much, and what he was left with - both AFTER the event, and both OPTIONAL.
+             *
+             * "No number recorded" and "a number that happens to be nought" are different things
+             * and the wire keeps them apart with an empty field. A hit that was entirely absorbed
+             * never reaches the damage hook at all, so its cast entry has no amount - printing a
+             * bare 0 there would read as a hit that did nothing, which is the opposite of what a
+             * shield eating a Pyroblast means.
+             */
+            uint32 amount;
+            uint32 hp;
+            bool   haveNumbers;
+
+            /*
+             * 1 a spell landed        4 healing
+             * 2 it missed or was immune   5 damage with no cast behind it: a swing, a tick, a fall
+             * 3 a stance change, which the AddOn hides unless asked   7 a death
+             */
+            uint8  kind;
             uint8  actor;                       // index into m_logRoster
             uint8  victim;                      // index into m_logRoster, 0xFF for none
         };
@@ -725,6 +752,16 @@ class Arena : public BattleGround
         std::vector<ArenaLogEvent> m_combatLog;
         std::vector<std::string> m_logRoster;
         std::vector<uint8> m_logClass;          // parallel to the roster, 0 for a pet
+
+        /*
+         * His maximum health, sent ONCE in the roster header instead of on every event.
+         *
+         * The events carry only what he is at, so the AddOn can draw a bar and print "1841/2650"
+         * for four digits a line rather than nine. It is taken when the slot is handed out, which
+         * is close enough: a health pool moves with buffs during a match, but not by an amount
+         * that changes what a bar says.
+         */
+        std::vector<uint32> m_logMaxHp;
         std::map<ObjectGuid, uint8> m_logSlot;
         std::map<ObjectGuid, size_t> m_logCursor;   // per receiver, which is the reconnect fix
         std::set<ObjectGuid> m_logHeaderSent;
@@ -744,8 +781,21 @@ class Arena : public BattleGround
         void DrainCombatLog(uint32 diff);
 
     public:
-        // called from Spell::DoAllEffectOnTarget and from HandleKillPlayer
-        void LogEvent(Unit* actor, Unit* victim, SpellEntry const* info, uint8 kind);
+        /*
+         * Called from Spell::DoAllEffectOnTarget, from Unit::DealDamage, from the healing funnel
+         * and from HandleKillPlayer.
+         *
+         * It ANSWERS WITH THE PLACE it wrote to, and -1 when it wrote nothing. Spell keeps that
+         * index in m_arenaLogIndex so the damage that follows a moment later can be written into
+         * the very entry the cast made, rather than becoming a second line saying the same spell
+         * again. Nothing has to guess or search: DealDamage is handed the Spell that caused it.
+         */
+        int32 LogEvent(Unit* actor, Unit* victim, SpellEntry const* info, uint8 kind,
+                       uint32 amount = 0, uint32 hp = 0, bool haveNumbers = false);
+
+        // fills in the numbers of an entry LogEvent already wrote, ignoring an index that is no
+        // longer there - a match can end between the cast and the damage
+        void LogFill(int32 index, uint32 amount, uint32 hp);
 
     private:
 

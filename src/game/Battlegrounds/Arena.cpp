@@ -548,6 +548,7 @@ void Arena::ResetArenaState()
     m_combatLog.clear();
     m_logRoster.clear();
     m_logClass.clear();
+    m_logMaxHp.clear();
     m_logSlot.clear();
     m_logCursor.clear();
     m_logHeaderSent.clear();
@@ -710,6 +711,38 @@ namespace
             case MECHANIC_IMMUNE_SHIELD:
                 return true;
         }
+        return false;
+    }
+
+    /*
+     * A WARRIOR STANCE AND NOTHING ELSE.
+     *
+     * Twelve of the eighteen lines in the first real log were "Berserker Stance" and "Battle
+     * Stance" - a warrior dancing for Overpower. That is how the class is played, not something
+     * that happened, and with damage and healing lines beside it there is no room for it.
+     *
+     * BY THE FORM, NOT BY THE AURA, and the difference is the whole point. Testing
+     * SPELL_AURA_MOD_SHAPESHIFT would have been the obvious rule and is wrong at both ends: it
+     * catches Stealth and Ghost Wolf, which belong in a combat log, and it does NOT catch a druid
+     * form at all - every one of those carries a mechanic immunity as well, which SpellRowPriority
+     * sorts on first. And a druid form is a real play here: SpellAuras casts 9033 off the back of
+     * Cat, Bear, Travel, Aqua and Moonkin to shed roots and slows. The stance branch beside it
+     * does nothing of the kind.
+     *
+     * Three named forms, no spell ids, so it survives a rank changing underneath it.
+     */
+    bool IsStanceOnly(SpellEntry const* info)
+    {
+        for (uint32 i = 0; i < MAX_EFFECT_INDEX; ++i)
+            if (info->EffectApplyAuraName[i] == SPELL_AURA_MOD_SHAPESHIFT)
+                switch (info->EffectMiscValue[i])
+                {
+                    case FORM_BATTLESTANCE:
+                    case FORM_DEFENSIVESTANCE:
+                    case FORM_BERSERKERSTANCE:
+                        return true;
+                }
+
         return false;
     }
 
@@ -2996,6 +3029,7 @@ uint8 Arena::LogSlotFor(Unit* who)
     // nought for anything that is not a player - a Voidwalker has a class field but not one
     // RAID_CLASS_COLORS knows, and the AddOn paints slot class 0 in neutral grey
     m_logClass.push_back(who->IsPlayer() ? uint8(who->GetClass()) : uint8(0));
+    m_logMaxHp.push_back(who->GetMaxHealth());
 
     m_logSlot[guid] = slot;
     return slot;
@@ -3007,16 +3041,25 @@ uint8 Arena::LogSlotFor(Unit* who)
  * The cap is a real cap and a dropped event is counted rather than ignored: the trailer carries
  * the number so the AddOn can say the log is short instead of pretending it is whole.
  */
-void Arena::LogEvent(Unit* actor, Unit* victim, SpellEntry const* info, uint8 kind)
+int32 Arena::LogEvent(Unit* actor, Unit* victim, SpellEntry const* info, uint8 kind,
+                      uint32 amount, uint32 hp, bool haveNumbers)
 {
     if (GetStatus() != STATUS_IN_PROGRESS || !actor)
-        return;
+        return -1;
 
     if (m_combatLog.size() >= ARENA_LOG_MAX_EVENTS)
     {
         ++m_logDropped;
-        return;
+        return -1;
     }
+
+    /*
+     * A stance change is marked HERE and not at the call site, so a second caller cannot bypass
+     * it, and only when the cast actually landed - kind 2 is a miss and kind 7 is a death, and
+     * neither of those is ever a stance.
+     */
+    if (kind == 1 && info && IsStanceOnly(info))
+        kind = 3;
 
     /*
      * THE ACTOR FIRST, AND A REFUSAL IS COUNTED.
@@ -3032,18 +3075,44 @@ void Arena::LogEvent(Unit* actor, Unit* victim, SpellEntry const* info, uint8 ki
     if (actorSlot == 0xFF)
     {
         ++m_logDropped;
-        return;
+        return -1;
     }
 
     ArenaLogEvent one;
-    one.atDeci  = m_matchTimer / 100;
-    one.spellId = info ? info->Id : 0;
-    one.icon    = info ? uint16(info->SpellIconID) : 0;
-    one.kind    = kind;
-    one.actor   = actorSlot;
-    one.victim  = LogSlotFor(victim);
+    one.atDeci      = m_matchTimer / 100;
+    one.spellId     = info ? info->Id : 0;
+    one.amount      = amount;
+    one.hp          = hp;
+    one.haveNumbers = haveNumbers;
+    one.kind        = kind;
+    one.actor       = actorSlot;
+    one.victim      = LogSlotFor(victim);
 
     m_combatLog.push_back(one);
+    return int32(m_combatLog.size()) - 1;
+}
+
+/*
+ * The numbers of an entry that is already written.
+ *
+ * The cast is recorded before the spell's effects run, and the damage is known a moment later -
+ * so "Mortal Strike" and "1240" are one line rather than two. Spell carries the index across that
+ * gap, which is exact where a backwards search through the buffer would have been a guess: there
+ * is no bound on how many events a triggered spell, a split, or an inline proc can append in
+ * between.
+ *
+ * The index is checked rather than trusted. A match can end between the cast and the impact of a
+ * slow projectile, and Reset would have emptied the buffer underneath it.
+ */
+void Arena::LogFill(int32 index, uint32 amount, uint32 hp)
+{
+    if (index < 0 || size_t(index) >= m_combatLog.size())
+        return;
+
+    ArenaLogEvent& one = m_combatLog[index];
+    one.amount = amount;
+    one.hp = hp;
+    one.haveNumbers = true;
 }
 
 /*
@@ -3111,8 +3180,13 @@ void Arena::DrainCombatLog(uint32 diff)
 
         /*
          * THE ROSTER, and only once: the a| line stops when the match does, so somebody arriving
-         * now has no names and no class colours without it. It goes out whole and off budget -
-         * it is one or two lines, and nothing at all can be drawn before it lands.
+         * now has no names, no class colours and no health pools without it. It goes out whole
+         * and off budget, because nothing at all can be drawn before it lands.
+         *
+         * Not "one or two lines", which this used to claim. The roster is not the fighters: the
+         * cast hook needs only the TARGET to be a player, so every warlock pet and every totem a
+         * shaman drops takes a slot of its own, with a creature name that beats a player's twelve
+         * characters. A long 5v5 with shamans reaches thirty or forty of them.
          *
          * THE STARTING SLOT IS IN THE LINE, and that is not decoration. A 5v5 with pets overruns
          * ARENA_FRAME_MAX_PAYLOAD, the header splits, and a second line carrying no offset would
@@ -3131,7 +3205,8 @@ void Arena::DrainCombatLog(uint32 diff)
                 while (s < m_logRoster.size())
                 {
                     std::ostringstream one;
-                    one << ";" << m_logRoster[s] << "," << uint32(m_logClass[s]);
+                    one << ";" << m_logRoster[s] << "," << uint32(m_logClass[s])
+                        << "," << m_logMaxHp[s];
 
                     // the first entry of a line always goes in, even if it alone is over the
                     // limit: refusing it would leave s standing still and spin this loop forever
@@ -3172,8 +3247,10 @@ void Arena::DrainCombatLog(uint32 diff)
                 std::string const& name = info->SpellName[locale].empty() ?
                                           info->SpellName[LOCALE_enUS] : info->SpellName[locale];
 
+                // the icon rides HERE and not on every event: it is a property of the spell, and
+                // sending it per event cost five bytes a line to say the same thing again
                 std::ostringstream one;
-                one << ";" << m_logSpells[dict] << "," << name;
+                one << ";" << m_logSpells[dict] << "," << uint32(info->SpellIconID) << "," << name;
 
                 if (dict > began &&
                     size_t(line.tellp()) + one.str().size() > ARENA_FRAME_MAX_PAYLOAD)
@@ -3212,13 +3289,26 @@ void Arena::DrainCombatLog(uint32 diff)
                 if (cursor > began && ev.atDeci - base > 999)
                     break;
 
+                /*
+                 * AN EMPTY FIELD IS NOT A ZERO, and the last two fields depend on it.
+                 *
+                 * A hit that a shield ate whole never reaches the damage hook, so its cast entry
+                 * carries no amount at all - and writing a bare 0 there would read as a hit that
+                 * did nothing, which is the opposite of what happened. Empty means "not
+                 * recorded", exactly as the victim field already does for an event with no
+                 * target.
+                 */
                 std::ostringstream one;
                 one << ";" << (ev.atDeci - base) << ","
                     << uint32(ev.actor) << ","
                     << (ev.victim == 0xFF ? std::string() : std::to_string(uint32(ev.victim))) << ","
-                    << uint32(ev.icon) << ","
                     << ev.spellId << ","
-                    << uint32(ev.kind);
+                    << uint32(ev.kind) << ",";
+
+                if (ev.haveNumbers)
+                    one << ev.amount << "," << ev.hp;
+                else
+                    one << ",";
 
                 if (cursor > began &&
                     size_t(line.tellp()) + one.str().size() > ARENA_FRAME_MAX_PAYLOAD)
@@ -3282,8 +3372,10 @@ void Arena::HandleKillPlayer(Player* pVictim, Player* pKiller)
      * actor, and the AddOn renders that as "died".
      */
     if (m_logDeaths.insert(pVictim->GetObjectGuid()).second)
+        // with numbers, so the health line does not simply stop at the row that matters most:
+        // nought of his pool draws the empty socket rather than no bar at all
         LogEvent(pKiller ? static_cast<Unit*>(pKiller) : static_cast<Unit*>(pVictim),
-                 pVictim, nullptr, 7);
+                 pVictim, nullptr, 7, 0, 0, true);
 
     PlaySoundToAll(SOUND_ARENA_KILL);
     CheckWinConditions();

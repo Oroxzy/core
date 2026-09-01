@@ -530,6 +530,18 @@ class Spell
         uint32 m_timer = 0;
     public:
         uint32 m_triggeredByAuraBasePoints = 0;
+
+        /*
+         * Where this cast wrote itself into the arena combat log, and -1 when it did not.
+         *
+         * The cast is recorded before the effects run and the damage is known a moment later, in
+         * a different function - so the two would become two log lines saying the same spell.
+         * Unit::DealDamage is handed the Spell that caused it, so the index travels on the object
+         * itself: exact, where a backwards search through the buffer would have been a guess.
+         * There is no bound on how many entries a triggered spell, a split, or an inline proc can
+         * append in between.
+         */
+        int32 m_arenaLogIndex = -1;
     protected:
 
         Position m_castPosition;

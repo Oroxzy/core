@@ -1160,8 +1160,9 @@ void Spell::DoAllEffectOnTarget(TargetInfo *target)
             if (onMap->IsBattleGround())
                 if (BattleGround* bg = static_cast<BattleGroundMap*>(onMap)->GetBG())
                     if (bg->IsArena())
-                        static_cast<Arena*>(bg)->LogEvent(m_casterUnit, unit, m_spellInfo,
-                                                          missInfo == SPELL_MISS_NONE ? 1 : 2);
+                        m_arenaLogIndex = static_cast<Arena*>(bg)->LogEvent(
+                            m_casterUnit, unit, m_spellInfo,
+                            missInfo == SPELL_MISS_NONE ? 1 : 2);
 
     // Need init unitTarget by default unit (can changed in code on reflect)
     // Or on missInfo!=SPELL_MISS_NONE unitTarget undefined (but need in trigger subsystem)

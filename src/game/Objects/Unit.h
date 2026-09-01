@@ -392,7 +392,12 @@ class Unit : public SpellCaster
         void SetHealthPercent(float percent);
         int32 ModifyHealth(int32 val);
         // the arena scoreboard's healing column - see the comments on the definitions
-        void CountArenaHealingDone(int32 gain);
+        /*
+         * The victim and the spell ride along for the combat log, and they are optional so the
+         * absorb path - which has neither - can still use it for the scoreboard alone.
+         */
+        void CountArenaHealingDone(int32 gain, Unit* pVictim = nullptr,
+                                   SpellEntry const* spellProto = nullptr);
         void CountArenaAbsorbAsHealing(int32 absorbed);
         bool IsFullHealth() const { return GetHealth() == GetMaxHealth(); }
         bool HealthBelowPct(int32 pct) const { return GetHealth() * 100 < GetMaxHealth() * pct; }

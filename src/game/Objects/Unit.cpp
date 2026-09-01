@@ -42,6 +42,7 @@
 #include "Formulas.h"
 #include "Util.h"
 #include "BattleGround.h"
+#include "Arena.h"
 #include "GridNotifiersImpl.h"
 #include "CellImpl.h"
 #include "DBCStores.h"
@@ -789,6 +790,55 @@ uint32 Unit::DealDamage(Unit* pVictim, uint32 damage, CleanDamage const* cleanDa
                 }
             }
         }
+    }
+
+    /*
+     * THE ARENA COMBAT LOG'S NUMBERS.
+     *
+     * HERE, in the gap between the scoreboard block above and the kill branch below, because this
+     * is the only point where all three are true at once: the damage is final (absorb, resist and
+     * block came off before the call), the victim's health before it is still in `health`, and
+     * Kill has not run yet. A hook after the branch would record the killing blow AFTER the death
+     * it caused, and the AddOn would print "X dies" and then "X takes 1412".
+     *
+     * WHAT IT WRITES INTO depends on whether a cast preceded it. `spell` is the Spell object that
+     * produced this damage, and the cast hook stamped its own log index on it - so a Mortal
+     * Strike is ONE line carrying both the name and the number. A swing, a periodic tick and a
+     * fall have no Spell at all and become a line of their own, kind 5.
+     *
+     * A SPELL THAT WAS NOT LOGGED IS NOT LOGGED HERE EITHER, and that falls out of the index
+     * rather than needing a second copy of the cast hook's rules. A Spell object carrying -1 is
+     * one the cast hook deliberately passed over - it was triggered, or its target was not a
+     * player, or the gates were not open - and appending its damage would put back exactly what
+     * that filter exists to keep out. Only damage with no Spell at all becomes a new line: a
+     * swing, a periodic tick, a fall.
+     *
+     * The player test stays, because a swing has no Spell to ask: without it every pet and totem
+     * taking a hit would burn a roster slot.
+     */
+    if (damage && pVictim->IsPlayer() && (!spell || spell->m_arenaLogIndex >= 0))
+    {
+        if (Map* onMap = FindMap())
+            if (onMap->IsBattleGround())
+                if (BattleGround* bg = static_cast<BattleGroundMap*>(onMap)->GetBG())
+                    if (bg->IsArena())
+                    {
+                        /*
+                         * What actually landed, worked out the same way the branch below does it
+                         * rather than by reading GetHealth() - which is only correct in one of
+                         * the two branches, and this sits above both.
+                         */
+                        uint32 const invuln = pVictim->GetInvincibilityHpThreshold();
+                        uint32 const room = health > invuln ? health - invuln : 0;
+                        uint32 const applied = std::min<uint32>(damage, room);
+                        uint32 const left = health - applied;
+
+                        Arena* arena = static_cast<Arena*>(bg);
+                        if (spell && spell->m_arenaLogIndex >= 0)
+                            arena->LogFill(spell->m_arenaLogIndex, applied, left);
+                        else
+                            arena->LogEvent(this, pVictim, spellProto, 5, applied, left, true);
+                    }
     }
 
     // Enter combat or extend leash timer.
@@ -6500,7 +6550,7 @@ void Unit::CountArenaAbsorbAsHealing(int32 absorbed)
         CountArenaHealingDone(absorbed);
 }
 
-void Unit::CountArenaHealingDone(int32 gain)
+void Unit::CountArenaHealingDone(int32 gain, Unit* pVictim, SpellEntry const* spellProto)
 {
     if (gain <= 0 || !IsArenaMapId(GetMapId()))
         return;
@@ -6511,8 +6561,29 @@ void Unit::CountArenaHealingDone(int32 gain)
 
     // the bg of the map we are on (thread local, no lookup in the global battleground list)
     BattleGround* bg = GetMap()->IsBattleGround() ? static_cast<BattleGroundMap*>(GetMap())->GetBG() : nullptr;
-    if (bg && bg->IsArena() && bg->GetStatus() == STATUS_IN_PROGRESS)
-        bg->UpdatePlayerScore(pHealer, SCORE_HEALING_DONE, uint32(gain));
+    if (!bg || !bg->IsArena() || bg->GetStatus() != STATUS_IN_PROGRESS)
+        return;
+
+    bg->UpdatePlayerScore(pHealer, SCORE_HEALING_DONE, uint32(gain));
+
+    /*
+     * AND THE COMBAT LOG, from the same place, because this function's three call sites are the
+     * whole healing surface and no other single point is.
+     *
+     * DealHeal alone would have missed every heal over time: a tick writes the health itself and
+     * calls in here instead, which is a bug this scoreboard already had once and the comment at
+     * the tick's call site records.
+     *
+     * The gain is the EFFECTIVE number, what he actually got - ModifyHealth clamps at his maximum
+     * and returns the real delta. The client's own floating text shows the raw figure, so the two
+     * will differ on an overheal, and the log is the one that is right.
+     *
+     * The victim is optional: the absorb path counts a shield as healing and has neither a target
+     * nor a spell to name, so it goes on the scoreboard and stays out of the log.
+     */
+    if (pVictim)
+        static_cast<Arena*>(bg)->LogEvent(this, pVictim, spellProto, 4,
+                                          uint32(gain), pVictim->GetHealth(), true);
 }
 
 int32 Unit::ModifyHealth(int32 dVal)
