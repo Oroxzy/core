@@ -564,6 +564,16 @@ class Arena : public BattleGround
         // "%s joined the Arena for the %s!": a player's name, then the team colour as a string id
         void SendNameAndStringToAll(int32 entry, char const* name, int32 stringEntry);
 
+        /*
+         * Everything a match starts with, in ONE place.
+         *
+         * The constructor and Reset held fifty byte-identical lines each. Every new member had to
+         * be entered twice, and forgetting the second one gives a fault that appears only in the
+         * SECOND match on that instance - which is the hardest kind to find. m_startVisibilityPushed
+         * was in neither of them and was saved only by the order things happen in.
+         */
+        void ResetArenaState();
+
         void UpdatePreparation(uint32 diff);
         void UpdateNagrand(uint32 diff);
         void UpdateDalaran(uint32 diff);
@@ -658,6 +668,19 @@ class Arena : public BattleGround
         // GetTalentSpecTab walks the whole talent map; asked once per fighter, refreshed with the
         // slow name tick, cleared with it too
         std::map<ObjectGuid, uint32> m_frameSpecCache;
+
+        /*
+         * His row of long cooldowns, for the same reason and at a far higher price.
+         *
+         * FindRowSpells walks the WHOLE spellbook - some three hundred entries, each one a spell
+         * lookup, a chain lookup and a ban-list lookup - and it was called twice per fighter on a
+         * name tick: once to gather the names, once inside FindTrackedAuras. Ten fighters twice a
+         * second came to twenty full walks a second on the map thread.
+         *
+         * A spellbook cannot change inside an arena, so this is simply the same answer. Refreshed
+         * with the spec cache on the slow tick, which costs one walk every ten seconds.
+         */
+        std::map<ObjectGuid, std::vector<uint32>> m_frameRowCache;
         bool m_castLineSent;                    // so the last cast can be cleared exactly once
 
         /*

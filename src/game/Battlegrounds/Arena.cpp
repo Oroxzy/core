@@ -489,18 +489,20 @@ bool ArenaMgr::IsItemForbidden(ItemPrototype const* proto, ArenaType type, std::
 /***                       ARENA                       ***/
 /*********************************************************/
 
-Arena::Arena()
+/*
+ * EVERYTHING A MATCH STARTS WITH, in one place.
+ *
+ * The constructor and Reset held fifty byte-identical lines each. Every new member had to be
+ * entered twice, and forgetting the second one gives a fault that shows up only in the SECOND
+ * match on that instance, which is the hardest kind to find - m_startVisibilityPushed was in
+ * neither of them and was saved only by the order things happen in.
+ *
+ * The combat log is cleared HERE and not beside the other m_frameSpecCache clear inside
+ * PushFrameData's slow name tick: that one fires every ten seconds and would wipe the log for
+ * the whole of the match.
+ */
+void Arena::ResetArenaState()
 {
-    m_startDelayTimes[BG_STARTING_EVENT_FIRST]  = BG_START_DELAY_1M;
-    m_startDelayTimes[BG_STARTING_EVENT_SECOND] = BG_START_DELAY_30S;
-    m_startDelayTimes[BG_STARTING_EVENT_THIRD]  = BG_START_DELAY_15S;
-    m_startDelayTimes[BG_STARTING_EVENT_FOURTH] = BG_START_DELAY_NONE;
-
-    m_startMessageIds[BG_STARTING_EVENT_FIRST]  = BCT_ARENA_START_ONE_MINUTE;
-    m_startMessageIds[BG_STARTING_EVENT_SECOND] = BCT_ARENA_START_HALF_MINUTE;
-    m_startMessageIds[BG_STARTING_EVENT_THIRD]  = BCT_ARENA_START_FIFTEEN_SECONDS;
-    m_startMessageIds[BG_STARTING_EVENT_FOURTH] = BCT_ARENA_HAS_BEGUN;
-
     m_worldStateTimer = 0;
     m_matchTimer = 0;
     m_doorsDespawnTimer = 0;
@@ -508,6 +510,7 @@ Arena::Arena()
     m_playersReady = false;
     m_timeLimitReached = false;
     m_preparationExtended = false;
+    m_startVisibilityPushed = false;
     m_tornadoTimer[0] = 0;
     m_tornadoTimer[1] = 0;
     m_waterfallTimer = 0;
@@ -517,18 +520,14 @@ Arena::Arena()
     m_pipeKnockbackCount = 0;
     m_waterfallState = WATERFALL_OFF;
     m_underMapCheckTimer = 0;
+
     m_framePushTimer = 0;
     m_frameNameTick = 0;
     m_frameNamesSent.clear();
     m_frameSpecCache.clear();
+    m_frameRowCache.clear();
     m_castLineSent = false;
 
-    /*
-     * HERE, at the two points that begin a match, and NOT beside the other m_frameSpecCache
-     * clear inside PushFrameData's slow name tick - that one fires every ten seconds and would
-     * wipe the log all match long. The constructor and Reset are textually identical and both
-     * are a beginning, so both get it.
-     */
     m_combatLog.clear();
     m_logRoster.clear();
     m_logClass.clear();
@@ -548,6 +547,21 @@ Arena::Arena()
     m_ratedRoster.clear();
     delete m_keptScore;
     m_keptScore = nullptr;
+}
+
+Arena::Arena()
+{
+    m_startDelayTimes[BG_STARTING_EVENT_FIRST]  = BG_START_DELAY_1M;
+    m_startDelayTimes[BG_STARTING_EVENT_SECOND] = BG_START_DELAY_30S;
+    m_startDelayTimes[BG_STARTING_EVENT_THIRD]  = BG_START_DELAY_15S;
+    m_startDelayTimes[BG_STARTING_EVENT_FOURTH] = BG_START_DELAY_NONE;
+
+    m_startMessageIds[BG_STARTING_EVENT_FIRST]  = BCT_ARENA_START_ONE_MINUTE;
+    m_startMessageIds[BG_STARTING_EVENT_SECOND] = BCT_ARENA_START_HALF_MINUTE;
+    m_startMessageIds[BG_STARTING_EVENT_THIRD]  = BCT_ARENA_START_FIFTEEN_SECONDS;
+    m_startMessageIds[BG_STARTING_EVENT_FOURTH] = BCT_ARENA_HAS_BEGUN;
+
+    ResetArenaState();
 }
 
 Arena::~Arena()
@@ -622,53 +636,7 @@ void Arena::Reset()
     // and a default-constructed entry (0) would look like "already spawned" for event2 = 0.
     m_activeEvents[ARENA_EVENT_SHADOW_SIGHT] = BG_EVENT_NONE;
 
-    m_worldStateTimer = 0;
-    m_matchTimer = 0;
-    m_doorsDespawnTimer = 0;
-    m_lastCountdownSecond = 0;
-    m_playersReady = false;
-    m_timeLimitReached = false;
-    m_preparationExtended = false;
-    m_tornadoTimer[0] = 0;
-    m_tornadoTimer[1] = 0;
-    m_waterfallTimer = 0;
-    m_waterfallKnockbackTimer = 0;
-    m_pipeKnockbackTimer = 0;
-    m_pipeRecheckTimer = 0;
-    m_pipeKnockbackCount = 0;
-    m_waterfallState = WATERFALL_OFF;
-    m_underMapCheckTimer = 0;
-    m_framePushTimer = 0;
-    m_frameNameTick = 0;
-    m_frameNamesSent.clear();
-    m_frameSpecCache.clear();
-    m_castLineSent = false;
-
-    /*
-     * HERE, at the two points that begin a match, and NOT beside the other m_frameSpecCache
-     * clear inside PushFrameData's slow name tick - that one fires every ten seconds and would
-     * wipe the log all match long. The constructor and Reset are textually identical and both
-     * are a beginning, so both get it.
-     */
-    m_combatLog.clear();
-    m_logRoster.clear();
-    m_logClass.clear();
-    m_logSlot.clear();
-    m_logCursor.clear();
-    m_logHeaderSent.clear();
-    m_logTrailerSent.clear();
-    m_logSpells.clear();
-    m_logDictCursor.clear();
-    m_logDrainTimer = 0;
-    m_logDropped = 0;
-
-    m_leaverIsParticipant = false;
-    m_spectatorsRemoved = false;
-    m_rated = false;
-    m_ratedSettled = false;
-    m_ratedRoster.clear();
-    delete m_keptScore;
-    m_keptScore = nullptr;
+    ResetArenaState();
 }
 
 /*********************************************************/
@@ -789,17 +757,6 @@ namespace
         uint8 state;
 
         /*
-         * Where in the row it belongs, 1..6, and 0 for the control effect, which has no row.
-         *
-         * The position used to be the arrival order, which was the same thing while every
-         * fighter sent all five. He no longer does - a Survival hunter has no Bestial Wrath - and
-         * without this the fourth icon would be Scatter Shot on one hunter's frame and Rapid Fire
-         * on the other's. The whole worth of a fixed order is that it survives being read fast,
-         * so the slot travels with the entry and the AddOn puts it where it says.
-         */
-        uint8 slot;
-
-        /*
          * The whole of the wait, in TENTHS of a second, so the AddOn can draw the clock sweep -
          * it needs how far through this is, and the remaining time alone does not say.
          *
@@ -828,38 +785,8 @@ namespace
      *
      * Only what his class actually has. A warrior has no line in the mage row and never gets one.
      */
-    /*
-     * WHAT EARNS A PLACE IN HIS ROW.
-     *
-     * This used to be nine hand written lists of five, and hand written lists rot: the rogue row
-     * carried Blade Flurry at two minutes and not Blind at five, the warrior had no Intimidating
-     * Shout, the hunter no Readiness. Eight of the nine were missing something, and every one of
-     * those was somebody forgetting rather than deciding.
-     *
-     * So it is read off the man instead, the same way his gear is. The rules, each of them there
-     * to keep something specific out:
-     *
-     *   THIRTY SECONDS at the bottom. Not two minutes, which was the obvious threshold and would
-     *   have thrown away Counterspell - thirty seconds, and the single most important thing a
-     *   mage presses. A Kick at ten seconds would spend its life blinking and stays out.
-     *
-     *   AN HOUR at the top, which is where utility stops being a fight and starts being a
-     *   ceremony. Lay on Hands sits just under it and belongs; nothing above it does.
-     *
-     *   NOT PEACEFUL-ONLY. This is what keeps the six mage portals out, and they were the worst
-     *   of the noise - the client's own attribute says a spell cannot be cast in combat, so it
-     *   cannot matter in an arena.
-     *
-     *   NOT A RESURRECTION. Rebirth and Reincarnation are half an hour and an hour of nothing
-     *   anybody plays around.
-     *
-     *   NOT PASSIVE, and not banned in this bracket - ArenaMgr already answers the second for the
-     *   cast check, so the frames ask the same question rather than holding a second opinion.
-     *
-     * Racials come through this by themselves: Will of the Forsaken and Blood Fury are two minute
-     * spells in his book like any other. Talents too, which is what a table could never do - the
-     * spell list in the world database does not know that this rogue took Preparation.
-     */
+    // the window a spell has to sit in to earn a place in his row - the reasoning behind both
+    // numbers is written out at WorthARowSlot, which is the only thing that reads them
     uint32 const ARENA_ROW_MIN_COOLDOWN = 30 * IN_MILLISECONDS;
     uint32 const ARENA_ROW_MAX_COOLDOWN = 60 * MINUTE * IN_MILLISECONDS;
     /*
@@ -882,14 +809,14 @@ namespace
      * Nine would be 214 and would not fit. If the row ever has to grow past eight, the honest way
      * is a second message with a sequence number, not a bigger constant here.
      *
-     * TWO INVARIANTS, and both have been broken before:
+     * ONE INVARIANT, and it has been broken before:
      *
      *     ARENA_FRAME_MAX_PAYLOAD >= 14 + (1 + ARENA_MAX_ROW_SPELLS) * 20
-     *     MAX_AURAS >= ARENA_MAX_ROW_SPELLS + MAX_ITEMS        (on the AddOn side)
      *
-     * The second is the quiet one. The client fills spells first and gear afterwards out of one
-     * counter, so raising this without raising MAX_AURAS does not truncate the row - it eats his
-     * trinkets instead, silently, and only on the men wearing four.
+     * There used to be a second one - MAX_AURAS >= ARENA_MAX_ROW_SPELLS + MAX_ITEMS - from when
+     * the client filled spells and gear out of a single counter. It no longer does: gear has its
+     * own compartments beside the row, so the two numbers are independent and that rule would
+     * only mislead the next person to read it.
      */
     size_t const ARENA_MAX_ROW_SPELLS = 8;
 
@@ -899,20 +826,6 @@ namespace
                info->RecoveryTime : info->CategoryRecoveryTime;
     }
 
-    /*
-     * WHAT MATTERS MORE, when eight slots have to hold ten or thirteen things.
-     *
-     * The row used to be ordered by cooldown alone, longest first, on the reasoning that a long
-     * wait means a big effect. In 1.12 that is close to inverted, and the frames showed it: a
-     * warlock's first two icons were Ritual of Doom and Inferno - one of them needs five players
-     * and cannot physically be cast in a 3v3 - while Howl of Terror sat below the cut. A druid led
-     * with Tree Form. A mage's Counterspell, the single most important button he owns, has the
-     * SHORTEST cooldown of anything he can put here and sorted dead last of eleven.
-     *
-     * So the tier decides and the cooldown only breaks ties inside it. Read off the spell the same
-     * way everything else here is read off the man - by mechanic and effect, not by a list of ids
-     * somebody has to remember to update.
-     */
     /*
      * WHAT COMES FIRST, when eight slots have to hold ten or thirteen things.
      *
@@ -1171,7 +1084,16 @@ namespace
         }
     }
 
-    void FindTrackedAuras(Player* player, ArenaType type, std::vector<TrackedAura>& out)
+    /*
+     * The row is HANDED IN rather than looked up again.
+     *
+     * FindRowSpells walks the whole spellbook, and this used to call it while PushFrameData was
+     * already calling it for the same man on the same tick. The caller holds the answer in a
+     * cache now and passes it, so the walk happens once per fighter per ten seconds instead of
+     * twice per fighter per half second.
+     */
+    void FindTrackedAuras(Player* player, std::vector<uint32> const& rowSpells,
+                          std::vector<TrackedAura>& out)
     {
         /*
          * Everything his own row already reports, so the portrait does not repeat it.
@@ -1185,14 +1107,9 @@ namespace
          * and it is the same entry that stays behind afterwards to count the wait down, where the
          * mechanic would simply vanish with the aura. The portrait is for what is done TO him.
          */
-        std::vector<uint32> rowSpells;
-        FindRowSpells(player, type, rowSpells);
-
         std::set<uint32> ownRow;
-        for (size_t slot = 0; slot < rowSpells.size(); ++slot)
+        for (uint32 const base : rowSpells)
         {
-            uint32 const base = rowSpells[slot];
-
             /*
              * ONLY the ones that land on him.
              *
@@ -1260,7 +1177,6 @@ namespace
             aura.id = control;
             aura.remaining = controlLeft;
             aura.state = ARENA_AURA_CONTROL;
-            aura.slot = 0;                      // the portrait, not the row
             aura.total = 0;
             out.push_back(aura);
         }
@@ -1269,10 +1185,8 @@ namespace
 
         bool const clearStart = sWorld.getConfig(CONFIG_BOOL_ARENA_RESET_ALL_COOLDOWNS);
 
-        for (size_t slot = 0; slot < rowSpells.size(); ++slot)
+        for (uint32 const base : rowSpells)
         {
-            uint32 const base = rowSpells[slot];
-
             /*
              * One id, not a rank chain, and now that is actually earned. FindRowSpells folds each
              * family down to the single rank he presses, using the chain table where the
@@ -1289,7 +1203,6 @@ namespace
             aura.id = base;                     // always the first rank, so the AddOn keeps one icon
             aura.remaining = 0;
             aura.state = ARENA_AURA_READY;
-            aura.slot = uint8(slot + 1);
             aura.total = 0;
 
             bool decided = false;
@@ -1318,7 +1231,15 @@ namespace
                     if (SpellAuraHolder const* holder = player->GetSpellAuraHolder(id))
                     {
                         aura.remaining = holder->GetEffectiveDuration();
-                        aura.total = uint32(holder->GetAuraMaxDuration()) / 100;
+                        /*
+                         * A PERMANENT aura has a maximum duration of -1, and casting that to
+                         * uint32 before dividing gave 42949672 - eight digits on a field the
+                         * payload budget above sizes at five, which is how a b| line quietly
+                         * grows past the cap and drops a fighter's last cooldown. There is no
+                         * sweep to draw for something that does not run out, so it is zero.
+                         */
+                        aura.total = holder->GetAuraMaxDuration() > 0 ?
+                                     uint32(holder->GetAuraMaxDuration()) / 100 : 0;
                         aura.state = ARENA_AURA_RUNNING;
                         decided = true;
                         break;
@@ -1342,7 +1263,9 @@ namespace
                         if (SpellAuraHolder const* holder = pet->GetSpellAuraHolder(id))
                         {
                             aura.remaining = holder->GetEffectiveDuration();
-                            aura.total = uint32(holder->GetAuraMaxDuration()) / 100;
+                            // permanent means -1, and uint32(-1)/100 is 42949672 - see above
+                            aura.total = holder->GetAuraMaxDuration() > 0 ?
+                                         uint32(holder->GetAuraMaxDuration()) / 100 : 0;
                             aura.state = ARENA_AURA_RUNNING;
                             decided = true;
                             break;
@@ -1403,7 +1326,17 @@ namespace
      * id into a picture and a name in the player's own language by itself, and there is no
      * generated table anywhere that would have to keep up with the item database.
      */
-    size_t const ARENA_MAX_ITEMS = 4;
+    /*
+     * Two, because two is what the far side has room for.
+     *
+     * This was four, and the AddOn draws ONE - its lower compartment went to the talent tree
+     * icon, and its loop reads "for k = 1, 1". So three quarters of this line was assembled,
+     * measured, filtered per receiver and sent twice a second for every fighter, to be parsed and
+     * thrown away. Two rather than one because MAX_ITEMS on the AddOn side is two: the number
+     * here matches what the client can hold, not what it currently chooses to draw, so freeing
+     * that second compartment needs no server change.
+     */
+    size_t const ARENA_MAX_ITEMS = 2;
 
     struct TrackedItem
     {
@@ -1542,6 +1475,46 @@ void Arena::PushFrameData(uint32 diff)
     m_framePushTimer = ARENA_FRAME_PUSH_INTERVAL;
 
     /*
+     * THE FIGHTERS, LOOKED UP ONCE.
+     *
+     * GetPlayers() was walked six times a push - names, bars, casts, cooldowns, gear, diminishing
+     * - with a global guid lookup on every man in every one of them. They are all the same list.
+     */
+    std::vector<Player*> fighters;
+    fighters.reserve(GetPlayers().size());
+    for (auto const& itr : GetPlayers())
+        if (Player* player = sObjectMgr.GetPlayer(itr.first))
+            fighters.push_back(player);
+
+    if (fighters.empty())
+        return;
+
+    /*
+     * HIS ROW, LOOKED UP ONCE - and this is the expensive one.
+     *
+     * FindRowSpells walks the entire spellbook: some three hundred entries, each costing a spell
+     * lookup, a chain lookup and a ban-list lookup. It ran twice per fighter on a name tick, once
+     * for the name union and once inside FindTrackedAuras, which in a 5v5 is twenty full walks a
+     * second on the map thread.
+     *
+     * A spellbook cannot change inside an arena - nobody learns a spell in a start box - so the
+     * second walk was asking a question it already had the answer to. Refreshed with the spec
+     * cache on the slow tick, which leaves one walk per fighter per ten seconds.
+     */
+    auto rowOf = [this](Player* player) -> std::vector<uint32> const&
+    {
+        ObjectGuid const guid = player->GetObjectGuid();
+        auto found = m_frameRowCache.find(guid);
+        if (found == m_frameRowCache.end())
+        {
+            std::vector<uint32> row;
+            FindRowSpells(player, GetArenaType(), row);
+            found = m_frameRowCache.emplace(guid, std::move(row)).first;
+        }
+        return found->second;
+    };
+
+    /*
      * WHO MAY SEE WHOM.
      *
      * The frames used to report every fighter to every receiver, which handed a stealthed rogue
@@ -1594,6 +1567,7 @@ void Arena::PushFrameData(uint32 diff)
     {
         m_frameNamesSent.clear();
         m_frameSpecCache.clear();
+        m_frameRowCache.clear();
 
         /*
          * Every id any fighter's row could hold, which is now whatever they actually know rather
@@ -1601,25 +1575,15 @@ void Arena::PushFrameData(uint32 diff)
          * nothing about who is stealthed: it is the same set whether he is visible or not, since
          * every fighter contributes his own regardless.
          */
-        for (auto const& itr : GetPlayers())
-        {
-            Player* player = sObjectMgr.GetPlayer(itr.first);
-            if (!player)
-                continue;
-
-            std::vector<uint32> theirs;
-            FindRowSpells(player, GetArenaType(), theirs);
-            for (uint32 id : theirs)
+        for (Player* player : fighters)
+            for (uint32 const id : rowOf(player))
                 nameIds.insert(id);
-        }
     }
 
     std::vector<FighterLine> unitEntries;
-    for (auto const& itr : GetPlayers())
+    for (Player* player : fighters)
     {
-        Player* player = sObjectMgr.GetPlayer(itr.first);
-        if (!player)
-            continue;
+        ObjectGuid const guid = player->GetObjectGuid();
 
         /*
          * CURRENT AND MAXIMUM, not a percentage. The AddOn shows "2719/2832" on the bar the way
@@ -1647,13 +1611,13 @@ void Arena::PushFrameData(uint32 diff)
          * asked once per fighter and remembered, refreshed with the slow name tick just in case.
          */
         uint32 spec;
-        auto const cached = m_frameSpecCache.find(itr.first);
+        auto const cached = m_frameSpecCache.find(guid);
         if (cached != m_frameSpecCache.end())
             spec = cached->second;
         else
         {
             spec = player->GetTalentSpecTab();
-            m_frameSpecCache[itr.first] = spec;
+            m_frameSpecCache[guid] = spec;
         }
 
         std::ostringstream one;
@@ -1698,12 +1662,8 @@ void Arena::PushFrameData(uint32 diff)
     };
     std::vector<CastInfo> casts;
 
-    for (auto const& itr : GetPlayers())
+    for (Player* player : fighters)
     {
-        Player* player = sObjectMgr.GetPlayer(itr.first);
-        if (!player)
-            continue;
-
         Spell* spell = player->GetCurrentSpell(CURRENT_GENERIC_SPELL);
         if (!spell)
             spell = player->GetCurrentSpell(CURRENT_CHANNELED_SPELL);
@@ -1740,14 +1700,10 @@ void Arena::PushFrameData(uint32 diff)
      * No localisation, unlike the casts: the AddOn draws an icon and a countdown, not a word.
      */
     std::vector<FighterLine> auraLines;
-    for (auto const& itr : GetPlayers())
+    for (Player* player : fighters)
     {
-        Player* player = sObjectMgr.GetPlayer(itr.first);
-        if (!player)
-            continue;
-
         std::vector<TrackedAura> found;
-        FindTrackedAuras(player, GetArenaType(), found);
+        FindTrackedAuras(player, rowOf(player), found);
 
         std::ostringstream entry;
         entry << "b|" << player->GetName();
@@ -1803,12 +1759,8 @@ void Arena::PushFrameData(uint32 diff)
      * push the racial off.
      */
     std::vector<FighterLine> itemLines;
-    for (auto const& itr : GetPlayers())
+    for (Player* player : fighters)
     {
-        Player* player = sObjectMgr.GetPlayer(itr.first);
-        if (!player)
-            continue;
-
         std::vector<TrackedItem> items;
         FindUsableItems(player, GetArenaType(), items);
 
@@ -1836,12 +1788,8 @@ void Arena::PushFrameData(uint32 diff)
     std::vector<FighterLine> drLines;
     if (sWorld.getConfig(CONFIG_BOOL_ARENA_FRAME_DIMINISHING))
     {
-        for (auto const& itr : GetPlayers())
+        for (Player* player : fighters)
         {
-            Player* player = sObjectMgr.GetPlayer(itr.first);
-            if (!player)
-                continue;
-
             std::ostringstream entry;
             entry << "d|" << player->GetName();
 
@@ -2938,8 +2886,21 @@ void Arena::SendPacketToAll(WorldPacket* packet)
                 player->GetSession()->SendPacket(packet);
 }
 
+/*
+ * THE GUIDS FIRST, AND THE REMOVALS AFTERWARDS, and that is not style.
+ *
+ * LeaveBattleground ends in TeleportToBGEntryPoint, TeleportTo calls oldmap->Remove on the spot,
+ * and Map::Remove delinks the very node this loop is standing on. LinkedListElement::delink sets
+ * iNext to nullptr, and the iterator's ++ reads exactly that - so it did not crash, it silently
+ * stopped after the FIRST spectator. And since m_spectatorsRemoved is set once and never cleared,
+ * everybody after him stayed in the instance for the rest of its life.
+ */
 void Arena::RemoveSpectators()
 {
+    if (!HasBgMap())
+        return;
+
+    std::vector<ObjectGuid> leaving;
     Map::PlayerList const& players = GetBgMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
     {
@@ -2951,8 +2912,12 @@ void Arena::RemoveSpectators()
         if (m_players.find(player->GetObjectGuid()) != m_players.end())
             continue;
 
-        player->LeaveBattleground(true);
+        leaving.push_back(player->GetObjectGuid());
     }
+
+    for (ObjectGuid const& guid : leaving)
+        if (Player* player = sObjectMgr.GetPlayer(guid))
+            player->LeaveBattleground(true);
 }
 
 /*********************************************************/
@@ -3065,9 +3030,15 @@ void Arena::DrainCombatLog(uint32 diff)
                 m_logSpells.push_back(m_combatLog[i].spellId);
     }
 
-    BattleGroundMap* map = GetBgMap();
-    if (!map)
+    /*
+     * HasBgMap, not a null test on GetBgMap: that one ASSERTS rather than returning nullptr, so
+     * "if (!map)" was dead code guarding nothing. It matters here more than anywhere else in this
+     * file - the drain is the one thing that runs while the match is being torn down.
+     */
+    if (!HasBgMap())
         return;
+
+    BattleGroundMap* map = GetBgMap();
 
     for (auto const& itr : map->GetPlayers())
     {
