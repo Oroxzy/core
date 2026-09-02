@@ -1207,6 +1207,7 @@ ChatCommand * ChatHandler::getCommandTable()
         { "join",           SEC_PLAYER,         false, &ChatHandler::HandleArenaQueueJoinCommand,      "", nullptr },
         { "leave",          SEC_PLAYER,         false, &ChatHandler::HandleArenaQueueLeaveCommand,     "", nullptr },
         { "matches",        SEC_PLAYER,         false, &ChatHandler::HandleArenaMatchesCommand,        "", nullptr },
+        { "ladder",         SEC_PLAYER,         false, &ChatHandler::HandleArenaLadderCommand,         "", nullptr },
         { "watch",          SEC_PLAYER,         false, &ChatHandler::HandleArenaWatchCommand,          "", nullptr },
         { nullptr,          0,                  false, nullptr,                                        "", nullptr }
     };

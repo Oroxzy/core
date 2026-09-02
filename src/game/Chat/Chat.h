@@ -407,6 +407,7 @@ class ChatHandler
         bool HandleArenaQueueJoinCommand(char *args);
         bool HandleArenaQueueLeaveCommand(char *args);
         bool HandleArenaMatchesCommand(char *args);
+        bool HandleArenaLadderCommand(char *args);
         bool HandleArenaWatchCommand(char *args);
         bool HandleArenaSpectatorsCommand(char *args);
         bool HandleArenaKickSpectatorsCommand(char *args);

@@ -2778,6 +2778,72 @@ bool ChatHandler::HandleArenaMatchesCommand(char* /*args*/)
 
 // ".arena watch <instanceId>" - the spectate tab's button. The refusal, when there is one, arrives
 // as the same notification the orb would have given, so the window has nothing to translate.
+
+/*
+ * .arena ladder <bracket 0..3> - the best of a bracket, for the arena window's own ladder page.
+ *
+ *   ARENA|lh|<bracket>|<minGames>|<myRank>|<myTotal>
+ *       the header, sent even for an empty ladder so the page can say WHY it is empty
+ *       minGames  how many games a character needs before he is on it at all (Rated.LadderMinGames)
+ *       myRank    where the asking player stands, and 0 when he is not on it
+ *       myTotal   how many characters are on that ladder
+ *   ARENA|lr|<rank>|<name>|<class>|<rating>|<games>|<wins>|<isMe>
+ *       one per row, best first
+ *   ARENA|done|ladder
+ *
+ * WHY THE PLAYER'S OWN RANK RIDES IN THE HEADER rather than being looked for in the rows: he is
+ * usually not in them. A ladder that only ever shows other people is a list about strangers, and
+ * the one number he came for is the one that has to be there whether he made the cut or not.
+ */
+bool ChatHandler::HandleArenaLadderCommand(char* args)
+{
+    Player* player = m_session ? m_session->GetPlayer() : nullptr;
+    if (!player)
+        return false;
+
+    uint32 index = 0;
+    ExtractUInt32(&args, index);
+    if (index >= ARENA_TYPES_COUNT)
+        index = 0;
+
+    ArenaType const type = GetArenaTypeByIndex(uint8(index));
+
+    // twenty, where the orb.s gossip menu shows fifteen: this is a window with a scroll bar and
+    // room for them, not a menu that has to fit on the screen in one go
+    uint32 const ARENA_WINDOW_LADDER_ROWS = 20;
+
+    // his own place first, so the header can carry it even when he is nowhere in the list
+    uint32 rankOf[ARENA_TYPES_COUNT];
+    uint32 totalOf[ARENA_TYPES_COUNT];
+    sArenaRatingMgr.GetRanks(player->GetObjectGuid(), rankOf, totalOf);
+
+    uint32 const minGames = sWorld.getConfig(CONFIG_UINT32_ARENA_RATED_LADDER_MIN_GAMES);
+
+    PSendSysMessage("ARENA|lh|%u|%u|%u|%u", index, minGames, rankOf[index], totalOf[index]);
+
+    std::vector<ArenaLadderRow> ladder;
+    sArenaRatingMgr.GetLadder(type, ARENA_WINDOW_LADDER_ROWS, minGames, ladder);
+
+    uint32 rank = 0;
+    for (ArenaLadderRow const& row : ladder)
+    {
+        ++rank;
+
+        // a comma would split a field on the far side, and the AddOn splits on the pipe - but a
+        // name cannot hold either, so only the separator this line actually uses is guarded
+        std::string name = row.name;
+        std::replace(name.begin(), name.end(), '|', ' ');
+
+        PSendSysMessage("ARENA|lr|%u|%s|%u|%u|%u|%u|%u", rank, name.c_str(),
+                        uint32(sObjectMgr.GetPlayerClassByGUID(row.guid)),
+                        row.rating, row.games, row.wins,
+                        row.guid == player->GetObjectGuid() ? 1 : 0);
+    }
+
+    PSendSysMessage("ARENA|done|ladder");
+    return true;
+}
+
 bool ChatHandler::HandleArenaWatchCommand(char* args)
 {
     Player* player = m_session ? m_session->GetPlayer() : nullptr;
