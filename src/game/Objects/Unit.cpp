@@ -833,11 +833,41 @@ uint32 Unit::DealDamage(Unit* pVictim, uint32 damage, CleanDamage const* cleanDa
                         uint32 const applied = std::min<uint32>(damage, room);
                         uint32 const left = health - applied;
 
+                        /*
+                         * THE CRIT FOR A LINE WITH NO CAST BEHIND IT, and only for that line.
+                         *
+                         * cleanDamage is the one crit carrier DealDamage is given: a swing fills
+                         * it from the melee roll and DealSpellDamage fills it from
+                         * SPELL_HIT_TYPE_CRIT, so a single test serves both without asking which
+                         * arrived. It is the same expression the threat call below already uses,
+                         * null guard included.
+                         *
+                         * THE NULL GUARD IS NOT DEFENSIVE HABIT. Fall damage, a damage shield and
+                         * an instakill all reach this line with no CleanDamage at all, and every
+                         * one of those is reachable in an arena - a bare dereference compiles and
+                         * then takes the map thread down the first time somebody eats a Thorns
+                         * proc.
+                         *
+                         * NOTHING IS PASSED ON THE LogFill BRANCH. That entry already carries
+                         * whatever the cast hook stamped on it, and the two things that reach this
+                         * line with a spellProto but no cast - a periodic tick and a split share -
+                         * both hardcode MELEE_HIT_NORMAL upstream, which is the honest answer for
+                         * both: a vanilla DoT does not crit, and the redirected half of a hit is
+                         * not itself a crit roll.
+                         *
+                         * MELEE_HIT_CRIT alone. A crushing blow needs a non-pet creature attacker
+                         * and a glancing blow needs a non-player victim, so neither can happen
+                         * between two arena fighters; and MELEE_HIT_BLOCK_CRIT is dead code in
+                         * this fork - its only return is behind SpellCasted == true and the sole
+                         * caller of that overload hardcodes false.
+                         */
                         Arena* arena = static_cast<Arena*>(bg);
                         if (spell && spell->m_arenaLogIndex >= 0)
                             arena->LogFill(spell->m_arenaLogIndex, applied, left);
                         else
-                            arena->LogEvent(this, pVictim, spellProto, 5, applied, left, true);
+                            arena->LogEvent(this, pVictim, spellProto, 5, applied, left, true,
+                                            cleanDamage &&
+                                            cleanDamage->hitOutCome == MELEE_HIT_CRIT);
                     }
     }
 
@@ -6550,7 +6580,8 @@ void Unit::CountArenaAbsorbAsHealing(int32 absorbed)
         CountArenaHealingDone(absorbed);
 }
 
-void Unit::CountArenaHealingDone(int32 gain, Unit* pVictim, SpellEntry const* spellProto)
+void Unit::CountArenaHealingDone(int32 gain, Unit* pVictim, SpellEntry const* spellProto,
+                                 bool critical)
 {
     if (gain <= 0 || !IsArenaMapId(GetMapId()))
         return;
@@ -6581,9 +6612,23 @@ void Unit::CountArenaHealingDone(int32 gain, Unit* pVictim, SpellEntry const* sp
      * The victim is optional: the absorb path counts a shield as healing and has neither a target
      * nor a spell to name, so it goes on the scoreboard and stays out of the log.
      */
+    /*
+     * The crit rides in from DealHeal, which has had it since the roll and was spending it only on
+     * the client's floating text.
+     *
+     * A heal over time passes false, and that is the true answer rather than a stub left for
+     * later: a vanilla HoT tick takes no crit roll at all - the branch computes its amount from
+     * the bonus functions and sends PROC_EX_NORMAL_HIT unconditionally - so nothing is being
+     * quietly dropped there.
+     *
+     * NOTE THE NUMBER BESIDE THE FLAG. `gain` is EFFECTIVE healing and the client's floating text
+     * shows the raw figure, so a crit that partly overheals reads smaller here than the number
+     * that flew up the screen. That was already true before the flag; marking the row as a crit
+     * makes it likelier somebody notices and calls it a bug.
+     */
     if (pVictim)
         static_cast<Arena*>(bg)->LogEvent(this, pVictim, spellProto, 4,
-                                          uint32(gain), pVictim->GetHealth(), true);
+                                          uint32(gain), pVictim->GetHealth(), true, critical);
 }
 
 int32 Unit::ModifyHealth(int32 dVal)

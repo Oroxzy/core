@@ -6024,7 +6024,14 @@ void Aura::PeriodicTick(SpellEntry const* sProto, AuraType auraType, uint32 data
             // A tick writes the health itself instead of going through DealHeal, so the arena
             // scoreboard has to be told here as well - otherwise every heal over time in the game
             // is missing from the healing column.
-            pCaster->CountArenaHealingDone(gain, target, GetSpellProto());
+            // FALSE FOR THE CRIT, WRITTEN OUT RATHER THAN LEFT TO THE DEFAULT, because a reader
+            // who finds a bare three argument call after a crit patch will assume it was missed.
+            // It was not. There is no crit to pass: this branch computes its amount out of the
+            // healing bonus functions and calls ModifyHealth, with no roll anywhere in it, and the
+            // proc mask it sends is the literal PROC_EX_NORMAL_HIT. A heal over time does not crit
+            // in 1.12 - SMSG_PERIODICAURALOG has no field to say so with - and a Renew tick that
+            // rendered as a crit would be the log inventing something the game does not have.
+            pCaster->CountArenaHealingDone(gain, target, GetSpellProto(), false);
             SpellPeriodicAuraLogInfo pInfo(this, pdamage, 0, 0, 0.0f);
             target->SendPeriodicAuraLog(&pInfo);
 

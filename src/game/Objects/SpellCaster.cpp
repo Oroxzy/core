@@ -778,8 +778,13 @@ int32 SpellCaster::DealHeal(Unit* pVictim, uint32 addhealth, SpellEntry const* s
 
     // Arena scoreboard: effective healing done by players (and their pets/totems). A heal over time
     // does not come through here at all - it ticks inside the aura, which calls the same helper.
+    //
+    // `critical` goes with it, and it was already sitting in this frame: three lines further down
+    // it is handed to SendHealSpellLog so the client can draw the big number, and it was simply
+    // not being handed to the log beside it. Nothing new is computed here - the flag is the roll
+    // Spell::DoAllEffectOnTarget made and passed in.
     if (pUnit)
-        pUnit->CountArenaHealingDone(gain, pVictim, spellProto);
+        pUnit->CountArenaHealingDone(gain, pVictim, spellProto, critical);
 
     if (IsPlayer() || pVictim->IsPlayer())
         pHealer->SendHealSpellLog(pVictim, spellProto->Id, addhealth, critical);

@@ -1160,9 +1160,44 @@ void Spell::DoAllEffectOnTarget(TargetInfo *target)
             if (onMap->IsBattleGround())
                 if (BattleGround* bg = static_cast<BattleGroundMap*>(onMap)->GetBG())
                     if (bg->IsArena())
+                    {
+                        /*
+                         * THE CRIT COMES OFF THE ROLL AND NOT OFF THE DAMAGE, and that single
+                         * choice is what keeps LogFill and DealDamage out of this change.
+                         *
+                         * target->isCrit was settled in AddUnitTarget before the hit roll was even
+                         * taken, it is the same field CalculateSpellDamage is handed to apply the
+                         * bonus, and it rides through a delayed spell's flight untouched - so it
+                         * is already final here, one dereference off the same `target` missInfo was
+                         * read from a few lines up.
+                         *
+                         * Taking it from cleanDamage down in DealDamage was the obvious
+                         * alternative and it is worse twice over. It would have needed a crit
+                         * parameter on LogFill, because a Mortal Strike's number is written
+                         * through LogFill and not through LogEvent - teaching only LogEvent gives
+                         * a log in which autoattacks crit and Mortal Strike never does. And it
+                         * would have lost the crit that never becomes damage: a hit a shield ate
+                         * whole fails the `damage &&` test at the top of the damage hook and never
+                         * arrives, so a crit Pyroblast into an Ice Barrier would have been logged
+                         * as an ordinary cast a moment after the client showed the player a crit.
+                         *
+                         * The price is one narrow disagreement the other way. A spell carrying
+                         * SPELL_ATTR_EX3_IGNORE_CASTER_MODIFIERS rolls a crit whose bonus is then
+                         * deliberately not applied, so this calls it a crit where the client's own
+                         * hit info does not. Absorbs happen every match and that attribute barely
+                         * appears in an arena, so the trade is the right way round.
+                         *
+                         * A MISS IS NEVER A CRIT. The crit roll is taken in AddUnitTarget BEFORE
+                         * missCondition is computed, so isCrit is perfectly capable of being true
+                         * on a Frostbolt that was resisted - and "Frostbolt (missed) (crit)" is
+                         * nonsense the wire should not carry in the first place, rather than
+                         * something the renderer papers over.
+                         */
+                        bool const landed = missInfo == SPELL_MISS_NONE;
                         m_arenaLogIndex = static_cast<Arena*>(bg)->LogEvent(
-                            m_casterUnit, unit, m_spellInfo,
-                            missInfo == SPELL_MISS_NONE ? 1 : 2);
+                            m_casterUnit, unit, m_spellInfo, landed ? 1 : 2,
+                            0, 0, false, landed && target->isCrit);
+                    }
 
     // Need init unitTarget by default unit (can changed in code on reflect)
     // Or on missInfo!=SPELL_MISS_NONE unitTarget undefined (but need in trigger subsystem)

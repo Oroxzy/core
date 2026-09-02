@@ -3042,7 +3042,7 @@ uint8 Arena::LogSlotFor(Unit* who)
  * the number so the AddOn can say the log is short instead of pretending it is whole.
  */
 int32 Arena::LogEvent(Unit* actor, Unit* victim, SpellEntry const* info, uint8 kind,
-                      uint32 amount, uint32 hp, bool haveNumbers)
+                      uint32 amount, uint32 hp, bool haveNumbers, bool crit)
 {
     if (GetStatus() != STATUS_IN_PROGRESS || !actor)
         return -1;
@@ -3084,6 +3084,16 @@ int32 Arena::LogEvent(Unit* actor, Unit* victim, SpellEntry const* info, uint8 k
     one.amount      = amount;
     one.hp          = hp;
     one.haveNumbers = haveNumbers;
+
+    /*
+     * SET HERE, WITH THE NUMBER IT DESCRIBES, and never as a second event afterwards. A crit is
+     * an adjective on an amount, not an occurrence of its own; appending a separate "and that one
+     * was a crit" entry would have needed no signature change at all, which is exactly why it is
+     * tempting - and it decorates the wrong line the moment anything is logged in between, which
+     * a triggered spell, a split or an inline proc does routinely.
+     */
+    one.flags       = crit ? uint8(ARENA_LOG_FLAG_CRIT) : uint8(0);
+
     one.kind        = kind;
     one.actor       = actorSlot;
     one.victim      = LogSlotFor(victim);
@@ -3309,6 +3319,35 @@ void Arena::DrainCombatLog(uint32 diff)
                     one << ev.amount << "," << ev.hp;
                 else
                     one << ",";
+
+                /*
+                 * FIELD EIGHT, WRITTEN ONLY WHEN THERE IS SOMETHING IN IT.
+                 *
+                 * An entry is seven fields today and eight when the flags byte is set, and the
+                 * AddOn tells them apart the way it already tells the current shape from the old
+                 * one: by counting, with "seven or more" rather than "seven exactly". That is what
+                 * makes this safe in BOTH directions of a rolling deploy - an AddOn that has never
+                 * heard of flags takes the branch it takes today and drops the field, and one that
+                 * has, reading a server that has not, finds nothing there and claims no crit.
+                 *
+                 * OMISSION IS THE ENCODING OF NOUGHT, and that is only allowed because a flags
+                 * byte has no third state. The two fields above CANNOT do this - "no amount
+                 * recorded" and "an amount of nought" are different things and the empty field is
+                 * what keeps them apart - but a flag is either raised or it is not.
+                 *
+                 * It sits OUTSIDE the branch above on purpose, and that is the whole point of
+                 * taking the crit at the cast. A Pyroblast a shield ate whole has no amount and no
+                 * health and knows perfectly well that it crit; folding this inside would throw
+                 * away the one line worth reading.
+                 *
+                 * NOTHING MAY EVER BE APPENDED AFTER THIS. Because absence is positional, a ninth
+                 * field would make an entry that omitted its flags look like one that set them,
+                 * and every ordinary hit in the log would turn into a crit. That is why the field
+                 * is an integer bitmask and not a bare "1": whatever wants saying next is a bit in
+                 * here, at the same two bytes. See ARENA_LOG_FLAG_CRIT.
+                 */
+                if (ev.flags)
+                    one << "," << uint32(ev.flags);
 
                 if (cursor > began &&
                     size_t(line.tellp()) + one.str().size() > ARENA_FRAME_MAX_PAYLOAD)

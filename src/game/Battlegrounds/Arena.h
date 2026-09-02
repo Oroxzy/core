@@ -698,14 +698,35 @@ class Arena : public BattleGround
          * somebody who drops and comes back inside the leave window is simply unknown to the
          * map and starts again at nought.
          */
-        enum { ARENA_LOG_MAX_EVENTS = 4096 };   // 64 KB an instance, more than a long 5v5 fills
+        // 96 KB an instance, more than a long 5v5 fills. It read 64 before this, which was the
+        // arithmetic for a smaller entry and was never re-derived when the entry grew - the
+        // struct below is 24 bytes now, and 4096 of them is 96.
+        enum { ARENA_LOG_MAX_EVENTS = 4096 };
 
         /*
          * SIX lines per half second, and the arithmetic is worth writing down because it moved.
          *
-         * An entry is at worst 28 bytes: ";" + 3 delta + 2 actor + 2 victim + 5 spell + 1 kind
+         * An entry is at worst 30 bytes: ";" + 3 delta + 3 actor + 3 victim + 5 spell + 1 kind
          * + 4 amount + 4 health, and six commas. Six of those plus "l|" and a five digit base is
-         * 175 of the 200 a payload may carry; a seventh would be 203 and does not fit.
+         * 187 of the 200 a payload may carry; a seventh would be 217 and does not fit.
+         *
+         * THE SLOTS ARE THREE DIGITS AND NOT TWO, which this line had wrong all along. LogSlotFor
+         * refuses a new slot only once the roster reaches 0xFE, so the highest it ever hands out
+         * is 253 - and a long 5v5 where every totem and every re-summoned pet takes a slot of its
+         * own gets nearer that than the "thirty or forty" the roster comment quotes as realistic.
+         * It never mattered while there were twenty five bytes of slack.
+         *
+         * A CRIT COSTS TWO MORE, and only on the entries that are one: the flags field is written
+         * as ",1" when it is set and omitted entirely when it is not, so a crit entry is 32 and
+         * everything else is unchanged. Six crits in one line at maximum field widths is
+         * 6 * 32 + 7 = 199, so the packing survives even that and stays at six. Making the field
+         * always present - ",0" on the ordinary ones - would fit too, but it fattens EVERY line
+         * by twelve bytes to say nothing.
+         *
+         * Nothing overflows if this arithmetic is ever wrong again - the packing loop measures
+         * the line it is building against ARENA_FRAME_MAX_PAYLOAD and stops - so the price of a
+         * mistake is one fewer entry on a line, not a truncated payload. Anything added after the
+         * crit flag must be measured against 32, not 28.
          *
          * Six lines a tick is 36 events a second. A 3v3 of some seven hundred events is with him
          * ten seconds after the gates close, and even a log that hits the 4096 cap is out in
@@ -735,6 +756,32 @@ class Arena : public BattleGround
             bool   haveNumbers;
 
             /*
+             * WHAT WAS SPECIAL ABOUT THE NUMBER, as a bitmask rather than a bool.
+             *
+             * Today the only bit is ARENA_LOG_FLAG_CRIT and a bool would have carried it. It is
+             * an integer because of how it travels: the wire writes this as an eighth field and
+             * OMITS IT ENTIRELY when it is zero, which costs the ordinary events - most of a log
+             * - nothing at all. That trick is positional, so it works for exactly one trailing
+             * field forever; the day somebody appends a ninth, every non-crit entry silently
+             * becomes a crit, because absence is what encodes false.
+             *
+             * So there is never a ninth. Glancing, blocked, a partial resist, a partial absorb -
+             * each is a bit in HERE, at the same two bytes, and the field count of an entry stays
+             * seven or eight for good.
+             *
+             * It is INDEPENDENT of haveNumbers, and that is the whole reason the crit is taken
+             * from the roll at the cast hook rather than from the damage. A Pyroblast a shield
+             * ate whole records no amount at all and still crit - the client showed the player a
+             * crit in floating text - so the flag has to survive an entry that has no numbers.
+             *
+             * It is NOT folded into haveNumbers as a spare bit. That would hold the struct at
+             * twenty bytes instead of twenty four, and it would make the three places that ask
+             * "were there numbers" read as arithmetic. Sixteen kilobytes an instance is not the
+             * currency here; bytes on the wire are.
+             */
+            uint8  flags;
+
+            /*
              * 1 a spell landed        4 healing
              * 2 it missed or was immune   5 damage with no cast behind it: a swing, a tick, a fall
              * 3 a stance change, which the AddOn hides unless asked   7 a death
@@ -743,6 +790,21 @@ class Arena : public BattleGround
             uint8  actor;                       // index into m_logRoster
             uint8  victim;                      // index into m_logRoster, 0xFF for none
         };
+
+        /*
+         * THE BITS OF ArenaLogEvent::flags, and of the eighth field on the wire.
+         *
+         * Crit is bit nought so the common case is the single character "1", which keeps a crit
+         * entry inside the thirty two bytes six-to-a-line allows. A flag numbered above ten would
+         * cost a third character and drop a line to five entries the first time two of them
+         * appeared together, so anything added later takes the low bits first.
+         *
+         * Crit is deliberately NOT a bit on `kind`. LogEvent tests `kind == 1` by exact equality
+         * to fold a stance change into kind 3, and the AddOn tests kind by equality in six more
+         * places - a crit heal arriving as 4|1 would fail its "is this healing" test and render as
+         * red damage with a minus sign in front of it. Kind says WHAT happened; this says HOW.
+         */
+        enum { ARENA_LOG_FLAG_CRIT = 0x01 };
 
         /*
          * Indices in here, NAMES on the wire. m_players is erased when somebody leaves, so any
@@ -791,10 +853,22 @@ class Arena : public BattleGround
          * again. Nothing has to guess or search: DealDamage is handed the Spell that caused it.
          */
         int32 LogEvent(Unit* actor, Unit* victim, SpellEntry const* info, uint8 kind,
-                       uint32 amount = 0, uint32 hp = 0, bool haveNumbers = false);
+                       uint32 amount = 0, uint32 hp = 0, bool haveNumbers = false,
+                       bool crit = false);
 
-        // fills in the numbers of an entry LogEvent already wrote, ignoring an index that is no
-        // longer there - a match can end between the cast and the damage
+        /*
+         * Fills in the numbers of an entry LogEvent already wrote, ignoring an index that is no
+         * longer there - a match can end between the cast and the damage.
+         *
+         * IT DOES NOT CARRY THE CRIT, and does not need to. The entry it fills was written by the
+         * cast hook, which took the crit off the roll before any effect ran - so the flag is
+         * already on the entry by the time the damage arrives. Widening this instead would have
+         * been a signature change on the hot path AND would have lost the crit whose damage never
+         * arrives at all, which a shield eating a Pyroblast produces every match. A reflected
+         * spell is the second reason: its entry was written as kind 2 and this function fills it
+         * with the CASTER's numbers, so a crit routed through here would hang a crit mark off a
+         * row that reads "missed".
+         */
         void LogFill(int32 index, uint32 amount, uint32 hp);
 
     private:

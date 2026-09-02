@@ -395,9 +395,17 @@ class Unit : public SpellCaster
         /*
          * The victim and the spell ride along for the combat log, and they are optional so the
          * absorb path - which has neither - can still use it for the scoreboard alone.
+         *
+         * So does the crit, and it is the one thing on the healing surface that could not be
+         * picked up without a signature: DealHeal has held the flag all along and spent it only on
+         * the client packet, and a heal never passes through DealDamage where cleanDamage would
+         * have carried it. Defaulted, because the two callers that are not a direct heal genuinely
+         * have no crit to give rather than being left unfinished - a heal over time in 1.12 takes
+         * no crit roll at all, and an absorb counted as healing has no roll behind it.
          */
         void CountArenaHealingDone(int32 gain, Unit* pVictim = nullptr,
-                                   SpellEntry const* spellProto = nullptr);
+                                   SpellEntry const* spellProto = nullptr,
+                                   bool critical = false);
         void CountArenaAbsorbAsHealing(int32 absorbed);
         bool IsFullHealth() const { return GetHealth() == GetMaxHealth(); }
         bool HealthBelowPct(int32 pct) const { return GetHealth() * 100 < GetMaxHealth() * pct; }
