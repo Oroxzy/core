@@ -1969,6 +1969,29 @@ void Arena::PushFrameData(uint32 diff)
             if (!receiver)
                 continue;
 
+            /*
+             * WHO HE IS, TOLD RATHER THAN LEFT TO BE WORKED OUT.
+             *
+             * s|0 and s|1 are the side he is fighting on; a bare s| means he is only watching.
+             *
+             * The AddOn used to infer this by looking for its own name in the roster, and that
+             * inference has one failure it cannot see: "my line has not arrived yet" and "I am a
+             * spectator" are the same observation. The server's own comment further up records
+             * the shape of it - a receiver who fell off the end of the old single a| line
+             * decided he was spectating and drew both teams mixed together.
+             *
+             * It matters more now than it did then. A spectator gets one window per team, so a
+             * fighter mistaken for a spectator for a single frame gets a second window flashed
+             * onto his screen.
+             *
+             * Sent on every push rather than once, for the same reason the bars are: this line
+             * carries the whole answer, so somebody who reloads or walks in mid match is right
+             * on his first tick and nothing has to be re-sent when he does.
+             */
+            auto const asFighter = m_players.find(receiver->GetObjectGuid());
+            SendArenaAddon(receiver, asFighter == m_players.end() ? "s|"
+                           : (asFighter->second.playerTeam == ALLIANCE ? "s|0" : "s|1"));
+
             // his language, for the two lines that carry words: the names and the cast bar
             LocaleConstant const locale = receiver->GetSession() ?
                                           receiver->GetSession()->GetSessionDbcLocale() : LOCALE_enUS;
