@@ -36,6 +36,7 @@
 #include "Arena.h"
 #include <iomanip>
 #include "ArenaRating.h"
+#include "Camera.h"
 
 bool ChatHandler::HandleHelpCommand(char* args)
 {
@@ -2795,6 +2796,73 @@ bool ChatHandler::HandleArenaMatchesCommand(char* /*args*/)
  * usually not in them. A ladder that only ever shows other people is a list about strangers, and
  * the one number he came for is the one that has to be there whether he made the cut or not.
  */
+
+/*
+ * .arena pov [name] - a spectator's camera rides along with one fighter, and nothing else.
+ *
+ * THIS IS THE GAME'S OWN MECHANISM, not one invented here. Camera::SetView is what
+ * Aura::HandleBindSight calls, which is Mind Vision, Far Sight and the Eye of Kilrogg - two
+ * lines, and the whole of what they do.
+ *
+ * IT GRANTS NO CONTROL, and that is the property the whole feature stands on. Nothing in the
+ * Camera class touches SetClientControl, the active mover or SetCharm; the spectator keeps his
+ * own body and only the viewpoint moves. He steers the camera himself from there, so how it
+ * looks is his choice - zoomed out and tilted down it is a bird's eye that follows the man.
+ *
+ * THE LIFETIME IS THE CORE'S PROBLEM AND IT ALREADY SOLVES IT. Camera::Event_RemovedFromWorld
+ * and Event_ViewPointVisibilityChanged both call ResetView, so a fighter who leaves the world or
+ * goes out of sight hands the camera back on his own. There is no way to be left looking through
+ * somebody who is not there.
+ *
+ * No name resets it, which is also what every path out does.
+ */
+bool ChatHandler::HandleArenaPovCommand(char* args)
+{
+    Player* player = m_session ? m_session->GetPlayer() : nullptr;
+    if (!player)
+        return false;
+
+    // no argument at all means "let go" - and that has to work from anywhere, including after
+    // the match ended, so it is answered before any of the checks below
+    char* name = ExtractQuotedOrLiteralArg(&args);
+    if (!name)
+    {
+        player->GetCamera().ResetView();
+        SendSysMessage("Camera released.");
+        return true;
+    }
+
+    BattleGround* bg = player->GetBattleGround();
+    if (!bg || !bg->IsArena())
+    {
+        SendSysMessage("You are not watching an arena match.");
+        return true;
+    }
+
+    /*
+     * ONLY A VISITOR, and asked of the match rather than of the flag. A fighter must never get a
+     * camera on anybody - it would show him the other side of a pillar - and m_players is what
+     * separates the two: a spectator is on the map but never in it.
+     */
+    if (bg->IsPlayerInBattleGround(player->GetObjectGuid()))
+    {
+        SendSysMessage("Only a spectator can follow a fighter.");
+        return true;
+    }
+
+    Player* target = sObjectMgr.GetPlayer(name);
+    if (!target || !bg->IsPlayerInBattleGround(target->GetObjectGuid()) ||
+        target->FindMap() != player->FindMap())
+    {
+        SendSysMessage("That fighter is not in this match.");
+        return true;
+    }
+
+    player->GetCamera().SetView(target);
+    PSendSysMessage("Following %s.", target->GetName());
+    return true;
+}
+
 bool ChatHandler::HandleArenaLadderCommand(char* args)
 {
     Player* player = m_session ? m_session->GetPlayer() : nullptr;
