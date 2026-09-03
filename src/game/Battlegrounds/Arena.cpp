@@ -1988,9 +1988,17 @@ void Arena::PushFrameData(uint32 diff)
              * carries the whole answer, so somebody who reloads or walks in mid match is right
              * on his first tick and nothing has to be re-sent when he does.
              */
+            // AND A BARE s| GOES TO A VISITOR AND TO NOBODY ELSE. "Not in m_players" used to be the
+            // whole test and it is not the same question: a gamemaster who .gonames into an arena is
+            // not in m_players either, and he was being told he was watching - so the AddOn blanked his
+            // interface and offered him a Leave button that cannot work for him, because he has no
+            // battleground id, no fake status slot and no entry point recorded. Giving him one would be
+            // the wrong repair: he did not come through the orb and nothing was taken from him.
             auto const asFighter = m_players.find(receiver->GetObjectGuid());
-            SendArenaAddon(receiver, asFighter == m_players.end() ? "s|"
-                           : (asFighter->second.playerTeam == ALLIANCE ? "s|0" : "s|1"));
+            if (asFighter != m_players.end())
+                SendArenaAddon(receiver, asFighter->second.playerTeam == ALLIANCE ? "s|0" : "s|1");
+            else if (receiver->IsArenaVisitor())
+                SendArenaAddon(receiver, "s|");
 
             // his language, for the two lines that carry words: the names and the cast bar
             LocaleConstant const locale = receiver->GetSession() ?

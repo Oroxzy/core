@@ -2869,6 +2869,32 @@ bool ChatHandler::HandleArenaWatchCommand(char* args)
     return true;
 }
 
+/*
+ * ".arena unwatch" - the Leave button on the spectator's own screen.
+ *
+ * The 1.12 client's LeaveBattlefield() is the scoreboard's button: it checks a "the battle has ended"
+ * flag before it does anything and returns silently while that flag is clear, so a visitor pressing
+ * Leave in a running match sent nothing at all. This does not go near CMSG_LEAVE_BATTLEFIELD and
+ * therefore does not depend on the client holding a battlefield status entry it may not have.
+ *
+ * No argument: the only match he can stop watching is the one he is standing in. Every gate lives in
+ * ArenaStopSpectatingFromWindow next to the gates on the way in - in particular the refusal for anyone
+ * who is not a VISITOR, which is what keeps a fighter who released his spirit from typing his way out
+ * of his own match. The answer goes back for the same reason "watch" sends one: the AddOn cannot tell
+ * a server too old to know this command from one that simply did not act, and a button whose only
+ * failure mode is silence is precisely the bug this replaces.
+ */
+bool ChatHandler::HandleArenaUnwatchCommand(char* /*args*/)
+{
+    Player* player = m_session ? m_session->GetPlayer() : nullptr;
+    if (!player)
+        return false;
+
+    bool const left = ArenaStopSpectatingFromWindow(player);
+    PSendSysMessage("ARENA|uw%s|%u", left ? "ok" : "no", uint32(left ? 1 : 0));
+    return true;
+}
+
 bool ChatHandler::HandleArenaPanelCommand(char* args)
 {
     char* what = ExtractLiteralArg(&args);

@@ -409,6 +409,7 @@ class ChatHandler
         bool HandleArenaMatchesCommand(char *args);
         bool HandleArenaLadderCommand(char *args);
         bool HandleArenaWatchCommand(char *args);
+        bool HandleArenaUnwatchCommand(char *args);
         bool HandleArenaSpectatorsCommand(char *args);
         bool HandleArenaKickSpectatorsCommand(char *args);
         // reads a spell id or "item <id>" for .arena ban / unban

@@ -568,8 +568,12 @@ namespace
             return false;
         }
 
-        // a free status slot lets the client show the "leave battleground" button - without one the visitor
-        // could not get out before the match ends (arena queues are left below, so their slots count as free)
+        // A free status slot is still required, but NOT for the reason this once said. The client's own
+        // "leave battleground" button cannot get a visitor out before the match ends: LeaveBattlefield()
+        // sends nothing until the client has seen an MSG_PVP_LOG_DATA with the "ended" byte set, which we
+        // only send at STATUS_WAIT_LEAVE. He leaves through ".arena unwatch" instead. The slot is kept
+        // because the fake in-progress status below needs one, and because it keeps a visitor out of an
+        // arena queue he cannot be pulled from (arena queues are left below, so their slots count as free)
         bool slotAvailable = false;
         for (uint8 slot = 0; slot < PLAYER_MAX_BATTLEGROUND_QUEUES && !slotAvailable; ++slot)
         {
@@ -679,6 +683,47 @@ bool ArenaLeaveQueueFromWindow(Player* player, ArenaType type)
 bool ArenaSpectateFromWindow(Player* player, uint32 instanceId)
 {
     return SpectateArena(player, nullptr, instanceId);
+}
+
+/*
+ * The way back out for somebody who is watching, and why it has to exist here at all.
+ *
+ * A visitor was meant to leave through the client's own "leave battleground". He cannot, and no
+ * server-side change could have made him: the 1.12 client's LeaveBattlefield() begins by reading the
+ * "this battle has ended" flag it sets from MSG_PVP_LOG_DATA and returns without sending anything
+ * while that flag is clear, and we only set that byte at STATUS_WAIT_LEAVE (BuildPvpLogDataPacket).
+ * So during a running match no CMSG_LEAVE_BATTLEFIELD is ever emitted, nothing arrives at
+ * HandleLeaveBattlefieldOpcode to be accepted or refused, and there was nothing on this side to fix.
+ * The AddOn asks over a chat command instead.
+ *
+ * IsArenaVisitor and NOT IsArenaSpectator, and that difference is the whole safety of it. A fighter
+ * who released his spirit is an arena spectator too - Player::SetArenaSpectator sets m_arenaSpectator
+ * for both and m_arenaVisitor only for the orb visitor - and handing him a working leave command
+ * would let him walk out of a match his team is still fighting, past the watcher NPC that is supposed
+ * to ask him first and past the leave lockout that goes with it.
+ *
+ * Player::LeaveBattleground is the same call Arena::RemoveSpectators already makes for every visitor
+ * when a match ends, so this is a proven path rather than a second one: it clears the fake
+ * battlefield status slot, clears the battleground id and ports him back to the position
+ * SpectateArena recorded before it moved him. The lockout inside it cannot touch him, because that
+ * branch is gated on bg->IsPlayerInBattleGround and a visitor was never in m_players.
+ *
+ * The fallback is for a visitor whose battleground pointer has gone - the instance ended and was
+ * freed while he stood in it. LeaveBattleground would then be a silent no-op and he would be stranded
+ * on a map with no way off, so he is ported home by hand.
+ */
+bool ArenaStopSpectatingFromWindow(Player* player)
+{
+    if (!player || !player->IsArenaVisitor())
+        return false;
+
+    if (player->GetBattleGround())
+    {
+        player->LeaveBattleground(true);
+        return true;
+    }
+
+    return player->TeleportToBGEntryPoint();
 }
 
 /*********************************************************/

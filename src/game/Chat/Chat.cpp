@@ -1209,6 +1209,11 @@ ChatCommand * ChatHandler::getCommandTable()
         { "matches",        SEC_PLAYER,         false, &ChatHandler::HandleArenaMatchesCommand,        "", nullptr },
         { "ladder",         SEC_PLAYER,         false, &ChatHandler::HandleArenaLadderCommand,         "", nullptr },
         { "watch",          SEC_PLAYER,         false, &ChatHandler::HandleArenaWatchCommand,          "", nullptr },
+        // and the way back out. The 1.12 client's own LeaveBattlefield() only sends anything once the
+        // match is over - it is the scoreboard's button - so the spectator screen's Leave has no client
+        // API to call and comes through here instead, the same road ".arena watch" took him in on.
+        // See ArenaStopSpectatingFromWindow in custom_arena.cpp.
+        { "unwatch",        SEC_PLAYER,         false, &ChatHandler::HandleArenaUnwatchCommand,        "", nullptr },
         { nullptr,          0,                  false, nullptr,                                        "", nullptr }
     };
 
