@@ -236,6 +236,40 @@ void WorldSession::SendMovementPacket(WorldPacket const* packet)
         return;
     }
 
+    /*
+     * AN ARENA SPECTATOR IS NEVER COMPRESSED, and he is the one case where this protection does
+     * exactly the wrong thing.
+     *
+     * Compression exists for mass PvP: past Compression.Movement.Count packets in a ten second
+     * window - three hundred, so thirty a second - a session stops sending movement as it
+     * arrives and starts buffering it into a block that goes out once per world update. In a
+     * forty on forty Alterac Valley that is the difference between a playable server and a dead
+     * one.
+     *
+     * A spectator blows through that threshold by simply existing. He receives the movement of
+     * every fighter, and a 3v3 where people steer with the mouse is well over a hundred packets
+     * a second on its own - so he is permanently in the buffered path, and what he watches
+     * arrives in lumps.
+     *
+     * IT SHOWS UP AS "MOUSE TURNING STUTTERS, KEYBOARD TURNING DOES NOT", which sounds like a
+     * client bug and is not. Turning with the keyboard is TWO packets, a start and a stop, and
+     * the viewer's own client interpolates the whole sweep between them. Turning with the mouse
+     * is a stream of absolute facings at the sender's framerate, and a stream is exactly what
+     * buffering destroys. Mind Control looks the same for the same reason.
+     *
+     * The exemption is safe precisely because of what a spectator is: at most ten fighters and
+     * their pets on one small map, which is the load compression was never meant for. It is
+     * asked of IsArenaSpectator, set only for somebody who came in through the orb as a visitor.
+     */
+    if (Player const* pViewer = GetPlayer())
+    {
+        if (pViewer->IsArenaSpectator())
+        {
+            SendPacketImpl(packet);
+            return;
+        }
+    }
+
     if (++m_movePacketsSentThisInterval < sWorld.getConfig(CONFIG_UINT32_COMPRESSION_MOVEMENT_COUNT) &&
         m_movePacketsSentLastInterval < sWorld.getConfig(CONFIG_UINT32_COMPRESSION_MOVEMENT_COUNT))
     {
