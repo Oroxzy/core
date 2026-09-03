@@ -6870,6 +6870,28 @@ bool Unit::IsVisibleForOrDetect(WorldObject const* pDetector, WorldObject const*
         return true;
     }
 
+    /*
+     * AN ARENA SPECTATOR SEES EVERYTHING, stealth included.
+     *
+     * The stealth filter above him exists to stop a FIGHTER learning where the rogue is, and a
+     * spectator is not a fighter - he is on the map, in nobody's team, and cannot act. Blizzard's
+     * own tournament coverage shows the rogue too; a viewer who cannot see half the opener is
+     * watching the wrong half of the match.
+     *
+     * IT ALSO REPAIRS TWO THINGS THAT WERE SIMPLY BROKEN. The frames drop a fighter they cannot
+     * see, so a stealthed man went quiet on the spectator's rows and his row stopped taking
+     * clicks - and worse, Camera::Event_ViewPointVisibilityChanged calls ResetView the moment a
+     * viewed unit goes out of sight, so a rogue vanishing threw the spectator's camera off him.
+     * Both were the same cause seen from two ends.
+     *
+     * THE PRICE, and it is real: a spectator on voice with one of the teams can call the rogue.
+     * That is a realm's policy question rather than a code one, and it is the same exposure the
+     * scoreboard and the combat log already hand him after the match. Asked of
+     * IsArenaSpectator, which is set only for somebody who came in through the orb as a visitor.
+     */
+    if (pDetectorPlayer && pDetectorPlayer->IsArenaSpectator() && IsArenaMapId(GetMapId()))
+        return true;
+
     // non faction visibility non-breakable for non-GMs
     if (m_visibility == VISIBILITY_OFF)
         return false;
