@@ -2858,7 +2858,32 @@ bool ChatHandler::HandleArenaPovCommand(char* args)
         return true;
     }
 
-    player->GetCamera().SetView(target);
+    /*
+     * LET GO OF THE ONE HE IS WATCHING FIRST, and make sure the client hears that on its own.
+     *
+     * The 1.12 client binds its camera when PLAYER_FARSIGHT goes from nought to somebody and
+     * unbinds it when it goes back to nought; a field that goes straight from one man to another
+     * it does not act on at all. That is what "the chat says Following, but nothing happens"
+     * was: the second SetView wrote the new guid over the old one in a single update, and the
+     * viewer had to click the man he was already on - which is the nought - and only then the
+     * new one. Mind Vision never showed it, because a re-cast removes the old aura before it
+     * applies the new one and the nought goes out between them by accident.
+     *
+     * ResetView sends the nought AT ONCE while no camera change is pending, and the SetView after
+     * it is batched onto the next update - two packets, which is exactly what is needed. When a
+     * change IS still pending, from a second click inside the batching window, ResetView only
+     * re-queues and the nought would be swallowed again; so it is written and sent by hand as
+     * well, which in the ordinary case merely repeats a nought the client already has.
+     */
+    Camera& camera = player->GetCamera();
+    if (camera.GetBody() != player)
+    {
+        camera.ResetView();
+        player->SetGuidValue(PLAYER_FARSIGHT, ObjectGuid());
+        player->DirectSendPublicValueUpdate(PLAYER_FARSIGHT, 2);
+    }
+
+    camera.SetView(target);
     PSendSysMessage("Following %s.", target->GetName());
     return true;
 }
