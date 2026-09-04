@@ -225,8 +225,15 @@ class WorldSession::SpectatorSmoother
                  * 3. A HEARTBEAT BETWEEN THEM, only while there is a "them". With no later
                  * report there is nothing to aim at, and inventing one would be the same guess
                  * the client makes for itself - so it is left to make it.
+                 *
+                 * AND NOT WHILE HE IS IN THE AIR. A jump is a parabola the viewer's client flies by
+                 * itself from the one JUMP packet; a heartbeat every sixteen milliseconds with the
+                 * jumping flag still set would have it restart that flight from each new point, and
+                 * a player in a fight jumps all the time. The real packets still go out on time, so
+                 * he leaves the ground and lands exactly when he did - only the arc is left alone.
                  */
                 if (from && to && to->at > from->at && renderAt > from->at &&
+                    !from->info.HasMovementFlag(MOVEFLAG_JUMPING | MOVEFLAG_FALLINGFAR) &&
                     !from->info.HasMovementFlag(MOVEFLAG_ONTRANSPORT))
                 {
                     float const f = float(renderAt - from->at) / float(to->at - from->at);
