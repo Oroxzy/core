@@ -36,6 +36,9 @@
 #include "PacketProcessing.h"
 #include "UpdateData.h"
 #include "LockedQueue.h"
+#include <deque>
+#include <unordered_map>
+#include <cmath>
 #include "Packets/AuctionHouse.h"
 #include "Packets/Battleground.h"
 #include "Packets/Channel.h"
@@ -369,6 +372,8 @@ class WorldSession
         /// @deprecated Use SendPacket with ServerPacket class
         void SendPacket(WorldPacket const* packet);
         void SendMovementPacket(WorldPacket const* packet);
+        // an arena visitor's delayed, interpolated movement feed - driven from the map's sub-tick
+        void UpdateSpectatorSmoothing(uint32 now);
         void SendNotification(char const* format, ...) ATTR_PRINTF(2, 3);
         void SendNotification(int32 string_id, ...);
         void SendPetNameInvalid(uint32 error, std::string const& name);
@@ -876,6 +881,11 @@ class WorldSession
         bool m_verifiedEmail;
         std::shared_ptr<PlayerBotEntry> m_bot;
         std::unique_ptr<SniffFile> m_sniffFile;
+
+        // built on the first movement packet a visitor is shown, gone with the session; the type
+        // lives in WorldSession.cpp, nothing else needs to see it
+        class SpectatorSmoother;
+        std::unique_ptr<SpectatorSmoother> m_spectatorSmoother;
 
         Warden* m_warden;
         MovementAnticheat* m_cheatData;

@@ -3365,6 +3365,15 @@ DynamicRespawn.PlayersMaxLevelDiff = 0
 #        Default: 1 (enabled)
 #                 0 (disabled, the menu entry is not offered and spectating is refused)
 #
+#    Arena.Spectator.SmoothDelay
+#        How far behind the match a visitor's view runs, in milliseconds. The 1.12 client reports
+#        a running, turning player's position only every 50-150 ms, and a viewer's client draws a
+#        straight line between two reports - the "one yard forward and back" on a curve. A visitor
+#        fights nobody, so his view can run behind by this much and the server fills the gap with
+#        interpolated heartbeats every MapUpdate.Instanced.SubTick. Fighters are never delayed.
+#        Default: 0 (off)
+#        Suggested: 150. Needs MapUpdate.Instanced.SubTick to be on.
+#
 #    Arena.AllowItemSwap
 #        Allow changing armor while the match is running (weapons, offhands and ranged slots can always be swapped).
 #        Default: 0 (disabled)
@@ -3494,6 +3503,7 @@ Arena.MaxResistance.Frost = 100
 Arena.MaxResistance.Shadow = 200
 Arena.MaxResistance.Arcane = 100
 Arena.Spectate = 1
+Arena.Spectator.SmoothDelay = 0
 Arena.AllowTrinketSwap = 1
 Arena.TimeLimitMinutes = 25
 Arena.ReadyStartDelaySeconds = 10

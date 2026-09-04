@@ -59,6 +59,240 @@ static bool MapSessionFilterHelper(WorldSession* session, OpcodeHandler const& o
 }
 
 
+/*
+ * A VISITOR'S VIEW OF THE MATCH RUNS A LITTLE BEHIND, AND IS INTERPOLATED IN THE GAP.
+ *
+ * This is the third and last piece of "the spectator's view stutters", because the first two
+ * turned out to be necessary and not sufficient. Exempting him from movement compression and
+ * draining the movement queue every sixteen milliseconds instead of once a tick both had to
+ * happen - and with both in place, measured off a recording, the fighter he was watching still
+ * moved in bursts three frames long with fifty to a hundred and forty milliseconds of nothing
+ * between them. The two clients were on the same machine as the server, the anticheat was off,
+ * and the relay was faster than the gaps. What remained was the SENDER: the 1.12 client, while
+ * it is running and turning at once, hands out its position that often and no more, and the
+ * viewer's client extrapolates straight ahead between one report and the next. On a curve or a
+ * strafe that is the "one yard forward and pulled back again" every player of this game has
+ * seen on somebody running past.
+ *
+ * A fighter cannot be helped. He needs the other man's position the instant it exists, and the
+ * only thing that makes a sparse stream smooth is waiting for the next point before drawing the
+ * line to it. A VISITOR CAN WAIT. He fights nobody, so his view can run a hundred and fifty
+ * milliseconds behind the match without anything being lost, and in that window the server
+ * holds two real reports of every man he watches and can put a synthetic heartbeat between
+ * them every sub-tick - position and facing interpolated, the flags of the earlier report so the
+ * animation is right. His client is then handed sixty points a second and has nothing left to
+ * guess, which is exactly the fluidity a player has for his own character.
+ *
+ * The real packets still go out, in order, each at its own delayed moment - a stop, a jump, a
+ * change of direction must arrive as the client expects them, not be reconstructed. The
+ * synthetic ones fill the gaps between two of them and stop when there is no later report to
+ * aim at: then the viewer's client extrapolates from the last real one, exactly as it does
+ * today, and the worst case is what he had before rather than something new.
+ *
+ * Everything here runs on the map's own update thread. A packet is pushed from the relay of
+ * another player on the same map, and the feed is advanced from the same sub-tick loop that
+ * drains the movement queues, so there is no lock because there is no second thread.
+ */
+class WorldSession::SpectatorSmoother
+{
+    public:
+        struct Sample
+        {
+            uint32 at;                          // the relay's stamp, taken as the packet arrived
+            MovementInfo info;
+            WorldPacket raw;                    // sent as it was, when its moment comes
+            bool sent;
+        };
+
+        struct Track
+        {
+            ObjectGuid guid;
+            std::deque<Sample> samples;
+        };
+
+        // the opcodes HandleMovementOpcodes relays - a packed guid and a MovementInfo, nothing
+        // else - and so the only ones that can be parsed here and re-timed
+        static bool IsRelayedMovement(uint16 opcode)
+        {
+            switch (opcode)
+            {
+                case MSG_MOVE_START_FORWARD:
+                case MSG_MOVE_START_BACKWARD:
+                case MSG_MOVE_STOP:
+                case MSG_MOVE_START_STRAFE_LEFT:
+                case MSG_MOVE_START_STRAFE_RIGHT:
+                case MSG_MOVE_STOP_STRAFE:
+                case MSG_MOVE_JUMP:
+                case MSG_MOVE_START_TURN_LEFT:
+                case MSG_MOVE_START_TURN_RIGHT:
+                case MSG_MOVE_STOP_TURN:
+                case MSG_MOVE_START_PITCH_UP:
+                case MSG_MOVE_START_PITCH_DOWN:
+                case MSG_MOVE_STOP_PITCH:
+                case MSG_MOVE_SET_RUN_MODE:
+                case MSG_MOVE_SET_WALK_MODE:
+                case MSG_MOVE_FALL_LAND:
+                case MSG_MOVE_START_SWIM:
+                case MSG_MOVE_STOP_SWIM:
+                case MSG_MOVE_SET_FACING:
+                case MSG_MOVE_SET_PITCH:
+                case MSG_MOVE_HEARTBEAT:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        void Push(WorldSession& session, WorldPacket const& packet, uint32 now)
+        {
+            WorldPacket copy(packet);
+            ObjectGuid guid;
+            MovementInfo info;
+            copy >> guid.ReadAsPacked();
+            info.Read(copy);
+
+            /*
+             * Read stamps stime with the moment of THIS read and puts the number on the wire -
+             * which the relay wrote from its own stime - into ctime. So ctime is the stamp the
+             * network thread took as the sender's packet arrived, with the sender's real spacing
+             * in it, and that is the time this sample is filed under.
+             */
+            // built in one go: WorldPacket can be copied into being but not assigned afterwards
+            Sample sample{ info.ctime ? info.ctime : now, info, packet, false };
+
+            Track& track = m_tracks[guid.GetRawValue()];
+            track.guid = guid;
+
+            if (!track.samples.empty())
+            {
+                Sample const& last = track.samples.back();
+
+                /*
+                 * TWENTY YARDS IN ONE STEP IS NOT A STEP. A charge, a teleport, a man ported
+                 * to a graveyard - the spline or the update packet that moved him went out
+                 * ahead of this queue, so the viewer's client already has him where he is now.
+                 * Drawing a line from where he was would walk him across the arena at a run,
+                 * and sending the reports still waiting here would snap him BACK to where he
+                 * no longer is for a moment. They describe a position that has been overtaken;
+                 * they are dropped, and the track starts again from this report.
+                 */
+                float const dx = info.pos.x - last.info.pos.x;
+                float const dy = info.pos.y - last.info.pos.y;
+                float const dz = info.pos.z - last.info.pos.z;
+                if (dx * dx + dy * dy + dz * dz > 400.0f)
+                    track.samples.clear();
+                else if (sample.at < last.at)
+                    sample.at = last.at;        // never backwards; the client would not know what to do with it
+            }
+
+            track.samples.push_back(sample);
+        }
+
+        void Update(WorldSession& session, uint32 now, uint32 delay)
+        {
+            if (now < delay)
+                return;
+            uint32 const renderAt = now - delay;
+
+            for (auto itr = m_tracks.begin(); itr != m_tracks.end();)
+            {
+                Track& track = itr->second;
+                std::deque<Sample>& samples = track.samples;
+
+                // 1. every real report whose moment has come goes out as it was, in order
+                for (Sample& s : samples)
+                    if (!s.sent && s.at <= renderAt)
+                    {
+                        session.SendPacketImpl(&s.raw);
+                        s.sent = true;
+                    }
+
+                // 2. the last one that went out, and the first one still waiting
+                Sample const* from = nullptr;
+                Sample const* to = nullptr;
+                for (Sample const& s : samples)
+                {
+                    if (s.sent)
+                        from = &s;
+                    else
+                    {
+                        to = &s;
+                        break;
+                    }
+                }
+
+                /*
+                 * 3. A HEARTBEAT BETWEEN THEM, only while there is a "them". With no later
+                 * report there is nothing to aim at, and inventing one would be the same guess
+                 * the client makes for itself - so it is left to make it.
+                 */
+                if (from && to && to->at > from->at && renderAt > from->at &&
+                    !from->info.HasMovementFlag(MOVEFLAG_ONTRANSPORT))
+                {
+                    float const f = float(renderAt - from->at) / float(to->at - from->at);
+                    Position const& a = from->info.pos;
+                    Position const& b = to->info.pos;
+
+                    MovementInfo mid = from->info;
+                    mid.pos.x = a.x + (b.x - a.x) * f;
+                    mid.pos.y = a.y + (b.y - a.y) * f;
+                    mid.pos.z = a.z + (b.z - a.z) * f;
+                    mid.pos.o = LerpOrientation(a.o, b.o, f);
+                    mid.stime = renderAt;
+
+                    WorldPacket data(MSG_MOVE_HEARTBEAT, 40);
+                    data << track.guid.WriteAsPacked();
+                    mid.Write(data);
+                    session.SendPacketImpl(&data);
+                }
+
+                /*
+                 * 4. What is behind is let go of - but never the last one that went out, which
+                 * is the "from" of the next interpolation - and a man nobody has heard from for
+                 * five seconds has left, stopped, or died, and his track goes with him.
+                 */
+                while (samples.size() > 1 && samples[0].sent && samples[1].sent)
+                    samples.pop_front();
+
+                if (!samples.empty() && WorldTimer::getMSTimeDiff(samples.back().at, now) > 5000)
+                    itr = m_tracks.erase(itr);
+                else
+                    ++itr;
+            }
+        }
+
+    private:
+        // the shortest way round from a to b, then the fraction f of it
+        static float LerpOrientation(float a, float b, float f)
+        {
+            float const twoPi = 6.28318530717959f;
+            float const pi = 3.14159265358979f;
+            float d = std::fmod(b - a + 3.0f * pi, twoPi) - pi;
+            float o = std::fmod(a + d * f, twoPi);
+            if (o < 0.0f)
+                o += twoPi;
+            return o;
+        }
+
+        std::unordered_map<uint64, Track> m_tracks;
+};
+
+void WorldSession::UpdateSpectatorSmoothing(uint32 now)
+{
+    if (!m_spectatorSmoother)
+        return;
+
+    uint32 const delay = sWorld.getConfig(CONFIG_UINT32_ARENA_SPECTATOR_SMOOTH_DELAY);
+    Player const* pViewer = GetPlayer();
+    if (!delay || !m_socket || !pViewer || !pViewer->IsArenaVisitor())
+    {
+        m_spectatorSmoother.reset();            // whatever was still waiting is a match he has left
+        return;
+    }
+
+    m_spectatorSmoother->Update(*this, now, delay);
+}
+
 bool MapSessionFilter::Process(std::unique_ptr<ClientPacket const> const& packet)
 {
     OpcodeHandler const& opHandle = LookupOpcodeHandler(packet->GetOpcode());
@@ -265,6 +499,22 @@ void WorldSession::SendMovementPacket(WorldPacket const* packet)
     {
         if (pViewer->IsArenaSpectator())
         {
+            /*
+             * AND A VISITOR'S MOVEMENT IS HELD BACK AND INTERPOLATED - see SpectatorSmoother
+             * above. Only a visitor: a dead fighter is a spectator too, and he is shown the match
+             * as it is, since nothing about him was built to run behind it.
+             */
+            if (uint32 const delay = sWorld.getConfig(CONFIG_UINT32_ARENA_SPECTATOR_SMOOTH_DELAY))
+            {
+                if (pViewer->IsArenaVisitor() && SpectatorSmoother::IsRelayedMovement(packet->GetOpcode()))
+                {
+                    if (!m_spectatorSmoother)
+                        m_spectatorSmoother = std::make_unique<SpectatorSmoother>();
+                    m_spectatorSmoother->Push(*this, *packet, WorldTimer::getMSTime());
+                    return;
+                }
+            }
+
             SendPacketImpl(packet);
             return;
         }

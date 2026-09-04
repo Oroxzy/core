@@ -903,6 +903,22 @@ void Map::UpdateSessionsMovementAndSpellsIfNeeded()
 
     ProcessSessionPackets(PACKET_PROCESS_MOVEMENT);
     ProcessSessionPackets(PACKET_PROCESS_SPELLS);
+
+    /*
+     * AND THE VISITORS' INTERPOLATED FEED IS ADVANCED HERE, on the same sub-tick that drained the
+     * queues it is built from, on the same thread. A visitor's view runs a set distance behind
+     * the match and the server draws the line between two real reports of every fighter for him
+     * - see WorldSession::SpectatorSmoother. Nothing to do on a map with nobody watching, which is
+     * every map but an arena with the orb in use.
+     */
+    if (sWorld.getConfig(CONFIG_UINT32_ARENA_SPECTATOR_SMOOTH_DELAY))
+        for (m_mapRefIter = m_mapRefManager.begin(); m_mapRefIter != m_mapRefManager.end(); ++m_mapRefIter)
+        {
+            Player* plr = m_mapRefIter->getSource();
+            if (plr && plr->IsInWorld() && plr->IsArenaVisitor())
+                plr->GetSession()->UpdateSpectatorSmoothing(now);
+        }
+
     m_lastMvtSpellsUpdate = WorldTimer::getMSTime();
 }
 
