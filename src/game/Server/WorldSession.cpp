@@ -108,6 +108,30 @@ class WorldSession::SpectatorSmoother
         {
             ObjectGuid guid;
             std::deque<Sample> samples;
+
+            /*
+             * THE LAST POINT THE VIEWER WAS HANDED, and how far it stands from the line the
+             * reports describe. When a report is released and the viewer's man is not where it
+             * says - because the line was carried on through a gap and he went somewhere else -
+             * the difference is not snapped away. It becomes an offset that every point sent
+             * afterwards carries, fading to nothing over the next hundred and fifty
+             * milliseconds, so he glides back onto the line instead of jumping to it.
+             */
+            bool     haveSent = false;
+            Position sent;
+            float    errX = 0.0f, errY = 0.0f, errZ = 0.0f, errO = 0.0f;
+            uint32   fadedAt = 0;               // so the fade is by time, not by tick
+
+            /*
+             * How he was moving, from the last two reports that were at least forty
+             * milliseconds apart - two closer than that are one moment reported twice, and a
+             * speed read off them is noise. This is what carries the line on when the sender
+             * goes quiet for longer than the feed runs behind.
+             */
+            bool     haveVel = false;
+            float    velX = 0.0f, velY = 0.0f, velZ = 0.0f, velO = 0.0f;   // per millisecond
+            uint32   lastReportAt = 0;
+            Position lastReportPos;
         };
 
         // the opcodes HandleMovementOpcodes relays - a packed guid and a MovementInfo, nothing
@@ -180,7 +204,13 @@ class WorldSession::SpectatorSmoother
                 float const dy = info.pos.y - last.info.pos.y;
                 float const dz = info.pos.z - last.info.pos.z;
                 if (dx * dx + dy * dy + dz * dz > 400.0f)
+                {
                     track.samples.clear();
+                    track.haveSent = false;     // the viewer holds a point of the client's own now
+                    track.haveVel = false;
+                    track.lastReportAt = 0;
+                    track.errX = track.errY = track.errZ = track.errO = 0.0f;
+                }
                 else if (sample.at < last.at)
                     sample.at = last.at;        // never backwards; the client would not know what to do with it
             }
@@ -199,13 +229,76 @@ class WorldSession::SpectatorSmoother
                 Track& track = itr->second;
                 std::deque<Sample>& samples = track.samples;
 
-                // 1. every real report whose moment has come goes out as it was, in order
+                /*
+                 * THE OFFSET FADES BY TIME before anything else happens this tick, so a report
+                 * released below goes out with what is left of it rather than with all of it.
+                 */
+                if (track.haveSent)
+                {
+                    float const keep = 1.0f - std::min(1.0f, float(WorldTimer::getMSTimeDiff(track.fadedAt, now)) / FADE_MS);
+                    track.errX *= keep;
+                    track.errY *= keep;
+                    track.errZ *= keep;
+                    track.errO *= keep;
+                }
+                track.fadedAt = now;
+
+                // 1. every real report whose moment has come goes out, in order
                 for (Sample& s : samples)
-                    if (!s.sent && s.at <= renderAt)
+                {
+                    if (s.sent || s.at > renderAt)
+                        continue;
+                    s.sent = true;
+
+                    // how he was moving, for the gaps - see the Track
+                    if (track.lastReportAt && s.at >= track.lastReportAt + 40)
+                    {
+                        float const dt = float(s.at - track.lastReportAt);
+                        track.velX = (s.info.pos.x - track.lastReportPos.x) / dt;
+                        track.velY = (s.info.pos.y - track.lastReportPos.y) / dt;
+                        track.velZ = (s.info.pos.z - track.lastReportPos.z) / dt;
+                        track.velO = ShortestArc(track.lastReportPos.o, s.info.pos.o) / dt;
+                        track.haveVel = true;
+                    }
+                    track.lastReportAt = s.at;
+                    track.lastReportPos = s.info.pos;
+
+                    bool const airborne = s.info.HasMovementFlag(MOVEFLAG_JUMPING | MOVEFLAG_FALLINGFAR);
+                    bool const moving = s.info.HasMovementFlag(MOVEFLAG_MASK_MOVING);
+                    if (!moving)
+                        track.haveVel = false;
+
+                    /*
+                     * AS IT WAS, unless the viewer's man is somewhere else. Between two reports
+                     * the line ends exactly on the second one, so this is normally a copy of the
+                     * original bytes. After a gap it is not: the line was carried on past the
+                     * last report and this one says where he really went, and snapping to it is
+                     * the step this whole thing exists to remove - so the difference becomes the
+                     * offset, and this report goes out from where the viewer already has him.
+                     *
+                     * A stop is sent exactly. It is the one moment a small correction reads as
+                     * natural, and a man left standing a hand's breadth from his true spot until
+                     * he next moves would be the worse of the two. So is a jump, whose arc the
+                     * client flies by itself from this very packet, and anything on a transport.
+                     */
+                    if (!track.haveSent || airborne || !moving || s.info.HasMovementFlag(MOVEFLAG_ONTRANSPORT))
                     {
                         session.SendPacketImpl(&s.raw);
-                        s.sent = true;
+                        track.errX = track.errY = track.errZ = track.errO = 0.0f;
+                        track.sent = s.info.pos;
+                        track.haveSent = !airborne;
+                        continue;
                     }
+
+                    track.errX = track.sent.x - s.info.pos.x;
+                    track.errY = track.sent.y - s.info.pos.y;
+                    track.errZ = track.sent.z - s.info.pos.z;
+                    track.errO = ShortestArc(s.info.pos.o, track.sent.o);
+
+                    MovementInfo shifted = s.info;
+                    shifted.stime = s.at;
+                    Send(session, track, s.raw.GetOpcode(), shifted);
+                }
 
                 // 2. the last one that went out, and the first one still waiting
                 Sample const* from = nullptr;
@@ -222,35 +315,61 @@ class WorldSession::SpectatorSmoother
                 }
 
                 /*
-                 * 3. A HEARTBEAT BETWEEN THEM, only while there is a "them". With no later
-                 * report there is nothing to aim at, and inventing one would be the same guess
-                 * the client makes for itself - so it is left to make it.
+                 * 3. A POINT FOR THIS TICK. Between two reports it lies on the line between
+                 * them. Past the last one with nothing newer in hand - the sender was quiet for
+                 * longer than the feed runs behind - the line is carried on the way he was
+                 * going, for up to half a second: that is his own client's heartbeat interval,
+                 * and a man quiet for longer than that has stopped and said so. That was the
+                 * last of the steps: the client carries a position on by itself but never a
+                 * mouse turn, so a facing used to freeze through every such gap and jump at the
+                 * next report. The turn is halved unless a turn key is held - a mouse that was
+                 * turning is as likely to have stopped as to have gone on, and half an overshoot
+                 * fades better than a whole one; a key held turns at a fixed rate the client
+                 * matches exactly, and halving that would fight it.
                  *
-                 * AND NOT WHILE HE IS IN THE AIR. A jump is a parabola the viewer's client flies by
-                 * itself from the one JUMP packet; a heartbeat every sixteen milliseconds with the
-                 * jumping flag still set would have it restart that flight from each new point, and
-                 * a player in a fight jumps all the time. The real packets still go out on time, so
-                 * he leaves the ground and lands exactly when he did - only the arc is left alone.
+                 * AND NOT WHILE HE IS IN THE AIR. A jump is a parabola the viewer's client flies
+                 * by itself from the one JUMP packet; a heartbeat every sixteen milliseconds with
+                 * the jumping flag still set would have it restart that flight from each new
+                 * point, and a player in a fight jumps all the time. The real packets still go
+                 * out on time, so he leaves the ground and lands exactly when he did - only the
+                 * arc is left alone.
                  */
-                if (from && to && to->at > from->at && renderAt > from->at &&
+                bool haveTarget = false;
+                Position target;
+                if (from && renderAt > from->at &&
                     !from->info.HasMovementFlag(MOVEFLAG_JUMPING | MOVEFLAG_FALLINGFAR) &&
                     !from->info.HasMovementFlag(MOVEFLAG_ONTRANSPORT))
                 {
-                    float const f = float(renderAt - from->at) / float(to->at - from->at);
                     Position const& a = from->info.pos;
-                    Position const& b = to->info.pos;
+                    if (to && to->at > from->at)
+                    {
+                        float const f = float(renderAt - from->at) / float(to->at - from->at);
+                        Position const& b = to->info.pos;
+                        target.x = a.x + (b.x - a.x) * f;
+                        target.y = a.y + (b.y - a.y) * f;
+                        target.z = a.z + (b.z - a.z) * f;
+                        target.o = LerpOrientation(a.o, b.o, f);
+                        haveTarget = true;
+                    }
+                    else if (!to && track.haveVel && from->info.HasMovementFlag(MOVEFLAG_MASK_MOVING) &&
+                             renderAt - from->at <= CARRY_ON_MS)
+                    {
+                        float const hole = float(renderAt - from->at);
+                        float const turn = from->info.HasMovementFlag(MOVEFLAG_TURN_LEFT | MOVEFLAG_TURN_RIGHT) ? 1.0f : 0.5f;
+                        target.x = a.x + track.velX * hole;
+                        target.y = a.y + track.velY * hole;
+                        target.z = a.z + track.velZ * hole;
+                        target.o = NormalizeO(a.o + track.velO * turn * hole);
+                        haveTarget = true;
+                    }
+                }
 
+                if (haveTarget)
+                {
                     MovementInfo mid = from->info;
-                    mid.pos.x = a.x + (b.x - a.x) * f;
-                    mid.pos.y = a.y + (b.y - a.y) * f;
-                    mid.pos.z = a.z + (b.z - a.z) * f;
-                    mid.pos.o = LerpOrientation(a.o, b.o, f);
+                    mid.pos = target;
                     mid.stime = renderAt;
-
-                    WorldPacket data(MSG_MOVE_HEARTBEAT, 40);
-                    data << track.guid.WriteAsPacked();
-                    mid.Write(data);
-                    session.SendPacketImpl(&data);
+                    Send(session, track, MSG_MOVE_HEARTBEAT, mid);
                 }
 
                 /*
@@ -269,16 +388,51 @@ class WorldSession::SpectatorSmoother
         }
 
     private:
-        // the shortest way round from a to b, then the fraction f of it
-        static float LerpOrientation(float a, float b, float f)
+        static constexpr float FADE_MS = 150.0f;        // an offset is gone after this long
+        static constexpr uint32 CARRY_ON_MS = 500;      // the client's own heartbeat interval
+
+        static float NormalizeO(float o)
         {
             float const twoPi = 6.28318530717959f;
-            float const pi = 3.14159265358979f;
-            float d = std::fmod(b - a + 3.0f * pi, twoPi) - pi;
-            float o = std::fmod(a + d * f, twoPi);
+            o = std::fmod(o, twoPi);
             if (o < 0.0f)
                 o += twoPi;
             return o;
+        }
+
+        // the signed shortest way round from a to b, in (-pi, pi]
+        static float ShortestArc(float a, float b)
+        {
+            float const twoPi = 6.28318530717959f;
+            float const pi = 3.14159265358979f;
+            return std::fmod(b - a + 3.0f * pi, twoPi) - pi;
+        }
+
+        // the fraction f of the shortest way round from a to b
+        static float LerpOrientation(float a, float b, float f)
+        {
+            return NormalizeO(a + ShortestArc(a, b) * f);
+        }
+
+        /*
+         * Every point goes out through here, carrying what is left of the offset, and is
+         * remembered as the point the viewer now holds - which is what the next report is
+         * measured against.
+         */
+        static void Send(WorldSession& session, Track& track, uint16 opcode, MovementInfo info)
+        {
+            info.pos.x += track.errX;
+            info.pos.y += track.errY;
+            info.pos.z += track.errZ;
+            info.pos.o = NormalizeO(info.pos.o + track.errO);
+
+            WorldPacket data(opcode, 40);
+            data << track.guid.WriteAsPacked();
+            info.Write(data);
+            session.SendPacketImpl(&data);
+
+            track.sent = info.pos;
+            track.haveSent = true;
         }
 
         std::unordered_map<uint64, Track> m_tracks;
