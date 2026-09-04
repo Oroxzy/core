@@ -302,6 +302,11 @@ MapUpdate.Empty.UpdateTime = 0
 # Per-map threading
 MapUpdate.Instanced.UpdateThreads = 2
 
+# Instanced maps keep draining movement and spell packets BETWEEN two map ticks, every N ms
+# (0 = off). Built for the arena spectator, whose whole view otherwise arrives in lumps once per
+# MapUpdateInterval. Needs MapUpdate.UpdatePacketsDiff at or below this value to do anything.
+MapUpdate.Instanced.SubTick = 0
+
 # Per-map subthreads (not for instanced maps)
 MapUpdate.ObjectsUpdate.MaxThreads = 4
 MapUpdate.ObjectsUpdate.Timeout = 100

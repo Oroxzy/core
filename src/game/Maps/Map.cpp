@@ -57,6 +57,8 @@
 #include "CreatureGroups.h"
 #include "Geometry.h"
 
+#include <thread>
+
 Map::~Map()
 {
     UnloadAll(true);
@@ -1004,6 +1006,61 @@ void Map::Update(uint32 t_diff)
         while (!sMapMgr.waitContinentUpdateFinishedUntil(start + std::chrono::milliseconds(sWorld.getConfig(CONFIG_UINT32_INTERVAL_MAPUPDATE))))
         {
             start = std::chrono::high_resolution_clock::now();
+            UpdateSessionsMovementAndSpellsIfNeeded();
+            UpdatePlayers();
+            ++additionnalUpdateCounts;
+        }
+        additionnalWaitTime = WorldTimer::getMSTimeDiffToNow(additionnalWaitTime);
+    }
+    /*
+     * AN INSTANCE KEEPS RELAYING MOVEMENT BETWEEN TWO TICKS, and this exists for the arena
+     * spectator.
+     *
+     * A continent gets the equivalent above by accident of the thread model: it finishes its own
+     * pass and then keeps draining movement and spells while it waits for the slower continents.
+     * An instance has nobody to wait for, so it drained its players' movement exactly once a tick
+     * - and a tick is MapUpdateInterval, a hundred milliseconds by default. A fighter never
+     * notices, because his own client moves him locally. It is the whole of "the spectator's view
+     * stutters": everything he watches arrives in hundred-millisecond lumps, three or six facing
+     * updates in one burst, and his client snaps through them and then coasts. Mouse turning is
+     * a stream of absolute facings at the sender's frame rate, which is exactly the kind of thing
+     * a lump destroys; keyboard turning is a start and a stop and survives it, which is why the
+     * two looked so different.
+     *
+     * The timestamps were never the problem - MovementInfo::Read stamps them on the network
+     * thread as the packet arrives - and neither was the compression, which a spectator is
+     * already exempt from. It was only ever the cadence at which the queue is drained.
+     *
+     * Only what a fighter's client could not have done for itself runs in here. Movement and
+     * spells are the two packet classes with a queue of their own precisely because they are
+     * latency bound, and UpdatePlayers keeps its own hundred-millisecond gate, so nothing else
+     * speeds up: no AI, no regeneration, no cell walking. A pass on an arena-sized map is a
+     * fraction of a millisecond.
+     *
+     * Bounded by the tick. It stops a sub-tick short of the moment the next map update is due,
+     * so the world loop keeps its cadence and the map's own timers see the same diffs they
+     * always saw. And it runs on this map's own update thread - the one that drained these
+     * queues a moment ago - which is why it needs no lock the normal pass did not.
+     *
+     * OFF BY DEFAULT. A forty-man raid gains nothing from it and a server that is not this one
+     * should not pay for it. MapUpdate.UpdatePacketsDiff has to be at or below the sub-tick, or
+     * the gate inside UpdateSessionsMovementAndSpellsIfNeeded swallows every pass this makes.
+     *
+     * A BATTLEGROUND WITH SOMEBODY IN IT, and nothing else. This loop is a thread of the instance
+     * pool spending most of a tick asleep, and MapUpdate.Instanced.UpdateThreads is two. An empty
+     * arena that has not unloaded yet, or a dungeon whose players gain nothing from it, would each
+     * hold one of those threads for the whole interval and queue the map that actually needs it
+     * behind them - and a world loop that waits on that pool would slow with it.
+     */
+    else if (IsBattleGround() && HavePlayers() && sWorld.getConfig(CONFIG_UINT32_MAPUPDATE_INSTANCED_SUBTICK))
+    {
+        std::chrono::milliseconds const subTick(sWorld.getConfig(CONFIG_UINT32_MAPUPDATE_INSTANCED_SUBTICK));
+        auto const deadline = start + std::chrono::milliseconds(sWorld.getConfig(CONFIG_UINT32_INTERVAL_MAPUPDATE));
+
+        additionnalWaitTime = WorldTimer::getMSTime();
+        while (std::chrono::high_resolution_clock::now() + subTick < deadline)
+        {
+            std::this_thread::sleep_for(subTick);
             UpdateSessionsMovementAndSpellsIfNeeded();
             UpdatePlayers();
             ++additionnalUpdateCounts;
