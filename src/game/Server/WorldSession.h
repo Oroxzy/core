@@ -374,6 +374,10 @@ class WorldSession
         void SendMovementPacket(WorldPacket const* packet);
         // an arena visitor's delayed, interpolated movement feed - driven from the map's sub-tick
         void UpdateSpectatorSmoothing(uint32 now);
+        // straight to the socket, past the visitor's delay - for what is already on the delayed timeline
+        void SendPacketNow(WorldPacket const* packet);
+        // what has fallen due goes out, in order; everything at once when he is no longer a visitor
+        void FlushDelayedPackets(uint32 now, bool everything);
         void SendNotification(char const* format, ...) ATTR_PRINTF(2, 3);
         void SendNotification(int32 string_id, ...);
         void SendPetNameInvalid(uint32 error, std::string const& name);
@@ -886,6 +890,10 @@ class WorldSession
         // lives in WorldSession.cpp, nothing else needs to see it
         class SpectatorSmoother;
         std::unique_ptr<SpectatorSmoother> m_spectatorSmoother;
+
+        // a visitor's whole stream, each packet with the moment it falls due - see SendPacketImpl
+        std::mutex m_delayedLock;
+        std::deque<std::pair<uint32, WorldPacket>> m_delayed;
 
         Warden* m_warden;
         MovementAnticheat* m_cheatData;

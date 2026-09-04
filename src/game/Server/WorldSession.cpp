@@ -192,18 +192,18 @@ class WorldSession::SpectatorSmoother
                 Sample const& last = track.samples.back();
 
                 /*
-                 * TWENTY YARDS IN ONE STEP IS NOT A STEP. A charge, a teleport, a man ported
-                 * to a graveyard - the spline or the update packet that moved him went out
-                 * ahead of this queue, so the viewer's client already has him where he is now.
-                 * Drawing a line from where he was would walk him across the arena at a run,
-                 * and sending the reports still waiting here would snap him BACK to where he
-                 * no longer is for a moment. They describe a position that has been overtaken;
-                 * they are dropped, and the track starts again from this report.
+                 * EIGHT YARDS IN ONE STEP IS NOT A STEP. On foot a man covers three and a half
+                 * yards between two heartbeats and there are no mounts in an arena, so anything
+                 * further is a charge, a blink, a teleport - something the client was told about
+                 * separately and moves him along by itself. Drawing a line from where he was
+                 * would walk him across the arena at a run, and the reports still waiting here
+                 * describe a road he has been lifted off. They are dropped, and the track starts
+                 * again from this report. Eight and not twenty: Blink is exactly twenty.
                  */
                 float const dx = info.pos.x - last.info.pos.x;
                 float const dy = info.pos.y - last.info.pos.y;
                 float const dz = info.pos.z - last.info.pos.z;
-                if (dx * dx + dy * dy + dz * dz > 400.0f)
+                if (dx * dx + dy * dy + dz * dz > 64.0f)
                 {
                     track.samples.clear();
                     track.haveSent = false;     // the viewer holds a point of the client's own now
@@ -216,6 +216,33 @@ class WorldSession::SpectatorSmoother
             }
 
             track.samples.push_back(sample);
+        }
+
+        /*
+         * A SPLINE, A KNOCKBACK OR A TELEPORT OVERTAKES THE REPORTS. From that packet on the
+         * viewer's client moves the man by itself - along a charge, through a knockback's arc,
+         * to wherever he was put - and the reports gathered before it describe a road he has
+         * just been lifted off. It is delivered at its delayed moment like everything else, so
+         * what is dropped here is exactly what would otherwise have been drawn on top of it;
+         * the first report from after it starts the track again, exactly.
+         */
+        void NoticeServerMove(WorldPacket const& packet)
+        {
+            uint16 const opcode = packet.GetOpcode();
+            if (opcode != SMSG_MONSTER_MOVE && opcode != MSG_MOVE_KNOCK_BACK && opcode != MSG_MOVE_TELEPORT)
+                return;
+
+            try
+            {
+                WorldPacket copy(packet);
+                ObjectGuid guid;
+                copy >> guid.ReadAsPacked();
+                m_tracks.erase(guid.GetRawValue());
+            }
+            catch (ByteBufferException const&)
+            {
+                // not a packet of the shape this expects; then it moved nobody this feed knows
+            }
         }
 
         void Update(WorldSession& session, uint32 now, uint32 delay)
@@ -283,7 +310,7 @@ class WorldSession::SpectatorSmoother
                      */
                     if (!track.haveSent || airborne || !moving || s.info.HasMovementFlag(MOVEFLAG_ONTRANSPORT))
                     {
-                        session.SendPacketImpl(&s.raw);
+                        session.SendPacketNow(&s.raw);
                         track.errX = track.errY = track.errZ = track.errO = 0.0f;
                         track.sent = s.info.pos;
                         track.haveSent = !airborne;
@@ -429,7 +456,7 @@ class WorldSession::SpectatorSmoother
             WorldPacket data(opcode, 40);
             data << track.guid.WriteAsPacked();
             info.Write(data);
-            session.SendPacketImpl(&data);
+            session.SendPacketNow(&data);   // already on the delayed timeline: never held again
 
             track.sent = info.pos;
             track.haveSent = true;
@@ -440,12 +467,17 @@ class WorldSession::SpectatorSmoother
 
 void WorldSession::UpdateSpectatorSmoothing(uint32 now)
 {
+    uint32 const delay = sWorld.getConfig(CONFIG_UINT32_ARENA_SPECTATOR_SMOOTH_DELAY);
+    Player const* pViewer = GetPlayer();
+    bool const behind = delay && m_socket && pViewer && pViewer->IsArenaVisitor();
+
+    // what has fallen due goes out FIRST, so a spell lands on the man where the feed has put him
+    FlushDelayedPackets(now, !behind);
+
     if (!m_spectatorSmoother)
         return;
 
-    uint32 const delay = sWorld.getConfig(CONFIG_UINT32_ARENA_SPECTATOR_SMOOTH_DELAY);
-    Player const* pViewer = GetPlayer();
-    if (!delay || !m_socket || !pViewer || !pViewer->IsArenaVisitor())
+    if (!behind)
     {
         m_spectatorSmoother.reset();            // whatever was still waiting is a match he has left
         return;
@@ -595,10 +627,68 @@ void WorldSession::SendPacketImpl(WorldPacket const* packet)
 #endif // _DEBUG
 
     // sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "[%s]Send packet : %u|0x%x (%s)", GetPlayerName(), packet->GetOpcode(), packet->GetOpcode(), LookupOpcodeName(packet->GetOpcode()));
+    /*
+     * A VISITOR'S WHOLE STREAM RUNS BEHIND, not only his movement.
+     *
+     * The movement feed holds a fighter's reports back so that it can draw the line between
+     * two of them, and that is the right thing for the movement - but a spell cast, a hit, a
+     * health bar and a chat line were still arriving the instant they happened, so a blow landed
+     * on a man who was visibly still a quarter of a second short of where it hit him, and a
+     * cast bar filled before the caster had arrived at the spot he cast from. Every packet
+     * this session sends is held for the same delay instead, in the order it was sent, and the
+     * match arrives whole and a little late - which is what any broadcast of a match is.
+     *
+     * Only a VISITOR, only while the delay is on, and nothing about the connection itself: the
+     * ping is answered from the socket and never comes through here, and everything that sets a
+     * session up happened before he was a visitor. The two things that must not be held again
+     * - the movement feed's own points, which are already on the delayed timeline, and this
+     * queue's flush - go through SendPacketNow beneath.
+     */
+    if (Player const* pViewer = GetPlayer())
+        if (pViewer->IsArenaVisitor())
+            if (uint32 const delay = sWorld.getConfig(CONFIG_UINT32_ARENA_SPECTATOR_SMOOTH_DELAY))
+            {
+                std::lock_guard<std::mutex> guard(m_delayedLock);
+                m_delayed.emplace_back(WorldTimer::getMSTime() + delay, *packet);
+                return;
+            }
+
+    SendPacketNow(packet);
+}
+
+void WorldSession::SendPacketNow(WorldPacket const* packet)
+{
+    if (!m_socket)
+        return;
+
     if (m_sniffFile)
         m_sniffFile->WritePacket(*packet, false, time(nullptr));
 
     m_socket->SendPacket(*packet);
+}
+
+/*
+ * The whole flush happens under the lock, sends included. A send is only a push onto the
+ * socket's own queue, and holding the lock across it is what keeps two threads from each
+ * taking a packet and then sending them the wrong way round: the map thread drains this every
+ * sub-tick while he is a visitor, and the world thread takes over - all of it, at once - the
+ * moment he is not.
+ */
+void WorldSession::FlushDelayedPackets(uint32 now, bool everything)
+{
+    std::lock_guard<std::mutex> guard(m_delayedLock);
+    while (!m_delayed.empty() && (everything || int32(now - m_delayed.front().first) >= 0))
+    {
+        WorldPacket const& packet = m_delayed.front().second;
+
+        // a spline, a knockback or a teleport delivered now overtakes the movement feed's
+        // reports of the man it moved - only on the map thread, which is the feed's own
+        if (!everything && m_spectatorSmoother)
+            m_spectatorSmoother->NoticeServerMove(packet);
+
+        SendPacketNow(&packet);
+        m_delayed.pop_front();
+    }
 }
 
 void WorldSession::VerifyPacketWasCorrectlyRead(WorldPacket const& recvPacket, ClientPacket const& clientPacket)
@@ -906,6 +996,18 @@ bool WorldSession::Update(PacketFilter& updater)
 
     // Retrieve packets from the receive queue and call the appropriate handlers
     ProcessPackets(updater);
+
+    /*
+     * A VISITOR'S DELAYED STREAM IS DRAINED FROM HIS MAP'S SUB-TICK while he is one. The moment
+     * he is not - ported home, logged out, the feature switched off - no map thread looks at
+     * him any more, and whatever was still waiting would sit there for good, the port home
+     * itself among it. So it is let go of here, all of it, in order.
+     */
+    {
+        Player const* pViewer = GetPlayer();
+        if (!(sWorld.getConfig(CONFIG_UINT32_ARENA_SPECTATOR_SMOOTH_DELAY) && pViewer && pViewer->IsArenaVisitor()))
+            FlushDelayedPackets(WorldTimer::getMSTime(), true);
+    }
 
     if (CharacterScreenIdleKick(sessionUpdateTime))
         return false;
