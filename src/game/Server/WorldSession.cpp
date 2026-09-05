@@ -396,6 +396,32 @@ class WorldSession::SpectatorSmoother
                     MovementInfo mid = from->info;
                     mid.pos = target;
                     mid.stime = renderAt;
+
+                    /*
+                     * A DIAGNOSTIC, AND IT BREAKS THE RUN ANIMATION ON PURPOSE. Never leave it on.
+                     *
+                     * The heartbeat above carries the flags of the report it was built from -
+                     * FORWARD, STRAFE_LEFT, whatever the man was doing. The client does not treat
+                     * those as decoration: it puts the unit where the packet says and then DEAD
+                     * RECKONS him onward in the flag direction at his own speed until the next one
+                     * arrives. Our interpolated line and that dead reckoning are not the same
+                     * curve, so every heartbeat lands a small correction - and the client applies
+                     * corrections by SNAPPING. Forty a second of two or three centimetres is not
+                     * stutter any more, but it is not smooth either, and no packet rate fixes it:
+                     * a higher rate only raises the frequency of the buzz.
+                     *
+                     * Stripping the flags stops the dead reckoning, so the man sits exactly where
+                     * the feed puts him and nowhere else. IF THAT THEORY IS RIGHT the buzz turns
+                     * into clean stepping at the send rate; if something else is wrong the picture
+                     * changes in some other way, and days of client reverse engineering were about
+                     * to be spent on the wrong cause. That is the whole reason this exists.
+                     *
+                     * The animation is the price: the client picks run, walk or stand from these
+                     * same flags, so with them gone he slides along standing still.
+                     */
+                    if (sWorld.getConfig(CONFIG_BOOL_ARENA_SPECTATOR_NO_EXTRAPOLATION))
+                        mid.RemoveMovementFlag(MOVEFLAG_MASK_MOVING_OR_TURN);
+
                     Send(session, track, MSG_MOVE_HEARTBEAT, mid);
                 }
 

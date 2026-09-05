@@ -3374,6 +3374,21 @@ DynamicRespawn.PlayersMaxLevelDiff = 0
 #        Default: 0 (off)
 #        Suggested: 150. Needs MapUpdate.Instanced.SubTick to be on.
 #
+#
+#    Arena.Spectator.NoExtrapolation
+#        A MEASURING INSTRUMENT, NOT A SETTING TO RUN A REALM ON. Leave it at 0.
+#        The interpolated heartbeats the smoother sends carry the movement flags of the report
+#        they were built from, and the client does not treat those as decoration: it puts the
+#        unit where the packet says and then dead reckons him onward in the flag direction until
+#        the next one arrives. That is not the same curve the smoother drew, so every heartbeat
+#        lands a small correction - and the client applies corrections by snapping. The result is
+#        a fine buzz rather than stutter, and a higher send rate only raises its frequency.
+#        Turning this on strips those flags, so the man sits exactly where the feed puts him. If
+#        the buzz then becomes clean stepping, the diagnosis above is confirmed and the remaining
+#        fix belongs in the client. It costs the run animation to ask - the client picks run,
+#        walk or stand from these same flags, so with them gone he slides along standing still.
+#        Default: 0 (off)
+#
 #    Arena.AllowItemSwap
 #        Allow changing armor while the match is running (weapons, offhands and ranged slots can always be swapped).
 #        Default: 0 (disabled)
@@ -3504,6 +3519,8 @@ Arena.MaxResistance.Shadow = 200
 Arena.MaxResistance.Arcane = 100
 Arena.Spectate = 1
 Arena.Spectator.SmoothDelay = 0
+Arena.Spectator.NoExtrapolation = 0
+
 Arena.AllowTrinketSwap = 1
 Arena.TimeLimitMinutes = 25
 Arena.ReadyStartDelaySeconds = 10

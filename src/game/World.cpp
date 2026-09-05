@@ -1319,6 +1319,12 @@ void World::LoadConfigSettings(bool reload)
     // how far behind the match a visitor's view runs, so that it can be interpolated - see
     // WorldSession::SpectatorSmoother
     setConfigMinMax(CONFIG_UINT32_ARENA_SPECTATOR_SMOOTH_DELAY, "Arena.Spectator.SmoothDelay", 0, 0, 1000);
+
+    // A MEASURING INSTRUMENT, not a setting to run a realm on - see the note at its one use in
+    // WorldSession::SpectatorSmoother. It answers whether the residual jitter a visitor still sees
+    // is the client dead reckoning against the interpolated line, and it costs the run animation
+    // to ask. Off unless somebody is deliberately measuring.
+    setConfig(CONFIG_BOOL_ARENA_SPECTATOR_NO_EXTRAPOLATION, "Arena.Spectator.NoExtrapolation", false);
     setConfigMinMax(CONFIG_UINT32_ARENA_TIME_LIMIT_MINUTES, "Arena.TimeLimitMinutes", 25, 1, 120);
     setConfigMinMax(CONFIG_UINT32_ARENA_READY_START_DELAY_SECONDS, "Arena.ReadyStartDelaySeconds", 10, 3, 60);
     setConfigMinMax(CONFIG_UINT32_ARENA_INVITE_ACCEPT_TIME_SECONDS, "Arena.InviteAcceptTimeSeconds", 30, 10, 80);
