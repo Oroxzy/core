@@ -370,12 +370,8 @@ class WorldSession::SpectatorSmoother
                     Position const& a = from->info.pos;
                     if (to && to->at > from->at)
                     {
-                        float const f = float(renderAt - from->at) / float(to->at - from->at);
-                        Position const& b = to->info.pos;
-                        target.x = a.x + (b.x - a.x) * f;
-                        target.y = a.y + (b.y - a.y) * f;
-                        target.z = a.z + (b.z - a.z) * f;
-                        target.o = LerpOrientation(a.o, b.o, f);
+                        ArcPoint(a, to->info.pos,
+                                 float(renderAt - from->at) / float(to->at - from->at), target);
                         haveTarget = true;
                     }
                     else if (!to && track.haveVel && from->info.HasMovementFlag(MOVEFLAG_MASK_MOVING) &&
@@ -465,6 +461,74 @@ class WorldSession::SpectatorSmoother
         static float LerpOrientation(float a, float b, float f)
         {
             return NormalizeO(a + ShortestArc(a, b) * f);
+        }
+
+        /*
+         * THE POINT AT FRACTION f BETWEEN TWO REPORTS, ALONG THE PATH HE ACTUALLY RAN.
+         *
+         * A straight line between them was the obvious thing and it is visibly wrong. A man
+         * running a curve is reported at two points on it, and the line joining those two points
+         * is the CHORD - it cuts the corner. Worse, the facing is turned smoothly across that
+         * chord, so the angle between where he looks and where he travels drifts the whole way
+         * across. That angle is fixed in the real game: strafing left is ninety degrees off the
+         * facing and stays there. Break it and he stops looking steered and starts looking like
+         * he is sliding sideways down a slope - which is exactly what it looked like.
+         *
+         * SO THE CURVE IS DRAWN FROM THE FACING INSTEAD. A cubic Hermite leaves a in the
+         * direction he was travelling there and arrives at b in the direction he is travelling
+         * there, and lands exactly on both, so it needs no correction afterwards.
+         *
+         * WHICH WAY HE TRAVELS RELATIVE TO WHERE HE LOOKS IS READ OFF THE PAIR, not off the
+         * movement flags. For a circular arc the chord is parallel to the tangent at the
+         * midpoint, so the difference between the chord's heading and the facing halfway along
+         * IS that angle - and reading it this way costs no flag table, covers every combination
+         * of forward, back and strafe at once, and stays right when a snare or a buff changes
+         * his speed.
+         *
+         * The tangent length is the one that makes a cubic match a circular arc: 4R*tan(t/4),
+         * with R from the chord and the turn. It falls out to the chord length as the turn goes
+         * to zero, so a man running straight gets the straight line he had before and this costs
+         * him nothing.
+         *
+         * Height stays linear. A curve in the vertical would be guessing at terrain, and the
+         * ground under an arena is flat enough that the guess could only be wrong.
+         */
+        static void ArcPoint(Position const& a, Position const& b, float f, Position& out)
+        {
+            out.z = a.z + (b.z - a.z) * f;
+            out.o = LerpOrientation(a.o, b.o, f);
+
+            float const dx = b.x - a.x;
+            float const dy = b.y - a.y;
+            float const L = std::sqrt(dx * dx + dy * dy);
+
+            // standing, or turning on the spot: there is no curve, and atan2 on this would be
+            // reading a heading out of rounding noise
+            if (L < 0.05f)
+            {
+                out.x = a.x + dx * f;
+                out.y = a.y + dy * f;
+                return;
+            }
+
+            float const offset = ShortestArc(LerpOrientation(a.o, b.o, 0.5f), std::atan2(dy, dx));
+            float const dirA = a.o + offset;
+            float const dirB = b.o + offset;
+
+            float const turn = std::fabs(ShortestArc(dirA, dirB));
+            float m = L;
+            if (turn > 0.03f)
+                m = 2.0f * L * std::tan(turn * 0.25f) / std::sin(turn * 0.5f);
+
+            float const t2 = f * f;
+            float const t3 = t2 * f;
+            float const h00 =  2.0f * t3 - 3.0f * t2 + 1.0f;
+            float const h10 =         t3 - 2.0f * t2 + f;
+            float const h01 = -2.0f * t3 + 3.0f * t2;
+            float const h11 =         t3 -        t2;
+
+            out.x = h00 * a.x + h10 * (m * std::cos(dirA)) + h01 * b.x + h11 * (m * std::cos(dirB));
+            out.y = h00 * a.y + h10 * (m * std::sin(dirA)) + h01 * b.y + h11 * (m * std::sin(dirB));
         }
 
         /*
