@@ -3375,6 +3375,16 @@ DynamicRespawn.PlayersMaxLevelDiff = 0
 #        Suggested: 150. Needs MapUpdate.Instanced.SubTick to be on.
 #
 #
+#
+#    Arena.Spectator.CarryOn
+#        How far the feed may GUESS past the newest report it holds, in milliseconds. The default
+#        is the sender's own heartbeat interval, the longest a moving man can be quiet. A guess is
+#        only free while he keeps doing what he was doing; one that runs long is seen as the man
+#        twitching forward and being hauled back. 0 means do not guess - hold him at the last real
+#        point until the next arrives, trading the twitch for a brief stillness, which is not
+#        wrong, only late. Needs Arena.Spectator.SmoothDelay to be on.
+#        Default: 500
+#
 #    Arena.Spectator.NoExtrapolation
 #        A MEASURING INSTRUMENT, NOT A SETTING TO RUN A REALM ON. Leave it at 0.
 #        The interpolated heartbeats the smoother sends carry the movement flags of the report
@@ -3519,6 +3529,7 @@ Arena.MaxResistance.Shadow = 200
 Arena.MaxResistance.Arcane = 100
 Arena.Spectate = 1
 Arena.Spectator.SmoothDelay = 0
+Arena.Spectator.CarryOn = 500
 Arena.Spectator.NoExtrapolation = 0
 
 Arena.AllowTrinketSwap = 1

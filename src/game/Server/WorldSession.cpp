@@ -375,7 +375,7 @@ class WorldSession::SpectatorSmoother
                         haveTarget = true;
                     }
                     else if (!to && track.haveVel && from->info.HasMovementFlag(MOVEFLAG_MASK_MOVING) &&
-                             renderAt - from->at <= CARRY_ON_MS)
+                             renderAt - from->at <= sWorld.getConfig(CONFIG_UINT32_ARENA_SPECTATOR_CARRY_ON))
                     {
                         float const hole = float(renderAt - from->at);
                         float const turn = from->info.HasMovementFlag(MOVEFLAG_TURN_LEFT | MOVEFLAG_TURN_RIGHT) ? 1.0f : 0.5f;
@@ -438,7 +438,8 @@ class WorldSession::SpectatorSmoother
 
     private:
         static constexpr float FADE_MS = 150.0f;        // an offset is gone after this long
-        static constexpr uint32 CARRY_ON_MS = 500;      // the client's own heartbeat interval
+        // how far the feed may guess past its newest report is Arena.Spectator.CarryOn, whose
+        // default is the sender's own heartbeat interval - the longest a moving man can be quiet
 
         static float NormalizeO(float o)
         {
