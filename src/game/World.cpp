@@ -1316,27 +1316,6 @@ void World::LoadConfigSettings(bool reload)
     setConfig(CONFIG_BOOL_ARENA_ALLOW_TRINKET_SWAP, "Arena.AllowTrinketSwap", true);
     setConfig(CONFIG_BOOL_ARENA_RANDOM_WEATHER, "Arena.RandomWeather", false);
     setConfig(CONFIG_BOOL_ARENA_SPECTATE, "Arena.Spectate", true);
-    // how far behind the match a visitor's view runs, so that it can be interpolated - see
-    // WorldSession::SpectatorSmoother
-    setConfigMinMax(CONFIG_UINT32_ARENA_SPECTATOR_SMOOTH_DELAY, "Arena.Spectator.SmoothDelay", 0, 0, 1000);
-
-    /*
-     * How far the feed may GUESS past the newest report it holds, in milliseconds. Five hundred
-     * was the sender's own heartbeat interval and so the longest a moving man can be quiet - but
-     * a guess is only free while he keeps doing what he was doing, and a guess that runs long is
-     * seen as the man twitching forward and being hauled back.
-     *
-     * ZERO MEANS DO NOT GUESS: hold him at the last real point until the next one arrives. That
-     * trades the twitch for a brief stillness, which is the better bargain more often than not
-     * because a stillness is not WRONG - it is only late.
-     */
-    setConfigMinMax(CONFIG_UINT32_ARENA_SPECTATOR_CARRY_ON, "Arena.Spectator.CarryOn", 500, 0, 1000);
-
-    // A MEASURING INSTRUMENT, not a setting to run a realm on - see the note at its one use in
-    // WorldSession::SpectatorSmoother. It answers whether the residual jitter a visitor still sees
-    // is the client dead reckoning against the interpolated line, and it costs the run animation
-    // to ask. Off unless somebody is deliberately measuring.
-    setConfig(CONFIG_BOOL_ARENA_SPECTATOR_NO_EXTRAPOLATION, "Arena.Spectator.NoExtrapolation", false);
     setConfigMinMax(CONFIG_UINT32_ARENA_TIME_LIMIT_MINUTES, "Arena.TimeLimitMinutes", 25, 1, 120);
     setConfigMinMax(CONFIG_UINT32_ARENA_READY_START_DELAY_SECONDS, "Arena.ReadyStartDelaySeconds", 10, 3, 60);
     setConfigMinMax(CONFIG_UINT32_ARENA_INVITE_ACCEPT_TIME_SECONDS, "Arena.InviteAcceptTimeSeconds", 30, 10, 80);
