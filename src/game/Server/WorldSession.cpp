@@ -288,6 +288,7 @@ void WorldSession::SendMovementPacket(WorldPacket const* packet)
     }
 }
 
+// caller must hold m_movementPacketCompressorMutex (SendMovementPacket() and Update() do)
 void WorldSession::SendCompressedMovementPackets()
 {
     if (m_movementPacketCompressor.HasData())
@@ -537,7 +538,13 @@ bool WorldSession::Update(PacketFilter& updater)
 
 #if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_7_1
         // send these out every world update
-        SendCompressedMovementPackets();
+        {
+            // flush under the same mutex that SendMovementPacket() takes, so the
+            // compressor is never touched without it (defensive: map threads append
+            // under this mutex, this flush runs on the world thread)
+            std::lock_guard<std::mutex> guard(m_movementPacketCompressorMutex);
+            SendCompressedMovementPackets();
+        }
 
         // only enable compression when there's a lot of movement around us
         if (m_movePacketTrackingIntervalStart + 10 < currTime)
@@ -870,7 +877,10 @@ void WorldSession::LogoutPlayer(bool Save)
         }
 
 #if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_7_1
-        m_movementPacketCompressor.ClearBuffer();
+        {
+            std::lock_guard<std::mutex> guard(m_movementPacketCompressorMutex);
+            m_movementPacketCompressor.ClearBuffer();
+        }
 #endif
 
         SetPlayer(nullptr);                                    // deleted in Remove/DeleteFromWorld call
